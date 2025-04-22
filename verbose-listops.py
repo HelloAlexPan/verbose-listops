@@ -78,7 +78,7 @@ def generate_fragment_with_template(node):
 
 
 # 3. Anthropic Expansion ----------------------------------------------------
-def expand_with_llm(fragment: str, seed: int, model: str = None) -> str:
+def expand_with_llm(fragment: str, seed: int, model: str = None, max_tokens: int = 512) -> str:
     # Add API key check
     api_key = os.getenv("ANTHROPIC_API_KEY")
     if not api_key:
@@ -98,7 +98,7 @@ def expand_with_llm(fragment: str, seed: int, model: str = None) -> str:
                     f"embedding logical filler: '{fragment}'"
                 )
             }],
-            max_tokens=512
+            max_tokens=max_tokens
         )
     finally:
         spinner.stop()
@@ -122,7 +122,7 @@ def expand_with_llm(fragment: str, seed: int, model: str = None) -> str:
 
 
 # 4. Traverse & Generate ----------------------------------------------------
-def traverse_and_generate(ast_node, seed_start=0, model=None):
+def traverse_and_generate(ast_node, seed_start=0, model=None, target_tokens=40000):
     fragments = []
     def recurse(node):
         frag = generate_fragment_with_template(node)
@@ -132,8 +132,10 @@ def traverse_and_generate(ast_node, seed_start=0, model=None):
                 recurse(child)
     recurse(ast_node)
     print(f"Fragments to expand: {len(fragments)}")
+    per_fragment_tokens = max(1, target_tokens // len(fragments))
+    print(f"Per-fragment token budget: {per_fragment_tokens}")
     paragraphs = [
-        expand_with_llm(f, sd, model)
+        expand_with_llm(f, sd, model, max_tokens=per_fragment_tokens)
         for f, sd in fragments
     ]
     return "\n\n".join(paragraphs)
@@ -166,6 +168,12 @@ def main():
         default="output.txt",
         help="Output narrative file"
     )
+    parser.add_argument(
+        "--target_tokens",
+        type=int,
+        default=40000,
+        help="Total desired token count for the narrative"
+    )
     args = parser.parse_args()
     print(f"Expression: {args.expression}, seed: {args.seed}, model: {args.model}, output: {args.output}")
 
@@ -179,7 +187,8 @@ def main():
     narrative = traverse_and_generate(
         ast_tree,
         seed_start=args.seed,
-        model=args.model
+        model=args.model,
+        target_tokens=args.target_tokens
     )
     print(f"Generated narrative length: {len(narrative)} characters")
 

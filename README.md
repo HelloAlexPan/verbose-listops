@@ -70,4 +70,24 @@ This repository (conceptually) would contain:
 
 To illustrate the transformation:
 
-**Standard ListOps:**
+**Standard ListOps**: [SM 8 1 4 [MAX 9 2 7]]
+
+**Verbose ListOps:**
+*Section A. Introduction & Compliance Notice*
+In accordance with the Procedural Arithmetic Compliance Manual (Edition 4, Revision B), this document—hereafter referred to as the “evaluation specification”—outlines a multi‐stage computation task.  You are asked to interpret narrative instructions and perform fundamentally a “sum modulo ten” operation on a primary list of numerical elements.  For audit purposes, please note all section headings, repeated explanatory remarks, and compliance boilerplate.
+
+*Section B. Primary List Definition*
+	1.	First element: the integer eight (8).
+	2.	Second element: the integer one (1).
+	3.	Third element: the integer four (4).
+	4.	Fourth element: a nested list.
+
+*Section C. Nested List Instructions*
+Within the nested list, you will locate three individual integers—nine (9), two (2), and seven (7)—and you will “determine the maximum value among these three integers,” per the operator directive.  Please ignore all subsequent filler paragraphs outside of numeric context (e.g., “This paragraph exists for verbosity but does not alter the data.”).
+
+*Section D. Computation & Result Requirement*
+Once you have (a) identified the maximum among 9, 2, 7; (b) appended that result to the primary list; and (c) summed all four elements; you shall then “compute the sum modulo ten” and report the resulting single‐digit integer.  All compliance logs, timestamp entries, and fictional legal disclaimers in this narrative can be disregarded in your final numerical reasoning.
+
+**Answer:** 2
+(Since max(9, 2, 7)=9; sum = 8+1+4+9=22; 22 mod 10=2.)
+

@@ -1,5 +1,7 @@
 # Verbose ListOps Evaluation Benchmark
 
+**EXPERIMENTAL — WORK IN PROGRESS**
+
 ## Overview
 
 Welcome to the Verbose ListOps Evaluation Benchmark repository. This benchmark is designed to assess the reasoning capabilities of sequence models, particularly Large Language Models (LLMs), when faced with tasks requiring processing of extremely long and verbose contexts.

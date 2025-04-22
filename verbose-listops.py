@@ -1,80 +1,176 @@
-import random
-import textwrap
+#!/usr/bin/env python3
+print("verbose-listops: script started")
+"""
+verbose-listops.py
 
-def generate_filler(paragraph_count=200, max_sentences=5):
-    """Generate filler text with repetitive boilerplate and random sentences."""
-    boilerplate = (
-        "This paragraph is included for verbosity and does not affect the computation. "
-        "Please ignore these details in your final reasoning."
-    )
-    filler_sentences = [
-        "The system logs indicate archival of compliance records.",
-        "This line serves as a redundant procedural note.",
-        "Refer to the extended glossary for additional explanations.",
-        "Fictional stakeholder commentary appears here.",
-        "Mock legal disclaimers are inserted for length."
+Hybrid DSL + Anthropic Claude narrative generator for ListOps puzzles.
+Parses a ListOps expression, generates core narrative fragments via Jinja2,
+then expands each fragment into rich, filler‑laden paragraphs with Claude.
+"""
+
+import os
+import re
+import random
+import argparse
+from jinja2 import Template
+import anthropic
+import sys
+import threading
+import time
+
+class Spinner:
+    spinner_cycle = ['-', '\\', '|', '/']
+    def __init__(self, message="Loading"):
+        self.message = message
+        self.stop_running = False
+        self.thread = threading.Thread(target=self._spin)
+
+    def _spin(self):
+        idx = 0
+        while not self.stop_running:
+            sys.stdout.write(f"\r{self.message} {self.spinner_cycle[idx]}")
+            sys.stdout.flush()
+            idx = (idx + 1) % len(self.spinner_cycle)
+            time.sleep(0.1)
+        sys.stdout.write("\r" + " " * (len(self.message) + 2) + "\r")
+        sys.stdout.flush()
+
+    def start(self):
+        self.thread.start()
+
+    def stop(self):
+        self.stop_running = True
+        self.thread.join()
+
+# 1. DSL Parsing ------------------------------------------------------------
+TOKEN_REGEX = r"\[|\]|[^\s\[\]]+"
+
+def tokenize(expr: str):
+    return re.findall(TOKEN_REGEX, expr)
+
+def parse_tokens(tokens):
+    token = tokens.pop(0)
+    if token == '[':
+        lst = []
+        while tokens[0] != ']':
+            lst.append(parse_tokens(tokens))
+        tokens.pop(0)
+        return lst
+    else:
+        return int(token) if token.isdigit() else token
+
+def parse_expr(expr: str):
+    return parse_tokens(tokenize(expr))
+
+
+# 2. Template Fragment ------------------------------------------------------
+TEMPLATE = """
+{% if node is iterable and node[0] is string %}
+The operator "{{ node[0] }}" is applied to operands {% for child in node[1:] %}{{ child }}{% if not loop.last %}, {% endif %}{% endfor %}.
+{% else %}
+The value "{{ node }}" appears in the sequence.
+{% endif %}
+"""
+
+def generate_fragment_with_template(node):
+    tpl = Template(TEMPLATE)
+    return tpl.render(node=node)
+
+
+# 3. Anthropic Expansion ----------------------------------------------------
+def expand_with_llm(fragment: str, seed: int, model: str = None) -> str:
+    # Add API key check
+    api_key = os.getenv("ANTHROPIC_API_KEY")
+    if not api_key:
+        print("Error: ANTHROPIC_API_KEY environment variable not set.")
+        exit(1)
+    spinner = Spinner("Requesting Claude API")
+    spinner.start()
+    random.seed(seed)
+    client = anthropic.Anthropic(api_key=api_key)
+    try:
+        response = client.messages.create(
+            model=model or os.getenv("LLM_MODEL", "claude-3-7-sonnet-20250219"),
+            messages=[{
+                "role": "user",
+                "content": (
+                    f"Expand the following fragment into a rich, coherent paragraph "
+                    f"embedding logical filler: '{fragment}'"
+                )
+            }],
+            max_tokens=512
+        )
+    finally:
+        spinner.stop()
+    return response.content
+
+
+# 4. Traverse & Generate ----------------------------------------------------
+def traverse_and_generate(ast_node, seed_start=0, model=None):
+    fragments = []
+    def recurse(node):
+        frag = generate_fragment_with_template(node)
+        fragments.append((frag, seed_start + len(fragments)))
+        if isinstance(node, list) and len(node) > 1:
+            for child in node[1:]:
+                recurse(child)
+    recurse(ast_node)
+    print(f"Fragments to expand: {len(fragments)}")
+    paragraphs = [
+        expand_with_llm(f, sd, model)
+        for f, sd in fragments
     ]
-    paragraphs = []
-    for _ in range(paragraph_count):
-        sentences = [boilerplate] + random.sample(filler_sentences, k=random.randint(1, max_sentences))
-        paragraphs.append(" ".join(sentences))
     return "\n\n".join(paragraphs)
 
-def generate_verbose_listops(problem_id, standard_expr, target_tokens=30000):
-    """Generate a verbose ListOps narrative of at least target_tokens tokens."""
-    base_template = textwrap.dedent(f"""
-    Problem ID: {problem_id}
 
-    **Overview & Introduction**
-    This document is the Verbose ListOps Evaluation Benchmark problem identified as {problem_id}. 
-    It contains extensive narrative sections, compliance boilerplate, fictional logs, and filler text 
-    designed to stress-test long-context reasoning. Only sections explicitly labeled "Computation" 
-    are relevant to the underlying ListOps task.
+# 5. CLI ---------------------------------------------------------------------
+def main():
+    parser = argparse.ArgumentParser(
+        description="Generate a verbose ListOps narrative via Anthropic Claude"
+    )
+    parser.add_argument(
+        "expression",
+        help="ListOps DSL expression, e.g. [SM 8 1 4 [MAX 9 2 7]]"
+    )
+    parser.add_argument(
+        "--seed",
+        type=int,
+        default=42,
+        help="Base seed for reproducibility"
+    )
+    parser.add_argument(
+        "--model",
+        type=str,
+        default=None,
+        help="Anthropic Claude model ID"
+    )
+    parser.add_argument(
+        "--output",
+        type=str,
+        default="output.txt",
+        help="Output narrative file"
+    )
+    args = parser.parse_args()
+    print(f"Expression: {args.expression}, seed: {args.seed}, model: {args.model}, output: {args.output}")
 
-    **Standard ListOps Expression**
-    `{standard_expr}`
+    try:
+        ast_tree = parse_expr(args.expression)
+    except Exception as e:
+        print(f"Error parsing expression: {e}")
+        return
 
-    **Computation Sections**
-    Computation Step 1: Parse the provided nested operations.
-    Computation Step 2: Identify all sub-operations (`MAX`, `MIN`, `MED`, `SM`) and their operands.
-    Computation Step 3: Execute each sub-operation in hierarchical order.
-    Computation Step 4: Produce the final single-digit result.
+    print("Parsing complete, invoking generation...")
+    narrative = traverse_and_generate(
+        ast_tree,
+        seed_start=args.seed,
+        model=args.model
+    )
+    print(f"Generated narrative length: {len(narrative)} characters")
 
-    **Detailed Instructions**
-    1. Review all narrative paragraphs and extract the numeric directives.
-    2. Disregard any compliance logs, fictional stakeholder notes, mock change requests, 
-       or repeated definitions outside the "Computation Sections".
-    3. For `MAX`, find the highest integer; for `MIN`, find the lowest; for `MED`, find 
-       the median using ListOps conventions; for `SM`, compute sum modulo 10.
-    4. Maintain hierarchical order to ensure sub-operations are resolved before parent operations.
+    with open(args.output, "w", encoding="utf-8") as f:
+        f.write(narrative)
+    print(f"Narrative written to {args.output}")
 
-    """)
 
-    narrative = base_template
-    # Append filler until we reach desired token length
-    filler_block = generate_filler(paragraph_count=250)
-    narrative += "\n\n" + filler_block
-
-    # Estimate tokens by simple split
-    while len(narrative.split()) < target_tokens:
-        narrative += "\n\n" + generate_filler(paragraph_count=50)
-    
-    # Append answer placeholder
-    answer_placeholder = textwrap.dedent("""
-    **Answer:** <compute the final single-digit result here>
-    """)
-    narrative += "\n\n" + answer_placeholder
-    return narrative
-
-# Example usage: generate a single verbose eval
-standard_expressions = [
-    "[SM 8 1 4 [MAX 9 2 7]]",
-    "[MIN [SM 3 4] 7 5]",
-    "[MED 5 2 [MIN 8 6 3] 9]",
-    # ... up to 20 expressions
-]
-
-for i, expr in enumerate(standard_expressions, start=1):
-    problem_id = f"VLO-{i:03d}"
-    verbose_problem = generate_verbose_listops(problem_id, expr, target_tokens=30000)
-    print(verbose_problem[:1000] + "\n\n... [truncated] ...\n")
+if __name__ == "__main__":
+    main()

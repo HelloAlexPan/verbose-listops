@@ -102,7 +102,23 @@ def expand_with_llm(fragment: str, seed: int, model: str = None) -> str:
         )
     finally:
         spinner.stop()
-    return response.content
+    # Extract text from response content blocks
+    # If the SDK returns a legacy response with parse()
+    if hasattr(response, "parse"):
+        message = response.parse()
+        return message.content
+    # Otherwise, response.content may be a list of dicts
+    blocks = getattr(response, "content", None) or getattr(response, "completion", None)
+    if isinstance(blocks, list):
+        text = ""
+        for block in blocks:
+            if isinstance(block, dict) and "text" in block:
+                text += block["text"]
+            else:
+                text += getattr(block, "text", "")
+        return text
+    # Fallback to string
+    return str(blocks)
 
 
 # 4. Traverse & Generate ----------------------------------------------------

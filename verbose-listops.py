@@ -18,6 +18,15 @@ import sys
 import threading
 import time
 
+# Streaming and extended-output beta header for Claude 3.7 Sonnet
+HEADERS = {
+    "anthropic-beta": "output-128k-2025-02-19"
+}
+
+def count_tokens_approx(text: str) -> int:
+    # Very rough token count based on whitespace
+    return len(text.split())
+
 class Spinner:
     spinner_cycle = ['-', '\\', '|', '/']
     def __init__(self, message="Loading"):
@@ -79,7 +88,6 @@ def generate_fragment_with_template(node):
 
 # 3. Anthropic Expansion ----------------------------------------------------
 def expand_with_llm(fragment: str, seed: int, model: str = None, max_tokens: int = 512) -> str:
-    # Add API key check
     api_key = os.getenv("ANTHROPIC_API_KEY")
     if not api_key:
         print("Error: ANTHROPIC_API_KEY environment variable not set.")
@@ -87,58 +95,61 @@ def expand_with_llm(fragment: str, seed: int, model: str = None, max_tokens: int
     spinner = Spinner("Requesting Claude API")
     spinner.start()
     random.seed(seed)
-    client = anthropic.Anthropic(api_key=api_key)
+    client = anthropic.Anthropic(api_key=api_key, default_headers=HEADERS)
+    full_text = ""
+    prompt = (
+        f"Please generate at least {max_tokens} tokens of detailed, logical narrative. "
+        f"{fragment}"
+    )
     try:
-        response = client.messages.create(
-            model=model or os.getenv("LLM_MODEL", "claude-3-7-sonnet-20250219"),
-            messages=[{
-                "role": "user",
-                "content": (
-                    f"Expand the following fragment into a rich, coherent paragraph "
-                    f"embedding logical filler: '{fragment}'"
-                )
-            }],
-            max_tokens=max_tokens
-        )
+        # Keep streaming until we reach the token target
+        while count_tokens_approx(full_text) < max_tokens:
+            remaining = max_tokens - count_tokens_approx(full_text)
+            # For continuations, use the last 50 words as context
+            context = full_text.split()[-50:]
+            continuation_prompt = (
+                f"{' '.join(context)}\n\n"
+                f"Continue with at least {remaining} tokens of narrative."
+            ) if full_text else prompt
+            with client.messages.stream(
+                model=model or os.getenv("LLM_MODEL", "claude-3-7-sonnet-20250219"),
+                messages=[{"role": "user", "content": continuation_prompt}],
+                max_tokens=remaining
+            ) as stream:
+                for event in stream:
+                    if event.type == "text":
+                        full_text += event.text
     finally:
         spinner.stop()
-    # Extract text from response content blocks
-    # If the SDK returns a legacy response with parse()
-    if hasattr(response, "parse"):
-        message = response.parse()
-        return message.content
-    # Otherwise, response.content may be a list of dicts
-    blocks = getattr(response, "content", None) or getattr(response, "completion", None)
-    if isinstance(blocks, list):
-        text = ""
-        for block in blocks:
-            if isinstance(block, dict) and "text" in block:
-                text += block["text"]
-            else:
-                text += getattr(block, "text", "")
-        return text
-    # Fallback to string
-    return str(blocks)
+    return full_text
 
 
 # 4. Traverse & Generate ----------------------------------------------------
 def traverse_and_generate(ast_node, seed_start=0, model=None, target_tokens=40000):
-    fragments = []
-    def recurse(node):
-        frag = generate_fragment_with_template(node)
-        fragments.append((frag, seed_start + len(fragments)))
-        if isinstance(node, list) and len(node) > 1:
-            for child in node[1:]:
-                recurse(child)
-    recurse(ast_node)
-    print(f"Fragments to expand: {len(fragments)}")
-    per_fragment_tokens = max(1, target_tokens // len(fragments))
-    print(f"Per-fragment token budget: {per_fragment_tokens}")
-    paragraphs = [
-        expand_with_llm(f, sd, model, max_tokens=per_fragment_tokens)
-        for f, sd in fragments
-    ]
-    return "\n\n".join(paragraphs)
+    # For large budgets, generate narrative in one full chunk
+    if target_tokens > 20000:
+        print("Using single-chunk full narrative generation...")
+        # Serialize AST back to DSL expression for prompt
+        expr = str(ast_node).replace("'", "")
+        fragment = f"Please produce a detailed narrative description of the ListOps expression {expr}."
+        return expand_with_llm(fragment, seed_start, model, max_tokens=target_tokens)
+    else:
+        fragments = []
+        def recurse(node):
+            frag = generate_fragment_with_template(node)
+            fragments.append((frag, seed_start + len(fragments)))
+            if isinstance(node, list) and len(node) > 1:
+                for child in node[1:]:
+                    recurse(child)
+        recurse(ast_node)
+        print(f"Fragments to expand: {len(fragments)}")
+        per_fragment_tokens = max(1, target_tokens // len(fragments))
+        print(f"Per-fragment token budget: {per_fragment_tokens}")
+        paragraphs = [
+            expand_with_llm(f, sd, model, max_tokens=per_fragment_tokens)
+            for f, sd in fragments
+        ]
+        return "\n\n".join(paragraphs)
 
 
 # 5. CLI ---------------------------------------------------------------------

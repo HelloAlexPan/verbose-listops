@@ -22,6 +22,27 @@ SAFETY_MARGIN      = 1_000  # keep a cushion
 MAX_BEAT_TOKENS    = 1_000  # per operator-scene
 MAX_PAD_TOKENS     = 1_000  # per padding-scene
 
+# ─── Operator labels & few-shot template ─────────────────────────────────────
+OP_LABELS = {
+    "MAX": "largest value",
+    "MIN": "smallest value",
+    "SUM": "sum of all values",
+    "MED": "median value",
+    "AVG": "integer-average (floored)",
+    "SM":  "sum modulo 10",
+}
+FEW_SHOT_EXAMPLES = """
+Example 1:
+Story ends after you applied MAX.
+Question: What was the largest value at the top level of the story above?
+Answer:
+
+Example 2:
+Story ends after you applied SUM.
+Question: What was the sum of all values at the top level of the story above?
+Answer:
+"""
+
 # ─── Anthropic client & tokenizer ─────────────────────────────────────────────
 
 client   = Anthropic(api_key=API_KEY)
@@ -211,9 +232,29 @@ def generate_narrative(ast: Node, world: dict) -> str:
         if tokens_used >= MAX_TOTAL_TOKENS:
             break
 
-    # 5c) Final question
+    # 5c) Dynamic question generation with few-shot examples
     top_op = ast.op
-    question = f"Question: What was the {top_op} result at the top level of the story above?\nAnswer:"
+    label  = OP_LABELS.get(top_op, top_op)
+
+    # Build few-shot + instruction prompt
+    q_prompt = (
+        FEW_SHOT_EXAMPLES + "\n"
+        f"Now the story ends after you applied {top_op}.\n"
+        f"Question: What was the {label} at the top level of the story above?\n"
+        "Answer:"
+    )
+    q_resp = client.messages.create(
+        model=MODEL,
+        system="You are a question generator. Produce exactly one clear question.",
+        messages=[{"role":"user","content":q_prompt}],
+        max_tokens=30
+    )
+    question = q_resp.content[0].text.strip()
+
+    # sanity check
+    if top_op.upper() not in question.upper():
+        raise RuntimeError(f"Generated question does not mention the operator {top_op}: {question}")
+
     scenes.append(question)
 
     return "\n\n".join(scenes)

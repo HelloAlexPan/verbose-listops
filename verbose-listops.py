@@ -1,212 +1,207 @@
-#!/usr/bin/env python3
-print("verbose-listops: script started")
-"""
-verbose-listops.py
-
-Hybrid DSL + Anthropic Claude narrative generator for ListOps puzzles.
-Parses a ListOps expression, generates core narrative fragments via Jinja2,
-then expands each fragment into rich, filler‑laden paragraphs with Claude.
-"""
-
 import os
-import re
+import json
 import random
-import argparse
-from jinja2 import Template
+from dataclasses import dataclass, field
+
+import tiktoken
 import anthropic
-import sys
-import threading
-import time
+from anthropic import Anthropic, HUMAN_PROMPT, AI_PROMPT
 
-# Streaming and extended-output beta header for Claude 3.7 Sonnet
-HEADERS = {
-    "anthropic-beta": "output-128k-2025-02-19"
-}
+# ─── Configuration ─────────────────────────────────────────────────────────────
 
-def count_tokens_approx(text: str) -> int:
-    # Very rough token count based on whitespace
-    return len(text.split())
+API_KEY = os.environ.get("ANTHROPIC_API_KEY", "YOUR_API_KEY_HERE")
+MODEL   = "claude-2"
+MAX_TOTAL_TOKENS   = 100_000
+SAFETY_MARGIN      = 1_000  # keep a cushion
+MAX_BEAT_TOKENS    = 2_000  # per operator-scene
+MAX_PAD_TOKENS     = 1_000  # per padding-scene
 
-class Spinner:
-    spinner_cycle = ['-', '\\', '|', '/']
-    def __init__(self, message="Loading"):
-        self.message = message
-        self.stop_running = False
-        self.thread = threading.Thread(target=self._spin)
+# ─── Anthropic client & tokenizer ─────────────────────────────────────────────
 
-    def _spin(self):
-        idx = 0
-        while not self.stop_running:
-            sys.stdout.write(f"\r{self.message} {self.spinner_cycle[idx]}")
-            sys.stdout.flush()
-            idx = (idx + 1) % len(self.spinner_cycle)
-            time.sleep(0.1)
-        sys.stdout.write("\r" + " " * (len(self.message) + 2) + "\r")
-        sys.stdout.flush()
+client   = Anthropic(api_key=API_KEY)
+encoder  = tiktoken.get_encoding("cl100k_base")
 
-    def start(self):
-        self.thread.start()
+# ─── AST definitions ────────────────────────────────────────────────────────────
 
-    def stop(self):
-        self.stop_running = True
-        self.thread.join()
+@dataclass
+class Node:
+    op: str
+    children: list = field(default_factory=list)
+    value: int = None
 
-# 1. DSL Parsing ------------------------------------------------------------
-TOKEN_REGEX = r"\[|\]|[^\s\[\]]+"
+@dataclass
+class Atom(Node):
+    n: int = None
+    def __init__(self, n: int):
+        super().__init__(op="ATOM", children=[])
+        self.n = n
+        self.value = n
 
-def tokenize(expr: str):
-    return re.findall(TOKEN_REGEX, expr)
+@dataclass
+class OpNode(Node):
+    def __init__(self, op: str, children: list):
+        super().__init__(op=op, children=children)
+        self.value = None
 
-def parse_tokens(tokens):
-    token = tokens.pop(0)
-    if token == '[':
-        lst = []
-        while tokens[0] != ']':
-            lst.append(parse_tokens(tokens))
-        tokens.pop(0)
-        return lst
-    else:
-        return int(token) if token.isdigit() else token
+# ─── 1) Random AST generator ──────────────────────────────────────────────────
 
-def parse_expr(expr: str):
-    return parse_tokens(tokenize(expr))
+def build_random_ast(max_ops: int, max_branch: int = 3):
+    """Top-down build of up to max_ops operator nodes."""
+    ops = ["MAX","MIN","MED","SUM","SM","AVG"]
+    count = 0
 
+    def helper():
+        nonlocal count
+        # If we've used up our operators budget, emit an Atom
+        if count >= max_ops:
+            return Atom(random.randint(0, 9))
+        # Otherwise create an operator node
+        count += 1
+        op = random.choice(ops)
+        arity = random.randint(2, max_branch)
+        children = [helper() for _ in range(arity)]
+        return OpNode(op, children)
 
-# 2. Template Fragment ------------------------------------------------------
-TEMPLATE = """
-{% if node is iterable and node[0] is string %}
-The operator "{{ node[0] }}" is applied to operands {% for child in node[1:] %}{{ child }}{% if not loop.last %}, {% endif %}{% endfor %}.
-{% else %}
-The value "{{ node }}" appears in the sequence.
-{% endif %}
-"""
+    return helper()
 
-def generate_fragment_with_template(node):
-    tpl = Template(TEMPLATE)
-    return tpl.render(node=node)
+# ─── 2) AST evaluator ─────────────────────────────────────────────────────────
 
+def eval_node(node: Node) -> int:
+    if isinstance(node, Atom):
+        return node.n
+    vals = [eval_node(c) for c in node.children]
+    func_map = {
+        "MAX": max,
+        "MIN": min,
+        "MED": lambda v: sorted(v)[len(v)//2],
+        "SUM": sum,
+        "SM":  lambda v: sum(v) % 10,
+        "AVG": lambda v: sum(v)//len(v),
+    }
+    node.value = func_map[node.op](vals)
+    return node.value
 
-# 3. Anthropic Expansion ----------------------------------------------------
-def expand_with_llm(fragment: str, seed: int, model: str = None, max_tokens: int = 512) -> str:
-    api_key = os.getenv("ANTHROPIC_API_KEY")
-    if not api_key:
-        print("Error: ANTHROPIC_API_KEY environment variable not set.")
-        exit(1)
-    spinner = Spinner("Requesting Claude API")
-    spinner.start()
-    random.seed(seed)
-    client = anthropic.Anthropic(api_key=api_key, default_headers=HEADERS)
-    full_text = ""
+# ─── 3) Post-order traversal ──────────────────────────────────────────────────
+
+def postorder(node: Node):
+    for c in node.children:
+        yield from postorder(c)
+    yield node
+
+# ─── 4) World-builder (one-time) ──────────────────────────────────────────────
+
+def generate_world(num_characters: int = 5) -> dict:
     prompt = (
-        f"Please generate at least {max_tokens} tokens of detailed, logical narrative. "
-        f"{fragment}"
+        f"{HUMAN_PROMPT}"
+        "You are a world-builder.\n"
+        f"Create {num_characters} vivid characters (name, role, quirk), choose a genre and setting.\n"
+        "Output as JSON in exactly this shape:\n"
+        "{\n"
+        '  "characters": [ { "name": "...", "role": "...", "quirk": "..." }, … ],\n'
+        '  "genre": "...",\n'
+        '  "setting": "..." \n'
+        "}\n"
+        f"{AI_PROMPT}"
     )
-    try:
-        # Keep streaming until we reach the token target
-        while count_tokens_approx(full_text) < max_tokens:
-            remaining = max_tokens - count_tokens_approx(full_text)
-            # For continuations, use the last 50 words as context
-            context = full_text.split()[-50:]
-            continuation_prompt = (
-                f"{' '.join(context)}\n\n"
-                f"Continue with at least {remaining} tokens of narrative."
-            ) if full_text else prompt
-            with client.messages.stream(
-                model=model or os.getenv("LLM_MODEL", "claude-3-7-sonnet-20250219"),
-                messages=[{"role": "user", "content": continuation_prompt}],
-                max_tokens=remaining
-            ) as stream:
-                for event in stream:
-                    if event.type == "text":
-                        full_text += event.text
-    finally:
-        spinner.stop()
-    return full_text
+    resp = client.completions.create(
+        model=MODEL,
+        prompt=prompt,
+        max_tokens_to_sample=2_000,
+        stop_sequences=[HUMAN_PROMPT]
+    )
+    return json.loads(resp.completion)
 
+# ─── 5) Narrative generator ───────────────────────────────────────────────────
 
-# 4. Traverse & Generate ----------------------------------------------------
-def traverse_and_generate(ast_node, seed_start=0, model=None, target_tokens=40000):
-    # For large budgets, generate narrative in one full chunk
-    if target_tokens > 20000:
-        print("Using single-chunk full narrative generation...")
-        # Serialize AST back to DSL expression for prompt
-        expr = str(ast_node).replace("'", "")
-        fragment = f"Please produce a detailed narrative description of the ListOps expression {expr}."
-        return expand_with_llm(fragment, seed_start, model, max_tokens=target_tokens)
-    else:
-        fragments = []
-        def recurse(node):
-            frag = generate_fragment_with_template(node)
-            fragments.append((frag, seed_start + len(fragments)))
-            if isinstance(node, list) and len(node) > 1:
-                for child in node[1:]:
-                    recurse(child)
-        recurse(ast_node)
-        print(f"Fragments to expand: {len(fragments)}")
-        per_fragment_tokens = max(1, target_tokens // len(fragments))
-        print(f"Per-fragment token budget: {per_fragment_tokens}")
-        paragraphs = [
-            expand_with_llm(f, sd, model, max_tokens=per_fragment_tokens)
-            for f, sd in fragments
-        ]
-        return "\n\n".join(paragraphs)
+def generate_narrative(ast: Node, world: dict) -> str:
+    scenes = []
+    tokens_used = 0
 
+    for node in postorder(ast):
+        # Only generate for operator nodes
+        if isinstance(node, Atom):
+            continue
 
-# 5. CLI ---------------------------------------------------------------------
+        # 5a) Operator beat
+        operands = [c.value for c in node.children]
+        beat_prompt = (
+            f"{HUMAN_PROMPT}"
+            f"You are a {world['genre']} storyteller.\n"
+            f"Characters: {json.dumps(world['characters'])}\n"
+            f"Setting: {world['setting']}\n\n"
+            "Here is an operation:\n"
+            f"Operator: {node.op}\n"
+            f"Operands: {operands}\n"
+            f"Result: {node.value}\n\n"
+            "Write 1 scene (2–5 short paragraphs) showing how this operation’s logic "
+            "plays out among the characters. Do NOT reveal the numeric answer as a meta clue.\n"
+            f"{AI_PROMPT}"
+        )
+        resp = client.completions.create(
+            model=MODEL,
+            prompt=beat_prompt,
+            max_tokens_to_sample=MAX_BEAT_TOKENS,
+            stop_sequences=[HUMAN_PROMPT]
+        )
+        beat = resp.completion
+        btoks = len(encoder.encode(beat))
+        if tokens_used + btoks > MAX_TOTAL_TOKENS - SAFETY_MARGIN:
+            break
+        scenes.append(beat)
+        tokens_used += btoks
+
+        # 5b) Padding loop
+        pad_prompt = (
+            f"{HUMAN_PROMPT}"
+            "You are the same storyteller.\n"
+            "Continue the last scene’s style in 2–3 short paragraphs—introduce side-quests, "
+            "mysteries, or random asides. DO NOT change any established facts or operator logic. "
+            "This is pure padding.\n"
+            f"{AI_PROMPT}"
+        )
+        while tokens_used < MAX_TOTAL_TOKENS - SAFETY_MARGIN:
+            pad_resp = client.completions.create(
+                model=MODEL,
+                prompt=pad_prompt,
+                max_tokens_to_sample=MAX_PAD_TOKENS,
+                stop_sequences=[HUMAN_PROMPT]
+            )
+            pad = pad_resp.completion
+            ptoks = len(encoder.encode(pad))
+            if tokens_used + ptoks > MAX_TOTAL_TOKENS:
+                break
+            scenes.append(pad)
+            tokens_used += ptoks
+
+        if tokens_used >= MAX_TOTAL_TOKENS:
+            break
+
+    # 5c) Final question
+    top_op = ast.op
+    question = (
+        f"{HUMAN_PROMPT}"
+        f"Question: What was the {top_op} result at the top level of the story above?\n"
+        f"Answer:{AI_PROMPT}"
+    )
+    scenes.append(question)
+
+    return "\n\n".join(scenes)
+
+# ─── 6) Main flow ──────────────────────────────────────────────────────────────
+
 def main():
-    parser = argparse.ArgumentParser(
-        description="Generate a verbose ListOps narrative via Anthropic Claude"
-    )
-    parser.add_argument(
-        "expression",
-        help="ListOps DSL expression, e.g. [SM 8 1 4 [MAX 9 2 7]]"
-    )
-    parser.add_argument(
-        "--seed",
-        type=int,
-        default=42,
-        help="Base seed for reproducibility"
-    )
-    parser.add_argument(
-        "--model",
-        type=str,
-        default=None,
-        help="Anthropic Claude model ID"
-    )
-    parser.add_argument(
-        "--output",
-        type=str,
-        default="output.txt",
-        help="Output narrative file"
-    )
-    parser.add_argument(
-        "--target_tokens",
-        type=int,
-        default=40000,
-        help="Total desired token count for the narrative"
-    )
-    args = parser.parse_args()
-    print(f"Expression: {args.expression}, seed: {args.seed}, model: {args.model}, output: {args.output}")
+    # 1) Build & evaluate AST
+    ast = build_random_ast(max_ops=10, max_branch=3)  # tweak size as you like
+    eval_node(ast)
 
-    try:
-        ast_tree = parse_expr(args.expression)
-    except Exception as e:
-        print(f"Error parsing expression: {e}")
-        return
+    # 2) Generate world
+    world = generate_world(num_characters=5)
 
-    print("Parsing complete, invoking generation...")
-    narrative = traverse_and_generate(
-        ast_tree,
-        seed_start=args.seed,
-        model=args.model,
-        target_tokens=args.target_tokens
-    )
-    print(f"Generated narrative length: {len(narrative)} characters")
+    # 3) Render narrative
+    narrative = generate_narrative(ast, world)
 
-    with open(args.output, "w", encoding="utf-8") as f:
-        f.write(narrative)
-    print(f"Narrative written to {args.output}")
-
+    # 4) Emit
+    print(narrative)
 
 if __name__ == "__main__":
     main()

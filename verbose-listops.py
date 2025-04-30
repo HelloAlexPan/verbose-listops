@@ -1,3 +1,9 @@
+# README: Things you can edit:
+# - max_ops: size of your ListOps problem
+# - max_branch: maximum branching factor for AST nodes
+# - MAX_BEAT_TOKENS / MAX_PAD_TOKENS: per-call length
+# - MAX_TOTAL_TOKENS: overall token cap
+
 import os
 import json
 import random
@@ -11,9 +17,9 @@ from anthropic import Anthropic, HUMAN_PROMPT, AI_PROMPT
 
 API_KEY = os.environ.get("ANTHROPIC_API_KEY", "YOUR_API_KEY_HERE")
 MODEL   = "claude-2"
-MAX_TOTAL_TOKENS   = 100_000
+MAX_TOTAL_TOKENS   = 10_000
 SAFETY_MARGIN      = 1_000  # keep a cushion
-MAX_BEAT_TOKENS    = 2_000  # per operator-scene
+MAX_BEAT_TOKENS    = 1_000  # per operator-scene
 MAX_PAD_TOKENS     = 1_000  # per padding-scene
 
 # ─── Anthropic client & tokenizer ─────────────────────────────────────────────
@@ -95,7 +101,7 @@ def generate_world(num_characters: int = 5) -> dict:
         f"{HUMAN_PROMPT}"
         "You are a world-builder.\n"
         f"Create {num_characters} vivid characters (name, role, quirk), choose a genre and setting.\n"
-        "Output as JSON in exactly this shape:\n"
+        "Output as JSON in exactly this shape. Respond with *only* the JSON object, no extra text or markdown:\n"
         "{\n"
         '  "characters": [ { "name": "...", "role": "...", "quirk": "..." }, … ],\n'
         '  "genre": "...",\n'
@@ -109,7 +115,22 @@ def generate_world(num_characters: int = 5) -> dict:
         max_tokens_to_sample=2_000,
         stop_sequences=[HUMAN_PROMPT]
     )
-    return json.loads(resp.completion)
+    # parse the world-builder response, allowing for stray characters
+    text = resp.completion.strip()
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        # attempt to extract JSON substring
+        start = text.find('{')
+        end = text.rfind('}')
+        if start != -1 and end != -1:
+            try:
+                return json.loads(text[start:end+1])
+            except json.JSONDecodeError:
+                pass
+        # fallback: show raw response for debugging
+        print("Failed to parse JSON from world-builder response:", text)
+        raise
 
 # ─── 5) Narrative generator ───────────────────────────────────────────────────
 
@@ -117,7 +138,14 @@ def generate_narrative(ast: Node, world: dict) -> str:
     scenes = []
     tokens_used = 0
 
-    for node in postorder(ast):
+    # collect operator nodes for progress tracking
+    operator_nodes = [n for n in postorder(ast) if not isinstance(n, Atom)]
+    total_ops = len(operator_nodes)
+    print(f"Starting narrative generation: {total_ops} operator beats to process")
+
+    for idx, node in enumerate(operator_nodes, start=1):
+        print(f"Processing operator {idx}/{total_ops}: {node.op} with operands {[c.value for c in node.children]}")
+
         # Only generate for operator nodes
         if isinstance(node, Atom):
             continue
@@ -149,6 +177,7 @@ def generate_narrative(ast: Node, world: dict) -> str:
             break
         scenes.append(beat)
         tokens_used += btoks
+        print(f"Generated beat for operator {idx}, tokens used: {tokens_used}/{MAX_TOTAL_TOKENS}")
 
         # 5b) Padding loop
         pad_prompt = (
@@ -159,6 +188,7 @@ def generate_narrative(ast: Node, world: dict) -> str:
             "This is pure padding.\n"
             f"{AI_PROMPT}"
         )
+        print(f"Starting padding for operator {idx}")
         while tokens_used < MAX_TOTAL_TOKENS - SAFETY_MARGIN:
             pad_resp = client.completions.create(
                 model=MODEL,
@@ -172,6 +202,7 @@ def generate_narrative(ast: Node, world: dict) -> str:
                 break
             scenes.append(pad)
             tokens_used += ptoks
+            print(f"Padding added, tokens used: {tokens_used}/{MAX_TOTAL_TOKENS}")
 
         if tokens_used >= MAX_TOTAL_TOKENS:
             break
@@ -190,15 +221,22 @@ def generate_narrative(ast: Node, world: dict) -> str:
 # ─── 6) Main flow ──────────────────────────────────────────────────────────────
 
 def main():
+    print("Building random AST...")
     # 1) Build & evaluate AST
-    ast = build_random_ast(max_ops=10, max_branch=3)  # tweak size as you like
+    ast = build_random_ast(max_ops=10, max_branch=5)  # tweak as you like
+    print("AST evaluation starting...")
     eval_node(ast)
+    print("AST evaluation complete.")
+    print("Generating world metadata...")
 
     # 2) Generate world
     world = generate_world(num_characters=5)
+    print("World metadata generated.")
+    print("Rendering narrative...")
 
     # 3) Render narrative
     narrative = generate_narrative(ast, world)
+    print("Narrative rendering complete.")
 
     # 4) Emit
     print(narrative)

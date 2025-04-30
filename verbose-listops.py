@@ -94,6 +94,12 @@ def postorder(node: Node):
         yield from postorder(c)
     yield node
 
+def preorder(node: Node):
+    """Yield nodes in pre-order (node before children)."""
+    yield node
+    for c in node.children:
+        yield from preorder(c)
+
 # ─── 4) World-builder (one-time) ──────────────────────────────────────────────
 
 def generate_world(num_characters: int = 5) -> dict:
@@ -136,7 +142,9 @@ def generate_narrative(ast: Node, world: dict) -> str:
     tokens_used = 0
 
     # Prepare operator list and show total count for progress
-    operator_nodes = [n for n in postorder(ast) if not isinstance(n, Atom)]
+    # Use pre-order so the root (top-level operator) is processed first
+    operator_nodes = [n for n in preorder(ast) if not isinstance(n, Atom)]
+    max_pad_paragraphs = 2  # limit padding per operator
     total_ops = len(operator_nodes)
     print(f"Starting narrative generation: {total_ops} operator beats to process")
 
@@ -162,14 +170,13 @@ def generate_narrative(ast: Node, world: dict) -> str:
         )
         resp = client.messages.create(
             model=MODEL,
-            messages=[{"role": "user", "content": beat_prompt}],
+            system="You are a storyteller. Write plain narrative paragraphs without any markdown headings or section titles.",
+            messages=[{"role":"user","content":beat_prompt}],
             max_tokens=MAX_BEAT_TOKENS
         )
         beat = resp.content[0].text
         last_scene = beat
         btoks = len(encoder.encode(beat))
-        if tokens_used + btoks > MAX_TOTAL_TOKENS - SAFETY_MARGIN:
-            break
         scenes.append(beat)
         tokens_used += btoks
 
@@ -181,10 +188,12 @@ def generate_narrative(ast: Node, world: dict) -> str:
             f"{last_scene}\n\n"
             "Do NOT change any established facts or operator logic. This is pure padding."
         )
-        while tokens_used < MAX_TOTAL_TOKENS - SAFETY_MARGIN:
+        pad_count = 0
+        while tokens_used < MAX_TOTAL_TOKENS - SAFETY_MARGIN and pad_count < max_pad_paragraphs:
             pad_resp = client.messages.create(
                 model=MODEL,
-                messages=[{"role": "user", "content": pad_prompt}],
+                system="Continue the narrative without adding any headings or titles, just plain paragraphs.",
+                messages=[{"role":"user","content":pad_prompt}],
                 max_tokens=MAX_PAD_TOKENS
             )
             pad = pad_resp.content[0].text
@@ -197,6 +206,7 @@ def generate_narrative(ast: Node, world: dict) -> str:
                 break
             scenes.append(pad)
             tokens_used += ptoks
+            pad_count += 1
 
         if tokens_used >= MAX_TOTAL_TOKENS:
             break

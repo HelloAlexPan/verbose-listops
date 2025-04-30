@@ -11,12 +11,12 @@ from dataclasses import dataclass, field
 
 import tiktoken
 import anthropic
-from anthropic import Anthropic, HUMAN_PROMPT, AI_PROMPT
+from anthropic import Anthropic
 
 # ─── Configuration ─────────────────────────────────────────────────────────────
 
 API_KEY = os.environ.get("ANTHROPIC_API_KEY", "YOUR_API_KEY_HERE")
-MODEL   = "claude-2"
+MODEL   = "claude-3-7-sonnet-latest"
 MAX_TOTAL_TOKENS   = 10_000
 SAFETY_MARGIN      = 1_000  # keep a cushion
 MAX_BEAT_TOKENS    = 1_000  # per operator-scene
@@ -98,7 +98,6 @@ def postorder(node: Node):
 
 def generate_world(num_characters: int = 5) -> dict:
     prompt = (
-        f"{HUMAN_PROMPT}"
         "You are a world-builder.\n"
         f"Create {num_characters} vivid characters (name, role, quirk), choose a genre and setting.\n"
         "Output as JSON in exactly this shape. Respond with *only* the JSON object, no extra text or markdown:\n"
@@ -107,16 +106,14 @@ def generate_world(num_characters: int = 5) -> dict:
         '  "genre": "...",\n'
         '  "setting": "..." \n'
         "}\n"
-        f"{AI_PROMPT}"
     )
-    resp = client.completions.create(
+    resp = client.messages.create(
         model=MODEL,
-        prompt=prompt,
-        max_tokens_to_sample=2_000,
-        stop_sequences=[HUMAN_PROMPT]
+        messages=[{"role": "user", "content": prompt}],
+        max_tokens=2000
     )
     # parse the world-builder response, allowing for stray characters
-    text = resp.completion.strip()
+    text = resp.content[0].text.strip()
     try:
         return json.loads(text)
     except json.JSONDecodeError:
@@ -138,7 +135,7 @@ def generate_narrative(ast: Node, world: dict) -> str:
     scenes = []
     tokens_used = 0
 
-    # collect operator nodes for progress tracking
+    # Prepare operator list and show total count for progress
     operator_nodes = [n for n in postorder(ast) if not isinstance(n, Atom)]
     total_ops = len(operator_nodes)
     print(f"Starting narrative generation: {total_ops} operator beats to process")
@@ -153,7 +150,6 @@ def generate_narrative(ast: Node, world: dict) -> str:
         # 5a) Operator beat
         operands = [c.value for c in node.children]
         beat_prompt = (
-            f"{HUMAN_PROMPT}"
             f"You are a {world['genre']} storyteller.\n"
             f"Characters: {json.dumps(world['characters'])}\n"
             f"Setting: {world['setting']}\n\n"
@@ -161,59 +157,53 @@ def generate_narrative(ast: Node, world: dict) -> str:
             f"Operator: {node.op}\n"
             f"Operands: {operands}\n"
             f"Result: {node.value}\n\n"
-            "Write 1 scene (2–5 short paragraphs) showing how this operation’s logic "
-            "plays out among the characters. Do NOT reveal the numeric answer as a meta clue.\n"
-            f"{AI_PROMPT}"
+            "Write 1 scene (2–5 short paragraphs) showing how this operation's logic "
+            "plays out among the characters. Do NOT reveal the numeric answer as a meta clue."
         )
-        resp = client.completions.create(
+        resp = client.messages.create(
             model=MODEL,
-            prompt=beat_prompt,
-            max_tokens_to_sample=MAX_BEAT_TOKENS,
-            stop_sequences=[HUMAN_PROMPT]
+            messages=[{"role": "user", "content": beat_prompt}],
+            max_tokens=MAX_BEAT_TOKENS
         )
-        beat = resp.completion
+        beat = resp.content[0].text
+        last_scene = beat
         btoks = len(encoder.encode(beat))
         if tokens_used + btoks > MAX_TOTAL_TOKENS - SAFETY_MARGIN:
             break
         scenes.append(beat)
         tokens_used += btoks
-        print(f"Generated beat for operator {idx}, tokens used: {tokens_used}/{MAX_TOTAL_TOKENS}")
 
         # 5b) Padding loop
         pad_prompt = (
-            f"{HUMAN_PROMPT}"
             "You are the same storyteller.\n"
-            "Continue the last scene’s style in 2–3 short paragraphs—introduce side-quests, "
-            "mysteries, or random asides. DO NOT change any established facts or operator logic. "
-            "This is pure padding.\n"
-            f"{AI_PROMPT}"
+            "Continue the last scene below in 2–3 short paragraphs—introduce side-quests, mysteries, or random asides.\n"
+            "Last scene:\n"
+            f"{last_scene}\n\n"
+            "Do NOT change any established facts or operator logic. This is pure padding."
         )
-        print(f"Starting padding for operator {idx}")
         while tokens_used < MAX_TOTAL_TOKENS - SAFETY_MARGIN:
-            pad_resp = client.completions.create(
+            pad_resp = client.messages.create(
                 model=MODEL,
-                prompt=pad_prompt,
-                max_tokens_to_sample=MAX_PAD_TOKENS,
-                stop_sequences=[HUMAN_PROMPT]
+                messages=[{"role": "user", "content": pad_prompt}],
+                max_tokens=MAX_PAD_TOKENS
             )
-            pad = pad_resp.completion
+            pad = pad_resp.content[0].text
+            # break if model refuses due to missing context
+            if pad.strip().lower().startswith("i do not have enough context") or pad.strip().lower().startswith("i'm sorry"):
+                print(f"Padding refused at operator {idx}, stopping padding.")
+                break
             ptoks = len(encoder.encode(pad))
             if tokens_used + ptoks > MAX_TOTAL_TOKENS:
                 break
             scenes.append(pad)
             tokens_used += ptoks
-            print(f"Padding added, tokens used: {tokens_used}/{MAX_TOTAL_TOKENS}")
 
         if tokens_used >= MAX_TOTAL_TOKENS:
             break
 
     # 5c) Final question
     top_op = ast.op
-    question = (
-        f"{HUMAN_PROMPT}"
-        f"Question: What was the {top_op} result at the top level of the story above?\n"
-        f"Answer:{AI_PROMPT}"
-    )
+    question = f"Question: What was the {top_op} result at the top level of the story above?\nAnswer:"
     scenes.append(question)
 
     return "\n\n".join(scenes)
@@ -224,15 +214,15 @@ def main():
     print("Building random AST...")
     # 1) Build & evaluate AST
     ast = build_random_ast(max_ops=10, max_branch=5)  # tweak as you like
-    print("AST evaluation starting...")
+    print("Evaluating AST...")
     eval_node(ast)
     print("AST evaluation complete.")
-    print("Generating world metadata...")
 
+    print("Generating world metadata...")
     # 2) Generate world
     world = generate_world(num_characters=5)
     print("World metadata generated.")
-    print("Rendering narrative...")
+    print("Starting narrative rendering...")
 
     # 3) Render narrative
     narrative = generate_narrative(ast, world)

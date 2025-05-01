@@ -23,7 +23,7 @@ import tiktoken
 import anthropic
 from anthropic import Anthropic
 
-
+# Token and Output Configuration
 LOG_DIR = os.path.expanduser("~/verbose_listops_logs") # Overall token cap for narrative generation
 DEFAULT_MAX_TOTAL_TOKENS = 10000  # Overall token cap for narrative generation 
 DEFAULT_MAX_BEAT_TOKENS = 1000  # Maximum tokens used for each story 'beat' (listops paragraph)

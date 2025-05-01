@@ -22,28 +22,65 @@ import tiktoken
 import anthropic
 from anthropic import Anthropic
 
-# ─── Configuration Constants ─────────────────────────────────────────────────────────────────────────────────
+# ─── Configuration Constants ────────────────────────────────────────────────────────────────────────────
 # Base configurations are provided for testing purposes to save API costs and increase generation speed. 
 # They will produce very easy problems. We suggest modifying them to make the problem significantly more challenging.
 
-# ─── SOTA models cannot solve the below config at 10k tokens but can solve the ListOps equivalent: ───────────
-# DEFAULT_MAX_BRANCH = 20
-# ATOM_MIN_VALUE = -100
-# ATOM_MAX_VALUE = 100
-# MIN_ARITY = 10
-
-# Token and Output Configuration
+# Output Configuration
 LOG_DIR = os.path.expanduser("~/verbose_listops_logs")
 DEFAULT_MAX_TOTAL_TOKENS = 10000  # Overall token cap for narrative generation 
 DEFAULT_MAX_BEAT_TOKENS = 1000  # Maximum tokens used for each story 'beat' (listops paragraph)
 DEFAULT_MAX_PAD_TOKENS = 1000  # Maximum tokens used for each story 'padding' section
 MAX_TOKENS_BUFFER = 1000  # Safety buffer to prevent exceeding token limits
+PROMPT_SHOT_COUNT = 3 # Number of few-shot examples to include in generated narrative prompt problem (0, 1, or 2)
+SHOT_EXAMPLES = {
+    0: "",
+    1: (
+        "<Prompt Shot>\n"
+        "Example:\n"
+        "Narrative: “In the moonlit courtyard stood three hourglasses—one filled with sand for 2 hours, "
+        "one for 4 hours, and one for 6 hours. They represent (MED 2 4 6), whose median is 4.”\n"
+        "Answer: 4\n"
+        "</Prompt Shot>\n"
+    ),
+    2: (
+        "<Prompt Shot>\n"
+        "Example 1:\n"
+        "Narrative: “Two lanterns glowed with brightness levels 3 and 7. They represent (MAX 3 7), "
+        "whose largest value is 7.”\n"
+        "Answer: 7\n\n"
+        "Example 2:\n"
+        "Narrative: “Three vials held 1, 2, and 3 drops of essence. They represent (SUM 1 2 3), whose sum is 6.”\n"
+        "Answer: 6\n"
+        "</Prompt Shot>\n"
+    ),
+    3: (
+        "<Prompt Shot>\n"
+        "Example 1:\n"
+        "Narrative: “Two gates stood ajar labeled 8 and 2. They represent (MIN 8 2), whose smallest value is 2.”\n"
+        "Answer: 2\n\n"
+        "Example 2:\n"
+        "Narrative: “Four crystals pulsed with energies 1, 1, 1, and 1. They represent (SM 1 1 1 1), "
+        "whose sum modulo 10 is 4.”\n"
+        "Answer: 4\n\n"
+        "Example 3:\n"
+        "Narrative: “Three runestones held values 5, 5, and 5. They represent (AVG 5 5 5), whose average is 5.”\n"
+        "Answer: 5\n"
+        "</Prompt Shot>\n"
+    ),
+}
+
+# ─── SOTA models cannot solve the below config at 10k tokens but can solve the ListOps equivalent: ──────
+# DEFAULT_MAX_BRANCH = 20
+# ATOM_MIN_VALUE = -100
+# ATOM_MAX_VALUE = 100
+# MIN_ARITY = 10
 
 # AST Random ListOps problem gen params
-DEFAULT_MAX_BRANCH = 3  # Default maximum branching factor for AST nodes
-ATOM_MIN_VALUE = 0  # Minimum value for leaf nodes (atoms)
-ATOM_MAX_VALUE = 9  # Maximum value for leaf nodes (atoms)
-MIN_ARITY = 2  # Minimum number of children for operator nodes
+DEFAULT_MAX_BRANCH = 20  # Default maximum branching factor for AST nodes
+ATOM_MIN_VALUE = -100  # Minimum value for leaf nodes (atoms)
+ATOM_MAX_VALUE = 100  # Maximum value for leaf nodes (atoms)
+MIN_ARITY = 10  # Minimum number of children for operator nodes
 
 # API retry + logging config
 RETRY_MAX_ATTEMPTS = 5  # Maximum number of retry attempts for API calls
@@ -186,6 +223,12 @@ def build_random_ast(max_ops: int, max_branch: int = DEFAULT_MAX_BRANCH):
     """
     if not isinstance(max_ops, int) or max_ops < 1:
         raise ValueError("max_ops must be a positive int")
+    # Ensure max_branch is large enough to satisfy MIN_ARITY
+    if max_branch < MIN_ARITY:
+        raise ValueError(
+            f"Invalid configuration: max_branch ({max_branch}) is less than MIN_ARITY ({MIN_ARITY}). "
+            "Please set DEFAULT_MAX_BRANCH >= MIN_ARITY in your configuration."
+        )
 
     ops = ["MAX", "MIN", "MED", "SUM", "SM", "AVG"]
     count = 0
@@ -362,6 +405,11 @@ def generate_narrative(ast: Node, world: dict) -> str:
     total_ops = len(operator_nodes)
     logger.info(f"Starting narrative generation: {total_ops} operator beats to process")
 
+    # Insert configured prompt-shot example(s)
+    snippet = SHOT_EXAMPLES.get(PROMPT_SHOT_COUNT, "")
+    if snippet:
+        scenes.append(snippet)
+
     for idx, node in enumerate(operator_nodes, start=1):
         logger.info(
             f"Processing operator {idx}/{total_ops}: {node.op} with operands {[c.value for c in node.children]}"
@@ -482,12 +530,24 @@ def generate_narrative(ast: Node, world: dict) -> str:
     return "\n\n".join(scenes)
 
 
+def ast_to_prefix(node: Node) -> str:
+    """
+    Convert an AST to a prefix notation string.
+    Atoms are rendered as their numeric value.
+    Operator nodes are rendered as "(OP child1 child2 ...)".
+    """
+    if isinstance(node, Atom):
+        return str(node.value)
+    # For operator nodes: render operator followed by each child in prefix
+    parts = [node.op] + [ast_to_prefix(child) for child in node.children]
+    return "(" + " ".join(parts) + ")"
+
 def main():
     """Orchestrate building the AST, generating world, rendering narrative, and outputting final result."""
     try:
         logger.info("Script started")
         logger.info("Building random AST...")
-        ast = build_random_ast(max_ops=10, max_branch=5)
+        ast = build_random_ast(max_ops=10, max_branch=DEFAULT_MAX_BRANCH)
         validate_ast(ast)
         logger.info("Evaluating AST...")
         eval_node(ast)
@@ -503,8 +563,8 @@ def main():
 
         print("\n=== SYSTEM PROMPT ===\n")
         print("You are a judge LLM tasked with computing the final result of a ListOps problem rendered as narrative.")
-        print("Below is the original ListOps AST, expressed as a nested operation structure with values:")
-        print(ast)
+        print("Below is the original ListOps AST in prefix notation:")
+        print(ast_to_prefix(ast))
         print("\n--- End of ListOps AST ---\n")
 
         logger.info("Narrative output:\n%s", narrative)

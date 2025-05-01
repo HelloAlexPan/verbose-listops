@@ -8,7 +8,6 @@ verbose-listops.py
 Supports logging, retry logic, and AST validation.
 """
 
-# ─── Configuration Constants ─────────────────────────────────────────────────────
 
 import os
 import json
@@ -22,6 +21,16 @@ from typing import Callable
 import tiktoken
 import anthropic
 from anthropic import Anthropic
+
+# ─── Configuration Constants ─────────────────────────────────────────────────────────────────────────────────
+# Base configurations are provided for testing purposes to save API costs and increase generation speed. 
+# They will produce very easy problems. We suggest modifying them to make the problem significantly more challenging.
+
+# ─── SOTA models cannot solve the below config at 10k tokens but can solve the ListOps equivalent: ───────────
+# DEFAULT_MAX_BRANCH = 20
+# ATOM_MIN_VALUE = -100
+# ATOM_MAX_VALUE = 100
+# MIN_ARITY = 10
 
 # Token and Output Configuration
 LOG_DIR = os.path.expanduser("~/verbose_listops_logs")
@@ -491,6 +500,12 @@ def main():
 
         narrative = generate_narrative(ast, world)
         logger.info("Narrative rendering complete.")
+
+        print("\n=== SYSTEM PROMPT ===\n")
+        print("You are a judge LLM tasked with computing the final result of a ListOps problem rendered as narrative.")
+        print("Below is the original ListOps AST, expressed as a nested operation structure with values:")
+        print(ast)
+        print("\n--- End of ListOps AST ---\n")
 
         logger.info("Narrative output:\n%s", narrative)
     finally:

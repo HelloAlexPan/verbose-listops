@@ -39,4 +39,5 @@ coverage.xml
 
 # OS-specific files
 .DS_Store
-Thumbs.db
+Thumbs.dbvenv/
+venv/

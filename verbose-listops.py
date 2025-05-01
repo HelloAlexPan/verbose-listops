@@ -1,35 +1,102 @@
-# README: Things you can edit:
-# - max_ops: size of your ListOps problem
-# - max_branch: maximum branching factor for AST nodes
-# - MAX_BEAT_TOKENS / MAX_PAD_TOKENS: per-call length
-# - MAX_TOTAL_TOKENS: overall token cap
+"""
+verbose-listops.py
+
+1. Generates a complex ListOps problem
+2. Renders a narrative for each operator via the Anthropic API, and 
+3. constructs a follow-up question for a judge LLM. 
+
+Supports logging, retry logic, and AST validation.
+"""
+
+# ─── Configuration Constants ─────────────────────────────────────────────────────
 
 import os
 import json
 import random
-from dataclasses import dataclass, field
+import datetime
+import logging
+import logging.handlers
+import time
+from typing import Callable
 
 import tiktoken
 import anthropic
 from anthropic import Anthropic
 
-# ─── Configuration ─────────────────────────────────────────────────────────────
+
+LOG_DIR = os.path.expanduser("~/verbose_listops_logs") # Overall token cap for narrative generation
+DEFAULT_MAX_TOTAL_TOKENS = 10000  # Overall token cap for narrative generation 
+DEFAULT_MAX_BEAT_TOKENS = 1000  # Maximum tokens used for each story 'beat' (listops paragraph)
+DEFAULT_MAX_PAD_TOKENS = 1000  # Maximum tokens used for each story 'padding' section
+MAX_TOKENS_BUFFER = 1000  # Safety buffer to prevent exceeding token limits
+
+# AST Random ListOps problem gen params
+DEFAULT_MAX_BRANCH = 3  # Default maximum branching factor for AST nodes
+ATOM_MIN_VALUE = 0  # Minimum value for leaf nodes (atoms)
+ATOM_MAX_VALUE = 9  # Maximum value for leaf nodes (atoms)
+MIN_ARITY = 2  # Minimum number of children for operator nodes
+
+# API retry + logging config
+RETRY_MAX_ATTEMPTS = 5  # Maximum number of retry attempts for API calls
+RETRY_INITIAL_DELAY = 1  # Initial delay between retries in seconds (doubles with each attempt)
+LOG_MAX_BYTES = 5 * 1024 * 1024  # Maximum log file size (5MB)
+LOG_BACKUP_COUNT = 3  # Number of backup log files to keep
 
 API_KEY = os.environ.get("ANTHROPIC_API_KEY", "YOUR_API_KEY_HERE")
-MODEL   = "claude-3-7-sonnet-latest"
-MAX_TOTAL_TOKENS   = 10_000
-SAFETY_MARGIN      = 1_000  # keep a cushion
-MAX_BEAT_TOKENS    = 1_000  # per operator-scene
-MAX_PAD_TOKENS     = 1_000  # per padding-scene
+MODEL = "claude-3-7-sonnet-latest"
+MAX_TOTAL_TOKENS = DEFAULT_MAX_TOTAL_TOKENS
+SAFETY_MARGIN = MAX_TOKENS_BUFFER
+MAX_BEAT_TOKENS = DEFAULT_MAX_BEAT_TOKENS
+MAX_PAD_TOKENS = DEFAULT_MAX_PAD_TOKENS
 
-# ─── Operator labels & few-shot template ─────────────────────────────────────
+os.makedirs(LOG_DIR, exist_ok=True)
+
+logger = logging.getLogger("verbose_listops")
+logger.setLevel(logging.DEBUG)
+handler = logging.handlers.RotatingFileHandler(
+    filename=os.path.join(LOG_DIR, "verbose_listops.log"),
+    maxBytes=LOG_MAX_BYTES,
+    backupCount=LOG_BACKUP_COUNT,
+    encoding="utf-8",
+)
+formatter = logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s")
+handler.setFormatter(formatter)
+logger.addHandler(handler)
+# also log to console for RT feedback
+console_handler = logging.StreamHandler()
+console_handler.setLevel(logging.INFO)
+console_handler.setFormatter(formatter)
+logger.addHandler(console_handler)
+
+
+def retry_api_call(func: Callable):
+    """
+    Decorator to retry Anthropic API calls on failure with exponential backoff.
+    Retries up to RETRY_MAX_ATTEMPTS times, doubling delay each time.
+    """
+    def wrapper(*args, **kwargs):
+        delay = RETRY_INITIAL_DELAY
+        for attempt in range(1, RETRY_MAX_ATTEMPTS + 1):
+            try:
+                return func(*args, **kwargs)
+            except Exception as e:
+                logger.warning(f"API call failed attempt {attempt}: {e}")
+                if attempt == RETRY_MAX_ATTEMPTS:
+                    logger.error("Max retry attempts reached.")
+                    raise
+                time.sleep(delay)
+                delay *= 2
+
+    return wrapper
+
+
 OP_LABELS = {
     "MAX": "largest value",
     "MIN": "smallest value",
     "SUM": "sum of all values",
     "MED": "median value",
     "AVG": "integer-average (floored)",
-    "SM":  "sum modulo 10",
+    "SM": "sum modulo 10",
 }
 FEW_SHOT_EXAMPLES = """
 Example 1:
@@ -41,79 +108,141 @@ Example 2:
 Story ends after you applied SUM.
 Question: What was the sum of all values at the top level of the story above?
 Answer:
+
+Example 3:
+Story ends after you applied SM.
+Question: What was the sum modulo 10 at the top level of the story above?
+Answer:
 """
 
-# ─── Anthropic client & tokenizer ─────────────────────────────────────────────
+client = Anthropic(api_key=API_KEY)
+encoder = tiktoken.get_encoding("cl100k_base")
 
-client   = Anthropic(api_key=API_KEY)
-encoder  = tiktoken.get_encoding("cl100k_base")
 
-# ─── AST definitions ────────────────────────────────────────────────────────────
+from dataclasses import dataclass, field
+
 
 @dataclass
 class Node:
+    """
+    Base class for AST nodes in the ListOps problem.
+    Attributes:
+        op: Operator name or "ATOM" for leaf nodes.
+        children: List of child Node instances.
+        value: Computed numeric value after evaluation.
+    """
     op: str
     children: list = field(default_factory=list)
     value: int = None
 
+
 @dataclass
 class Atom(Node):
+    """
+    Leaf node representing an atomic value in the AST.
+    Attributes:
+        n: The integer value of the atom.
+    """
     n: int = None
+
     def __init__(self, n: int):
         super().__init__(op="ATOM", children=[])
         self.n = n
         self.value = n
 
+
 @dataclass
 class OpNode(Node):
+    """
+    Operator node representing an operation with children nodes.
+    Attributes:
+        op: Operator name (e.g., MAX, MIN).
+        children: List of child nodes.
+    """
     def __init__(self, op: str, children: list):
         super().__init__(op=op, children=children)
         self.value = None
 
-# ─── 1) Random AST generator ──────────────────────────────────────────────────
 
-def build_random_ast(max_ops: int, max_branch: int = 3):
-    """Top-down build of up to max_ops operator nodes."""
-    ops = ["MAX","MIN","MED","SUM","SM","AVG"]
+def build_random_ast(max_ops: int, max_branch: int = DEFAULT_MAX_BRANCH):
+    """
+    Constructs a random ListOps AST.
+    Args:
+        max_ops: Maximum number of operator nodes to include.
+        max_branch: Maximum branching factor for operator nodes.
+    Returns:
+        The root Node of the randomly generated AST.
+    Raises:
+        ValueError: If max_ops is not a positive integer.
+    """
+    if not isinstance(max_ops, int) or max_ops < 1:
+        raise ValueError("max_ops must be a positive int")
+
+    ops = ["MAX", "MIN", "MED", "SUM", "SM", "AVG"]
     count = 0
 
     def helper():
         nonlocal count
-        # If we've used up our operators budget, emit an Atom
         if count >= max_ops:
-            return Atom(random.randint(0, 9))
-        # Otherwise create an operator node
+            return Atom(random.randint(ATOM_MIN_VALUE, ATOM_MAX_VALUE))
         count += 1
         op = random.choice(ops)
-        arity = random.randint(2, max_branch)
+        arity = random.randint(MIN_ARITY, max_branch)
         children = [helper() for _ in range(arity)]
         return OpNode(op, children)
 
     return helper()
 
-# ─── 2) AST evaluator ─────────────────────────────────────────────────────────
+
+def validate_ast(node: Node):
+    """
+    Recursively validate that all operators in the AST are supported.
+    Args:
+        node: Root of the AST to validate.
+    Raises:
+        ValueError: If an operator is not recognized.
+    """
+    if node.op not in OP_LABELS and not isinstance(node, Atom):
+        raise ValueError(f"Invalid operator: {node.op}")
+    for c in node.children:
+        validate_ast(c)
+
 
 def eval_node(node: Node) -> int:
+    """
+    Evaluate the AST node recursively, computing values for each operator.
+    Args:
+        node: AST node to evaluate.
+    Returns:
+        The integer result of evaluating this node.
+    Raises:
+        ValueError: If the node contains an unsupported operator.
+    """
     if isinstance(node, Atom):
         return node.n
     vals = [eval_node(c) for c in node.children]
     func_map = {
         "MAX": max,
         "MIN": min,
-        "MED": lambda v: sorted(v)[len(v)//2],
+        "MED": lambda v: sorted(v)[len(v) // 2],
         "SUM": sum,
-        "SM":  lambda v: sum(v) % 10,
-        "AVG": lambda v: sum(v)//len(v),
+        "SM": lambda v: sum(v) % 10,
+        "AVG": lambda v: sum(v) // len(v),
     }
-    node.value = func_map[node.op](vals)
+    try:
+        func = func_map[node.op]
+    except KeyError:
+        raise ValueError(f"Unsupported operator: {node.op}")
+    node.value = func(vals)
     return node.value
 
-# ─── 3) Post-order traversal ──────────────────────────────────────────────────
 
 def postorder(node: Node):
+    """Yield nodes in post-order (children before parent)."""
     for c in node.children:
         yield from postorder(c)
     yield node
+
 
 def preorder(node: Node):
     """Yield nodes in pre-order (node before children)."""
@@ -121,9 +250,26 @@ def preorder(node: Node):
     for c in node.children:
         yield from preorder(c)
 
-# ─── 4) World-builder (one-time) ──────────────────────────────────────────────
+
+@retry_api_call
+def _client_create(**kwargs):
+    return client.messages.create(**kwargs)
+
 
 def generate_world(num_characters: int = 5) -> dict:
+    """
+    Use Anthropic API to generate a fictional world metadata.
+    Args:
+        num_characters: Number of characters to include in the world.
+    Returns:
+        A dict containing characters, genre, and setting.
+    Raises:
+        ValueError: If num_characters is not a positive integer.
+        RuntimeError: On JSON parsing errors.
+    """
+    if not isinstance(num_characters, int) or num_characters < 1:
+        raise ValueError("num_characters must be a positive int")
+
     prompt = (
         "You are a world-builder.\n"
         f"Create {num_characters} vivid characters (name, role, quirk), choose a genre and setting.\n"
@@ -134,49 +280,87 @@ def generate_world(num_characters: int = 5) -> dict:
         '  "setting": "..." \n'
         "}\n"
     )
-    resp = client.messages.create(
+    resp = _client_create(
         model=MODEL,
         messages=[{"role": "user", "content": prompt}],
-        max_tokens=2000
+        max_tokens=2000,
     )
-    # parse the world-builder response, allowing for stray characters
     text = resp.content[0].text.strip()
     try:
-        return json.loads(text)
-    except json.JSONDecodeError:
-        # attempt to extract JSON substring
-        start = text.find('{')
-        end = text.rfind('}')
+        world = json.loads(text)
+    except json.JSONDecodeError as e:
+        start = text.find("{")
+        end = text.rfind("}")
         if start != -1 and end != -1:
             try:
-                return json.loads(text[start:end+1])
+                world = json.loads(text[start : end + 1])
             except json.JSONDecodeError:
-                pass
-        # fallback: show raw response for debugging
-        print("Failed to parse JSON from world-builder response:", text)
-        raise
+                logger.error(
+                    f"Failed to parse JSON substring from world-builder response: {text}"
+                )
+                raise RuntimeError(
+                    "Failed to parse JSON substring from world-builder response"
+                ) from e
+        else:
+            logger.error(f"Failed to parse JSON from world-builder response: {text}")
+            raise RuntimeError("Failed to parse JSON from world-builder response") from e
 
-# ─── 5) Narrative generator ───────────────────────────────────────────────────
+    with open(os.path.join(LOG_DIR, "world.json"), "w", encoding="utf-8") as f:
+        json.dump(world, f, ensure_ascii=False, indent=2)
+
+    return world
+
+
+def load_world():
+    """
+    Load the previously generated world metadata from disk.
+    Returns:
+        A dict parsed from world.json.
+    Raises:
+        FileNotFoundError: If world.json does not exist.
+    """
+    path = os.path.join(LOG_DIR, "world.json")
+    if not os.path.exists(path):
+        raise FileNotFoundError("world.json not found")
+    with open(path, "r", encoding="utf-8") as f:
+        return json.load(f)
+
 
 def generate_narrative(ast: Node, world: dict) -> str:
+    """
+    Render a narrative for each operator in the AST using the Anthropic API, then ask a follow-up question.
+    Args:
+        ast: The ListOps AST to narrate.
+        world: Metadata dict containing characters, genre, and setting.
+    Returns:
+        The full narrative plus final question as a single string.
+    Raises:
+        ValueError: If inputs are invalid.
+    """
+    if not isinstance(ast, Node):
+        raise ValueError("ast must be an instance of Node")
+    if not isinstance(world, dict):
+        raise ValueError("world must be a dict")
+    for key in ("characters", "genre", "setting"):
+        if key not in world:
+            raise ValueError(f"world missing required key: {key}")
+
     scenes = []
     tokens_used = 0
 
-    # Prepare operator list and show total count for progress
-    # Use pre-order so the root (top-level operator) is processed first
     operator_nodes = [n for n in preorder(ast) if not isinstance(n, Atom)]
-    max_pad_paragraphs = 2  # limit padding per operator
+    max_pad_paragraphs = 2
     total_ops = len(operator_nodes)
-    print(f"Starting narrative generation: {total_ops} operator beats to process")
+    logger.info(f"Starting narrative generation: {total_ops} operator beats to process")
 
     for idx, node in enumerate(operator_nodes, start=1):
-        print(f"Processing operator {idx}/{total_ops}: {node.op} with operands {[c.value for c in node.children]}")
+        logger.info(
+            f"Processing operator {idx}/{total_ops}: {node.op} with operands {[c.value for c in node.children]}"
+        )
 
-        # Only generate for operator nodes
         if isinstance(node, Atom):
             continue
 
-        # 5a) Operator beat
         operands = [c.value for c in node.children]
         beat_prompt = (
             f"You are a {world['genre']} storyteller.\n"
@@ -189,11 +373,17 @@ def generate_narrative(ast: Node, world: dict) -> str:
             "Write 1 scene (2–5 short paragraphs) showing how this operation's logic "
             "plays out among the characters. Do NOT reveal the numeric answer as a meta clue."
         )
-        resp = client.messages.create(
+        with open(
+            os.path.join(LOG_DIR, "verbose_listops.log"), "a", encoding="utf-8"
+        ) as prompts_log:
+            prompts_log.write(f"=== Operator Beat Prompt (operator: {node.op}) ===\n")
+            prompts_log.write(beat_prompt + "\n\n")
+            prompts_log.flush()
+        resp = _client_create(
             model=MODEL,
             system="You are a storyteller. Write plain narrative paragraphs without any markdown headings or section titles.",
-            messages=[{"role":"user","content":beat_prompt}],
-            max_tokens=MAX_BEAT_TOKENS
+            messages=[{"role": "user", "content": beat_prompt}],
+            max_tokens=MAX_BEAT_TOKENS,
         )
         beat = resp.content[0].text
         last_scene = beat
@@ -201,7 +391,6 @@ def generate_narrative(ast: Node, world: dict) -> str:
         scenes.append(beat)
         tokens_used += btoks
 
-        # 5b) Padding loop
         pad_prompt = (
             "You are the same storyteller.\n"
             "Continue the last scene below in 2–3 short paragraphs—introduce side-quests, mysteries, or random asides.\n"
@@ -211,16 +400,24 @@ def generate_narrative(ast: Node, world: dict) -> str:
         )
         pad_count = 0
         while tokens_used < MAX_TOTAL_TOKENS - SAFETY_MARGIN and pad_count < max_pad_paragraphs:
-            pad_resp = client.messages.create(
+            with open(
+                os.path.join(LOG_DIR, "verbose_listops.log"), "a", encoding="utf-8"
+            ) as prompts_log:
+                prompts_log.write(f"=== Padding Prompt (operator: {node.op}) ===\n")
+                prompts_log.write(pad_prompt + "\n\n")
+                prompts_log.flush()
+            pad_resp = _client_create(
                 model=MODEL,
                 system="Continue the narrative without adding any headings or titles, just plain paragraphs.",
-                messages=[{"role":"user","content":pad_prompt}],
-                max_tokens=MAX_PAD_TOKENS
+                messages=[{"role": "user", "content": pad_prompt}],
+                max_tokens=MAX_PAD_TOKENS,
             )
             pad = pad_resp.content[0].text
-            # break if model refuses due to missing context
-            if pad.strip().lower().startswith("i do not have enough context") or pad.strip().lower().startswith("i'm sorry"):
-                print(f"Padding refused at operator {idx}, stopping padding.")
+            if (
+                pad.strip().lower().startswith("i do not have enough context")
+                or pad.strip().lower().startswith("i'm sorry")
+            ):
+                logger.info(f"Padding refused at operator {idx}, stopping padding.")
                 break
             ptoks = len(encoder.encode(pad))
             if tokens_used + ptoks > MAX_TOTAL_TOKENS:
@@ -232,55 +429,59 @@ def generate_narrative(ast: Node, world: dict) -> str:
         if tokens_used >= MAX_TOTAL_TOKENS:
             break
 
-    # 5c) Dynamic question generation with few-shot examples
     top_op = ast.op
-    label  = OP_LABELS.get(top_op, top_op)
+    label = OP_LABELS.get(top_op, top_op)
 
-    # Build few-shot + instruction prompt
     q_prompt = (
-        FEW_SHOT_EXAMPLES + "\n"
+        FEW_SHOT_EXAMPLES
+        + "\n"
         f"Now the story ends after you applied {top_op}.\n"
         f"Question: What was the {label} at the top level of the story above?\n"
         "Answer:"
     )
-    q_resp = client.messages.create(
+    q_resp = _client_create(
         model=MODEL,
         system="You are a question generator. Produce exactly one clear question.",
-        messages=[{"role":"user","content":q_prompt}],
-        max_tokens=30
+        messages=[{"role": "user", "content": q_prompt}],
+        max_tokens=30,
     )
     question = q_resp.content[0].text.strip()
+    with open(os.path.join(LOG_DIR, "verbose_listops.log"), "a", encoding="utf-8") as prompts_log:
+        prompts_log.write("=== Final Question Prompt ===\n")
+        prompts_log.write(q_prompt + "\n\n")
+        prompts_log.write("=== Generated Question ===\n")
+        prompts_log.write(question + "\n\n")
+        prompts_log.flush()
 
-    # sanity check
-    if top_op.upper() not in question.upper():
-        raise RuntimeError(f"Generated question does not mention the operator {top_op}: {question}")
 
     scenes.append(question)
 
     return "\n\n".join(scenes)
 
-# ─── 6) Main flow ──────────────────────────────────────────────────────────────
 
 def main():
-    print("Building random AST...")
-    # 1) Build & evaluate AST
-    ast = build_random_ast(max_ops=10, max_branch=5)  # tweak as you like
-    print("Evaluating AST...")
-    eval_node(ast)
-    print("AST evaluation complete.")
+    """Orchestrate building the AST, generating world, rendering narrative, and outputting final result."""
+    try:
+        logger.info("Script started")
+        logger.info("Building random AST...")
+        ast = build_random_ast(max_ops=10, max_branch=5)
+        validate_ast(ast)
+        logger.info("Evaluating AST...")
+        eval_node(ast)
+        logger.info("AST evaluation complete.")
 
-    print("Generating world metadata...")
-    # 2) Generate world
-    world = generate_world(num_characters=5)
-    print("World metadata generated.")
-    print("Starting narrative rendering...")
+        logger.info("Generating world metadata...")
+        world = generate_world(num_characters=5)
+        logger.info("World metadata generated.")
+        logger.info("Starting narrative rendering...")
 
-    # 3) Render narrative
-    narrative = generate_narrative(ast, world)
-    print("Narrative rendering complete.")
+        narrative = generate_narrative(ast, world)
+        logger.info("Narrative rendering complete.")
 
-    # 4) Emit
-    print(narrative)
+        logger.info("Narrative output:\n%s", narrative)
+    finally:
+        logging.shutdown()
+
 
 if __name__ == "__main__":
     main()

@@ -24,7 +24,7 @@ import anthropic
 from anthropic import Anthropic
 
 # Token and Output Configuration
-LOG_DIR = os.path.expanduser("~/verbose_listops_logs") # Overall token cap for narrative generation
+LOG_DIR = os.path.expanduser("~/verbose_listops_logs")
 DEFAULT_MAX_TOTAL_TOKENS = 10000  # Overall token cap for narrative generation 
 DEFAULT_MAX_BEAT_TOKENS = 1000  # Maximum tokens used for each story 'beat' (listops paragraph)
 DEFAULT_MAX_PAD_TOKENS = 1000  # Maximum tokens used for each story 'padding' section
@@ -366,12 +366,16 @@ def generate_narrative(ast: Node, world: dict) -> str:
             f"You are a {world['genre']} storyteller.\n"
             f"Characters: {json.dumps(world['characters'])}\n"
             f"Setting: {world['setting']}\n\n"
-            "Here is an operation:\n"
-            f"Operator: {node.op}\n"
-            f"Operands: {operands}\n"
-            f"Result: {node.value}\n\n"
-            "Write 1 scene (2–5 short paragraphs) showing how this operation's logic "
-            "plays out among the characters. Do NOT reveal the numeric answer as a meta clue."
+            "Here is a logical step in the story:\n"
+            f"Operation Type: {node.op} (meaning: find the {OP_LABELS.get(node.op, node.op)})\n"
+            f"Input Numbers (Operands): {operands}\n"
+            f"Result of this step (DO NOT REVEAL THIS NUMBER DIRECTLY): {node.value}\n\n"
+            "Write 1 scene (2–5 short paragraphs) where the characters naturally encounter or use these specific "
+            "Input Numbers. Weave the *process* of applying the operation (e.g., finding the median, sum modulo 10, "
+            "smallest value) to these numbers into the narrative actions or dialogue. For example, mention the numbers "
+            f"like 'readings of {operands[0]} and {operands[1]} flashed', or 'they considered the {len(operands)} data "
+            f"points: {', '.join(map(str, operands))}' within the story context. Focus on the story and characters, "
+            "embedding the calculation logic subtly. Do NOT state the numeric result directly."
         )
         with open(
             os.path.join(LOG_DIR, "verbose_listops.log"), "a", encoding="utf-8"
@@ -429,32 +433,42 @@ def generate_narrative(ast: Node, world: dict) -> str:
         if tokens_used >= MAX_TOTAL_TOKENS:
             break
 
+    # Deterministic final question construction
     top_op = ast.op
     label = OP_LABELS.get(top_op, top_op)
 
-    q_prompt = (
-        FEW_SHOT_EXAMPLES
-        + "\n"
-        f"Now the story ends after you applied {top_op}.\n"
-        f"Question: What was the {label} at the top level of the story above?\n"
-        "Answer:"
+    question = (
+        f"Considering the entire narrative above, what single digit represents the final "
+        f"result of the primary calculation? The story's main logical thread culminates in an operation "
+        f"to find the {label}."
     )
-    q_resp = _client_create(
-        model=MODEL,
-        system="You are a question generator. Produce exactly one clear question.",
-        messages=[{"role": "user", "content": q_prompt}],
-        max_tokens=30,
-    )
-    question = q_resp.content[0].text.strip()
+    # Log the constructed question
     with open(os.path.join(LOG_DIR, "verbose_listops.log"), "a", encoding="utf-8") as prompts_log:
-        prompts_log.write("=== Final Question Prompt ===\n")
-        prompts_log.write(q_prompt + "\n\n")
-        prompts_log.write("=== Generated Question ===\n")
+        prompts_log.write("=== Constructed Final Question ===\n")
         prompts_log.write(question + "\n\n")
         prompts_log.flush()
-
-
     scenes.append(question)
+
+    # Append judge instructions
+    judge_instructions = f"""
+---
+**Instructions for Analysis:**
+
+1.  **Goal:** Your task is to determine the single numerical result of the multi-step calculation embedded within the narrative above.
+2.  **Identify Operations:** Read the story carefully to find mentions of calculations or comparisons involving groups of single-digit numbers (0-9). Look for keywords or descriptions related to:
+    * Maximum / Largest value (MAX)
+    * Minimum / Smallest value (MIN)
+    * Median / Middle value (MED)
+    * Sum / Total value (SUM)
+    * Sum Modulo 10 (SM)
+    * Average value (AVG, integer/floored)
+3.  **Extract Numbers:** Note the specific single-digit numbers associated with each operation described.
+4.  **Determine Structure:** Figure out how these operations are nested or sequenced based on the story's progression. The narrative follows a structure where results of earlier operations feed into later ones.
+5.  **Calculate Final Result:** Perform the calculations following the narrative's hierarchy. The overall goal culminates in finding the '{label}' ({top_op}).
+6.  **Output:** Provide *only* the final single-digit integer result. Do not include explanations or calculations in your final answer.
+
+**Final Answer:** """
+    scenes.append(judge_instructions)
 
     return "\n\n".join(scenes)
 

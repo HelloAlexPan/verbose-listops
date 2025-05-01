@@ -1,7 +1,5 @@
 # Verbose ListOps Evaluation Benchmark
 
-**EXPERIMENTAL — WORK IN PROGRESS**
-
 ## Overview
 
 Welcome to the Verbose ListOps Evaluation Benchmark repository. This project provides tools to generate challenging evaluation tasks for sequence models, particularly Large Language Models (LLMs). The benchmark assesses reasoning capabilities when faced with tasks embedded within extremely long, narratively structured, and potentially distracting contexts.

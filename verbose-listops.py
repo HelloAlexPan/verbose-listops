@@ -32,7 +32,7 @@ from anthropic import Anthropic
 # ─── Configuration Constants ────────────────────────────────────────────────────────────────────────────
 
 # --- Batch Generation & Output ---
-NUM_SAMPLES_TO_GENERATE = 2 # How many samples to generate in one run
+NUM_SAMPLES_TO_GENERATE = 1 # How many samples to generate in one run
 OUTPUT_FILENAME = "verbose_listops_dataset.jsonl" # Output file for the dataset
 
 # --- Base configurations ---
@@ -50,32 +50,38 @@ SHOT_EXAMPLES = {
     0: "",
     1: (
         "<Prompt Shot>\n"
-        "Example:\n"
-        "Narrative: “The recipe called for the median weight of three ingredients weighing 7, 2, and 5 grams. The alchemist needed to select the one with that middle weight.”\n"
-        "Answer: 5\n"
+        "Example 1:\n"
+        "Narrative: \"The guild offered two contracts: one paying 9 silver pieces, the other only 4. Kaelen chose the lower-paying contract to avoid scrutiny. He then received a standard 5 silver piece bonus for completing the task quickly.\"\n"
+        "Implicit Calculation: MIN(9, 4) = 4. Then SUM(4, 5) = 9.\n"
+        "Answer: 9\n\n"
         "</Prompt Shot>\n"
     ),
     2: (
         "<Prompt Shot>\n"
         "Example 1:\n"
-        "Narrative: “Two energy readings were displayed: 9 units and 4 units. The system required activating the conduit with the higher reading.”\n"
+        "Narrative: \"The guild offered two contracts: one paying 9 silver pieces, the other only 4. Kaelen chose the lower-paying contract to avoid scrutiny. He then received a standard 5 silver piece bonus for completing the task quickly.\"\n"
+        "Implicit Calculation: MIN(9, 4) = 4. Then SUM(4, 5) = 9.\n"
         "Answer: 9\n\n"
         "Example 2:\n"
-        "Narrative: “The guard collected tolls from the three wagons: 3 silver, 1 silver, and 5 silver pieces. He needed to report the total amount collected.”\n"
-        "Answer: 9\n"
+        "Narrative: “To unlock the ancient vault, the combined energy signature of four power crystals (reading 1, 1, 1, and 1) was required. The locking mechanism, however, only used the final digit of their total combined power.”\n"
+        "Implicit Calculation: SUM(1, 1, 1, 1) = 4. Modulo 10 (final digit) is 4.\n"
+        "Answer: 4\n\n"
         "</Prompt Shot>\n"
     ),
     3: (
         "<Prompt Shot>\n"
         "Example 1:\n"
-        "Narrative: “Two security codes were presented: 81 and 27. Access was granted using the code with the smaller value.”\n"
-        "Answer: 27\n\n"
+        "Narrative: \"The guild offered two contracts: one paying 9 silver pieces, the other only 4. Kaelen chose the lower-paying contract to avoid scrutiny. He then received a standard 5 silver piece bonus for completing the task quickly.\"\n"
+        "Implicit Calculation: MIN(9, 4) = 4. Then SUM(4, 5) = 9.\n"
+        "Answer: 9\n\n"
         "Example 2:\n"
-        "Narrative: “Four sensor pings registered distances of 6, 8, 1, and 3 meters. The protocol involved summing these distances and using only the final digit for the lock combination.”\n"
-        "Answer: 8\n\n" # 6+8+1+3 = 18. Sum Mod 10 is 8.
+        "Narrative: “To unlock the ancient vault, the combined energy signature of four power crystals (reading 1, 1, 1, and 1) was required. The locking mechanism, however, only used the final digit of their total combined power.”\n"
+        "Implicit Calculation: SUM(1, 1, 1, 1) = 4. Modulo 10 (final digit) is 4.\n"
+        "Answer: 4\n\n"
         "Example 3:\n"
-        "Narrative: “The three trainees completed the obstacle course in 10, 12, and 11 minutes. Their squad leader calculated their average time, rounding down to the nearest whole minute.”\n"
-        "Answer: 11\n" # (10+12+11)/3 = 33/3 = 11.
+        "Narrative: “Three scouts reported patrol durations of 5, 5, and 5 hours. Standard procedure required calculating their average patrol time, rounded down to the nearest whole hour, for the official logbook entry.”\n"
+        "Implicit Calculation: SUM(5, 5, 5) = 15. Count = 3. Average = 15 / 3 = 5. Floor(5) = 5.\n"
+        "Answer: 5\n"
         "</Prompt Shot>\n"
     ),
 }
@@ -87,10 +93,16 @@ SHOT_EXAMPLES = {
 # ATOM_MAX_VALUE = 100
 # MIN_ARITY = 10
 
-DEFAULT_MAX_BRANCH = 3 # Default maximum branching factor for AST nodes
-ATOM_MIN_VALUE = 0 # Minimum value for leaf nodes (atoms)
-ATOM_MAX_VALUE = 9 # Maximum value for leaf nodes (atoms)
-MIN_ARITY = 2 # Minimum number of children for operator nodes
+# DEFAULT_MAX_BRANCH = 3 # Default maximum branching factor for AST nodes
+# ATOM_MIN_VALUE = 0 # Minimum value for leaf nodes (atoms)
+# ATOM_MAX_VALUE = 9 # Maximum value for leaf nodes (atoms)
+# MIN_ARITY = 2 # Minimum number of children for operator nodes
+# DEFAULT_MAX_OPS = 10 # Default number of operations for a single problem
+
+DEFAULT_MAX_BRANCH = 20 # Default maximum branching factor for AST nodes
+ATOM_MIN_VALUE = -100 # Minimum value for leaf nodes (atoms)
+ATOM_MAX_VALUE = 100 # Maximum value for leaf nodes (atoms)
+MIN_ARITY = 10 # Minimum number of children for operator nodes
 DEFAULT_MAX_OPS = 10 # Default number of operations for a single problem
 
 
@@ -621,12 +633,11 @@ def generate_narrative(ast: Node, world: dict) -> str:
     # --- Construct Final Output String ---
     narrative_body = "\n\n".join(scenes).strip()
 
-    # --- MODIFIED QUESTION ---
-    # Removed the sentence specifying the final operation type ({label})
+    # --- QUESTION ---
     question = (
         f"\n\n---\n\n"
         f"Considering the entire narrative above, what single final number represents the ultimate result "
-        f"of the main calculation woven into the story?"
+        f"of the calculation woven into the story?"
     )
 
     with open(log_file_path, "a", encoding="utf-8") as prompts_log:
@@ -634,15 +645,13 @@ def generate_narrative(ast: Node, world: dict) -> str:
         prompts_log.write(question + "\n\n")
         prompts_log.flush()
 
-    # --- MODIFIED JUDGE INSTRUCTIONS ---
-    # Removed the specific mention of the final operation type ({label}, {top_op}) in step 5
+    # --- JUDGE INSTRUCTIONS ---
     judge_instructions = f"""
----
 ---
 **Instructions for Analysis:**
 
 1.  **Goal:** Your task is to determine the single numerical result of the multi-step calculation embedded within the narrative above.
-2.  **Identify Operations:** Read the story carefully to find mentions of calculations or comparisons involving groups of numbers. Look for keywords or *descriptions* related to:
+2.  **Identify Operations:** Read the story carefully to find mentions of calculations or comparisons involving groups of numbers. Look for keywords or descriptions related to:
     *   Maximum / Largest value (MAX)
     *   Minimum / Smallest value (MIN)
     *   Median / Middle value (MED)
@@ -650,11 +659,12 @@ def generate_narrative(ast: Node, world: dict) -> str:
     *   Sum Modulo 10 (SM)
     *   Average value (AVG, integer/floored)
 3.  **Extract Numbers:** Note the specific numbers associated with each operation described.
-4.  **Determine Structure:** Figure out how these operations are nested or sequenced based on the story's progression. The narrative follows a structure where results of earlier operations often feed into later ones. *Pay close attention to the chronological order of events and how characters seem to use the result of one step as an input for the next.* Remember that operations may be described through character actions, dialogue, or narration rather than being explicitly named.
-5.  **Calculate Final Result:** Perform the calculations following the narrative's hierarchy, *remembering that Average (AVG) results should be floored to the nearest integer*. The overall goal culminates in finding the '{label}' ({top_op if top_op != "N/A" else "Single Value"}).
-6.  **Output:** Provide *only* the final single-digit integer result (or the final multi-digit integer if the result is > 9). **Do not include explanations, reasoning, or calculations in your final answer. Just the number.**
+4.  **Determine Structure:** Figure out how these operations are nested or sequenced based on the story's progression. The narrative follows a structure where results of earlier operations often feed into later ones.
+5.  **Calculate Final Result:** Perform the calculations following the narrative's inferred hierarchy to determine the single, final numerical result.
+6.  **Output:** Provide *only* the final single-digit integer result (or the final multi-digit integer if the result is > 9). Do not include explanations, reasoning, or calculations in your final answer. Just the number.
 
-**Final Answer:**
+**Final Answer:** """
+
     few_shot_examples = SHOT_EXAMPLES.get(PROMPT_SHOT_COUNT, "")
     final_prompt = few_shot_examples + narrative_body + question + judge_instructions
 

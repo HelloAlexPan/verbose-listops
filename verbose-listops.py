@@ -638,10 +638,11 @@ def generate_narrative(ast: Node, world: dict) -> str:
     # Removed the specific mention of the final operation type ({label}, {top_op}) in step 5
     judge_instructions = f"""
 ---
+---
 **Instructions for Analysis:**
 
 1.  **Goal:** Your task is to determine the single numerical result of the multi-step calculation embedded within the narrative above.
-2.  **Identify Operations:** Read the story carefully to find mentions of calculations or comparisons involving groups of numbers. Look for keywords or descriptions related to:
+2.  **Identify Operations:** Read the story carefully to find mentions of calculations or comparisons involving groups of numbers. Look for keywords or *descriptions* related to:
     *   Maximum / Largest value (MAX)
     *   Minimum / Smallest value (MIN)
     *   Median / Middle value (MED)
@@ -649,12 +650,11 @@ def generate_narrative(ast: Node, world: dict) -> str:
     *   Sum Modulo 10 (SM)
     *   Average value (AVG, integer/floored)
 3.  **Extract Numbers:** Note the specific numbers associated with each operation described.
-4.  **Determine Structure:** Figure out how these operations are nested or sequenced based on the story's progression. The narrative follows a structure where results of earlier operations often feed into later ones.
-5.  **Calculate Final Result:** Perform the calculations following the narrative's inferred hierarchy to determine the single, final numerical result. # <<< CHANGED LINE (removed final op hint)
-6.  **Output:** Provide *only* the final single-digit integer result (or the final multi-digit integer if the result is > 9). Do not include explanations, reasoning, or calculations in your final answer. Just the number.
+4.  **Determine Structure:** Figure out how these operations are nested or sequenced based on the story's progression. The narrative follows a structure where results of earlier operations often feed into later ones. *Pay close attention to the chronological order of events and how characters seem to use the result of one step as an input for the next.* Remember that operations may be described through character actions, dialogue, or narration rather than being explicitly named.
+5.  **Calculate Final Result:** Perform the calculations following the narrative's hierarchy, *remembering that Average (AVG) results should be floored to the nearest integer*. The overall goal culminates in finding the '{label}' ({top_op if top_op != "N/A" else "Single Value"}).
+6.  **Output:** Provide *only* the final single-digit integer result (or the final multi-digit integer if the result is > 9). **Do not include explanations, reasoning, or calculations in your final answer. Just the number.**
 
-**Final Answer:** """
-
+**Final Answer:**
     few_shot_examples = SHOT_EXAMPLES.get(PROMPT_SHOT_COUNT, "")
     final_prompt = few_shot_examples + narrative_body + question + judge_instructions
 

@@ -448,9 +448,11 @@ def generate_world(num_characters: int = 5) -> dict:
 
 # --- Existing imports and setup code above ---
 
+
 def generate_narrative(ast: Node, world: dict) -> str:
     """
-    Render a narrative for each operator in the AST using the Anthropic API, then ask a follow-up question.
+    Render a narrative for each operator in the AST using the Anthropic API,
+    processing in post-order and using special instructions for the final step.
     Args:
         ast: The ListOps AST to narrate. Assumes AST has been evaluated (nodes have .value).
         world: Metadata dict containing characters, genre, and setting.
@@ -472,78 +474,88 @@ def generate_narrative(ast: Node, world: dict) -> str:
 
     scenes = []
     tokens_used = 0
-    log_file_path = os.path.join(LOG_DIR, "verbose_listops_prompts.log") # Log prompts separately
+    log_file_path = os.path.join(LOG_DIR, "verbose_listops_prompts.log")
 
-    # Get evaluated operator nodes in processing order (pre-order seems more narrative-friendly)
-    operator_nodes = [n for n in preorder(ast) if not isinstance(n, Atom)]
-    if not operator_nodes:
-         logger.warning("AST contains no operator nodes. Narrative will be minimal.")
-         if isinstance(ast, Atom):
-              # Simple narrative for a single atom
-              single_atom_prompt = (
-                   f"You are a {world['genre']} storyteller.\n"
-                   f"Characters: {json.dumps(world['characters'])}\n"
-                   f"Setting: {world['setting']}\n\n"
-                   f"Write a very short scene (1-2 paragraphs) where a character encounters or notes the number {ast.value}. "
-                   "Focus on the story and characters."
-              )
-              with open(log_file_path, "a", encoding="utf-8") as prompts_log:
-                   prompts_log.write(f"=== Single Atom Prompt ===\n{single_atom_prompt}\n\n")
-                   prompts_log.flush()
-              resp = _client_create(
-                   model=MODEL,
-                   system="You are a storyteller. Write plain narrative paragraphs without any markdown headings or section titles.",
-                   messages=[{"role": "user", "content": single_atom_prompt}],
-                   max_tokens=MAX_BEAT_TOKENS,
-              )
-              scenes.append(resp.content[0].text)
-              tokens_used += len(encoder.encode(scenes[-1]))
+    # Use post-order traversal for operator nodes
+    operator_nodes = [n for n in postorder(ast) if not isinstance(n, Atom)]
 
-    max_pad_paragraphs = 2 # Max padding sections *between* operator beats
+    if not operator_nodes and isinstance(ast, Atom):
+         # Simple narrative for a single atom
+         single_atom_prompt = (
+              f"You are a {world['genre']} storyteller.\n"
+              f"Characters: {json.dumps(world['characters'])}\n"
+              f"Setting: {world['setting']}\n\n"
+              f"Write a very short scene (1-2 paragraphs) where a character encounters or notes the number {ast.value}. "
+              "Focus on the story and characters."
+         )
+         with open(log_file_path, "a", encoding="utf-8") as prompts_log:
+              prompts_log.write(f"=== Single Atom Prompt ===\n{single_atom_prompt}\n\n")
+              prompts_log.flush()
+         resp = _client_create(
+              model=MODEL,
+              system="You are a storyteller. Write plain narrative paragraphs without any markdown headings or section titles.",
+              messages=[{"role": "user", "content": single_atom_prompt}],
+              max_tokens=MAX_BEAT_TOKENS,
+         )
+         scenes.append(resp.content[0].text)
+         tokens_used += len(encoder.encode(scenes[-1]))
+
+    max_pad_paragraphs = 2
     total_ops = len(operator_nodes)
-    logger.info(f"Starting narrative generation: {total_ops} operator beats to process.")
-
-    last_scene_text = "The story begins..." # Initial context
+    logger.info(f"Starting narrative generation: {total_ops} operator beats to process (post-order).")
+    last_scene_text = "The story begins..."
 
     for idx, node in enumerate(operator_nodes, start=1):
+        is_final_beat = (node is ast)
+
         logger.info(
             f"Processing operator {idx}/{total_ops}: {node.op} with operands {[c.value for c in node.children]}"
+            f"{' (FINAL BEAT)' if is_final_beat else ''}"
         )
 
-        try:
-            operands = [c.value for c in node.children]
-            if None in operands:
-                 raise ValueError(f"Node {node.op} has child with unevaluated value.")
-            result = node.value
-            if result is None:
-                 raise ValueError(f"Node {node.op} has not been evaluated (value is None).")
-        except AttributeError:
-             raise ValueError("AST nodes seem malformed or not evaluated (missing .value)")
-        except Exception as e:
-             logger.error(f"Error accessing node values for {node.op}: {e}")
-             raise
+        operands = [c.value for c in node.children]
+        if None in operands:
+             raise ValueError(f"Node {node.op} has child with unevaluated value.")
+        result = node.value
+        if result is None:
+             raise ValueError(f"Node {node.op} has not been evaluated (value is None).")
 
-        # --- Generate Operator Beat ---
-        # Consider adding a specific instruction for the *final* beat (when node == ast)
-        # to encourage a natural narrative conclusion implying the operation.
-        # For now, using the same prompt structure for all beats.
-        beat_prompt = (
-            f"You are a creative {world['genre']} storyteller, writing a continuous narrative.\n"
-            f"Characters: {json.dumps(world['characters'])}\n"
-            f"Setting: {world['setting']}\n"
-            f"Previous Scene Snippet (for context): \"...{last_scene_text[-150:]}\"\n\n"
-            "--- Current Task ---\n"
-            "Integrate the following logical step into the ongoing story. This step involves:\n"
-            f"* Operation Type: {node.op} (which means finding the {OP_LABELS.get(node.op, node.op)})\n"
-            f"* Input Numbers (Operands): {operands}\n"
-            f"* Result of this step: {result} (IMPORTANT: Do NOT explicitly state this number '{result}' in the narrative!)\n\n"
-            "--- Instructions ---\n"
-            "Write 1 scene (2-5 short paragraphs) continuing the narrative. Characters should naturally encounter, discuss, or use the specific Input Numbers ({operands}). Weave the *process* of applying the operation (e.g., finding the median, summing then taking modulo 10, identifying the smallest) into the characters' actions, thoughts, or dialogue. The numbers should appear organically within the story's context (e.g., 'readings of {operands[0]} and {operands[1]}', 'they considered the {len(operands)} data points: {', '.join(map(str, operands))}'). Focus on vivid storytelling and character interaction, embedding the calculation logic subtly. Avoid mathematical jargon unless it fits the genre/character. Do NOT reveal the numeric result ({result})."
-            "\nOutput only the narrative text for this scene, without titles or headings."
-        )
+        if is_final_beat:
+            beat_prompt = (
+                f"You are a creative {world['genre']} storyteller, writing the concluding scene of a narrative.\n"
+                f"Characters: {json.dumps(world['characters'])}\n"
+                f"Setting: {world['setting']}\n"
+                f"Previous Scene Snippet (for context): \"...{last_scene_text[-150:]}\"\n\n"
+                "--- Final Task ---\n"
+                "This is the final calculation step of the story. Integrate this logical step into the concluding scene. This step involves:\n"
+                f"* Operation Type: {node.op} (which means finding the {OP_LABELS.get(node.op, node.op)})\n"
+                f"* Input Numbers (Operands): {operands}\n"
+                f"* The Implicit Final Result of this step is: {result} (DO NOT MENTION THIS NUMBER OR ANY CALCULATION DETAILS EXPLICITLY IN THE NARRATIVE!)\n\n"
+                "--- Instructions ---\n"
+                "Write 1 concluding scene (2-5 short paragraphs). Characters should naturally encounter or use the Input Numbers ({operands}). Weave the *process* of applying the operation (e.g., finding the average, identifying the maximum) into the characters' actions or thoughts subtly.\n"
+                "**MOST IMPORTANTLY:** Instead of stating the numeric result ({result}), describe the *consequence, decision, reaction, or outcome* that arises *because* of this final result. What action do the characters take? What realization do they have? What does this final calculation enable or prevent? Make the connection between the calculation's outcome and the story's conclusion clear, but *without ever mentioning the number {result}*. Focus on bringing the narrative thread related to this calculation to a satisfying close.\n"
+                "\nOutput only the narrative text for this final scene, without titles or headings."
+            )
+            prompt_log_header = f"=== FINAL Operator Beat Prompt {idx}/{total_ops} (Op: {node.op}) ==="
+        else:
+            beat_prompt = (
+                f"You are a creative {world['genre']} storyteller, writing a continuous narrative.\n"
+                f"Characters: {json.dumps(world['characters'])}\n"
+                f"Setting: {world['setting']}\n"
+                f"Previous Scene Snippet (for context): \"...{last_scene_text[-150:]}\"\n\n"
+                "--- Current Task ---\n"
+                "Integrate the following logical step into the ongoing story. This step involves:\n"
+                f"* Operation Type: {node.op} (which means finding the {OP_LABELS.get(node.op, node.op)})\n"
+                f"* Input Numbers (Operands): {operands}\n"
+                f"* Result of this step: {result} (IMPORTANT: Do NOT explicitly state this number '{result}' in the narrative! This is an intermediate step.)\n\n"
+                "--- Instructions ---\n"
+                "Write 1 scene (2-5 short paragraphs) continuing the narrative. Characters should naturally encounter, discuss, or use the specific Input Numbers ({operands}). Weave the *process* of applying the operation (e.g., finding the median, summing then taking modulo 10, identifying the smallest) into the characters' actions, thoughts, or dialogue. The numbers should appear organically within the story's context. Avoid mathematical jargon unless it fits the genre/character. Do NOT reveal the numeric result ({result})."
+                "\nOutput only the narrative text for this scene, without titles or headings."
+            )
+            prompt_log_header = f"=== Intermediate Operator Beat Prompt {idx}/{total_ops} (Op: {node.op}) ==="
 
         with open(log_file_path, "a", encoding="utf-8") as prompts_log:
-            prompts_log.write(f"=== Operator Beat Prompt {idx}/{total_ops} (Op: {node.op}) ===\n")
+            prompts_log.write(prompt_log_header + "\n")
             prompts_log.write(beat_prompt + "\n\n")
             prompts_log.flush()
 
@@ -571,9 +583,9 @@ def generate_narrative(ast: Node, world: dict) -> str:
         last_scene_text = beat_text
         logger.info(f"Generated beat {idx} ({node.op}), tokens used: {btoks}, total tokens: {tokens_used}")
 
-        # --- Optional Padding ---
+        # Optional Padding: only for non-final beats
         pad_count = 0
-        add_padding = (idx < total_ops)
+        add_padding = not is_final_beat
 
         while add_padding and tokens_used < MAX_TOTAL_TOKENS - SAFETY_MARGIN and pad_count < max_pad_paragraphs:
             pad_prompt = (
@@ -588,7 +600,7 @@ def generate_narrative(ast: Node, world: dict) -> str:
                 "*   A minor, unrelated event or observation.\n"
                 "*   A hint of a side-plot or mystery.\n\n"
                 "--- IMPORTANT ---\n"
-                "Do NOT introduce new numbers or calculations. Do NOT mention the previous operation ({node.op}) or its inputs/results. This is purely transitional or world-building content.\n"
+                "Do NOT introduce new numbers or calculations. Do NOT mention the previous operation ({node.op}) or its inputs/results.\n"
                 "Output only the narrative text for this padding, without titles or headings."
             )
 
@@ -630,44 +642,30 @@ def generate_narrative(ast: Node, world: dict) -> str:
             logger.warning(f"Reached token limit after processing operator {idx}. Stopping narrative generation.")
             break
 
-    # --- Construct Final Output String ---
+    # Construct final output
     narrative_body = "\n\n".join(scenes).strip()
-
-    # --- QUESTION ---
     question = (
         f"\n\n---\n\n"
-        f"Considering the entire narrative above, what single final number represents the ultimate result "
-        f"of the calculation woven into the story?"
+        f"Analyze the narrative above to identify and perform the sequence of calculations embedded within it.  "
+        f"What is the single, final numerical result?"
     )
-
     with open(log_file_path, "a", encoding="utf-8") as prompts_log:
         prompts_log.write("=== Constructed Final Question (Modified) ===\n")
         prompts_log.write(question + "\n\n")
         prompts_log.flush()
-
-    # --- JUDGE INSTRUCTIONS ---
     judge_instructions = f"""
 ---
-**Instructions for Analysis:**
+**Task:
 
-1.  **Goal:** Your task is to determine the single numerical result of the multi-step calculation embedded within the narrative above.
-2.  **Identify Operations:** Read the story carefully to find mentions of calculations or comparisons involving groups of numbers. Look for keywords or descriptions related to:
-    *   Maximum / Largest value (MAX)
-    *   Minimum / Smallest value (MIN)
-    *   Median / Middle value (MED)
-    *   Sum / Total value (SUM)
-    *   Sum Modulo 10 (SM)
-    *   Average value (AVG, integer/floored)
-3.  **Extract Numbers:** Note the specific numbers associated with each operation described.
-4.  **Determine Structure:** Figure out how these operations are nested or sequenced based on the story's progression. The narrative follows a structure where results of earlier operations often feed into later ones.
-5.  **Calculate Final Result:** Perform the calculations following the narrative's inferred hierarchy to determine the single, final numerical result.
-6.  **Output:** Provide *only* the final single-digit integer result (or the final multi-digit integer if the result is > 9). Do not include explanations, reasoning, or calculations in your final answer. Just the number.
+1.	Read the narrative carefully. A multi-step calculation involving operations like finding the maximum, minimum, median, sum, sum modulo 10, or average (integer/floored) of groups of numbers is embedded within the story’s events and descriptions.
+2.	Determine the single, final numerical result of this entire calculation based on the narrative’s progression.
 
-**Final Answer:** """
+**Output:** Provide *only* the final integer result. Do not include explanations, reasoning, or calculations in your final answer. Just the number.
 
+**Final Answer:** 
+"""
     few_shot_examples = SHOT_EXAMPLES.get(PROMPT_SHOT_COUNT, "")
     final_prompt = few_shot_examples + narrative_body + question + judge_instructions
-
     return final_prompt.strip()
 
 # --- Existing ast_to_prefix, main, and __main__ block below ---

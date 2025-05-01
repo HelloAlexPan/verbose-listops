@@ -32,8 +32,8 @@ from anthropic import Anthropic
 # ─── Configuration Constants ────────────────────────────────────────────────────────────────────────────
 
 # --- Batch Generation & Output ---
-NUM_SAMPLES_TO_GENERATE = 2 # <<< How many samples to generate in one run
-OUTPUT_FILENAME = "verbose_listops_dataset.jsonl" # <<< Output file for the dataset
+NUM_SAMPLES_TO_GENERATE = 2 # How many samples to generate in one run
+OUTPUT_FILENAME = "verbose_listops_dataset.jsonl" # Output file for the dataset
 
 # --- Base configurations ---
 # Base configurations are provided for testing purposes to save API costs and increase generation speed.
@@ -626,7 +626,7 @@ def generate_narrative(ast: Node, world: dict) -> str:
     question = (
         f"\n\n---\n\n"
         f"Considering the entire narrative above, what single final number represents the ultimate result "
-        f"of the main calculation woven into the story?" # <<< CHANGED LINE (removed final op hint)
+        f"of the main calculation woven into the story?"
     )
 
     with open(log_file_path, "a", encoding="utf-8") as prompts_log:

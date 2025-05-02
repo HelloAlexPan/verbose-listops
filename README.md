@@ -1,5 +1,9 @@
 # Verbose ListOps Evaluation Benchmark
 
+## HIGHLY EXPERIMENTAL — WIP
+
+Basically, this is a very hard, novel ML eval wherein the test dataset is generated through a very complex agentic system.
+
 ## Overview
 
 Welcome to the Verbose ListOps Evaluation Benchmark repository. This project provides tools to generate challenging evaluation tasks for sequence models, particularly Large Language Models (LLMs). The benchmark assesses reasoning capabilities when faced with tasks embedded within extremely long, narratively structured, and potentially distracting contexts.

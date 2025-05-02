@@ -14,6 +14,9 @@ import time
 from typing import Callable, Set
 from dataclasses import dataclass, field
 import re
+import concurrent.futures
+import inflect
+
 
 import tiktoken
 import anthropic
@@ -70,15 +73,9 @@ for idx, txt in enumerate(EXAMPLE_TEXTS, start=1):
     SHOT_EXAMPLES[idx] = f"<Prompt Shot>\n{txt}\n</Prompt Shot>\n"
 
 # --- AST Random ListOps problem gen params ---
-DEFAULT_MAX_OPS = 20 # Max operations (e.g. max, min ,etc.) in a problem
-MIN_ARITY = 5 # Min numbers in an operation
-DEFAULT_MAX_BRANCH = 8 # Max operations / numbers in an operation
-
-
-
-import concurrent.futures
-import inflect
-
+DEFAULT_MAX_OPS = 10 # Max operations (e.g. max, min ,etc.) in a problem
+MIN_ARITY = 3 # Min numbers in an operation
+DEFAULT_MAX_BRANCH = 6 # Max operations / numbers in an operation
 
 # --- Prompt Logging Helper ---
 def log_prompt(header: str, prompt: str, path: str = os.path.join(LOG_DIR, "verbose_listops_prompts.log")):
@@ -101,14 +98,14 @@ def init_anthropic(api_key: str):
     encoder = tiktoken.get_encoding("cl100k_base")
     return client, encoder
 
-# --- Config Dataclass Grouping ---
+# --- Dataclasses ---
 @dataclass
 class Config:
     NUM_SAMPLES_TO_GENERATE: int = NUM_SAMPLES_TO_GENERATE
     DEFAULT_MAX_WORKERS: int = DEFAULT_MAX_WORKERS
-    DEFAULT_MAX_TOTAL_TOKENS: int = 20000
-    DEFAULT_MAX_BEAT_TOKENS: int = 1000
-    DEFAULT_MAX_PAD_TOKENS: int = 1000
+    DEFAULT_MAX_TOTAL_TOKENS: int = 10000
+    DEFAULT_MAX_BEAT_TOKENS: int = 750
+    DEFAULT_MAX_PAD_TOKENS: int = 750
     MAX_TOKENS_BUFFER: int = 1000
     PROMPT_SHOT_COUNT: int = 3
     RETRY_MAX_ATTEMPTS: int = 5
@@ -566,69 +563,66 @@ def generate_owner_name_with_llm(
 # --- END PHASE 4b Function ---
 
 # --- Narrative Generation with REVISED-REVISED Strict Checks ---
+
+
+
+
+
+# --- PHASE 2: generate_narrative (explicit retry loop, two-step validation, NO in-prompt examples) ---
 def generate_narrative(ast: Node, world: dict) -> str | None:
-    """Generate narrative for each AST operator with strict number validation."""
-    # --- Initial checks ---
-    if not isinstance(ast, Node): raise ValueError("ast must be an instance of Node")
-    if not isinstance(world, dict): raise ValueError("world must be a dict")
-    if not all(k in world for k in ("characters", "genre", "setting", "entity_concepts")):
-        logger.error(f"World info dictionary is missing required keys (needs 'entity_concepts'): {world.keys()}")
-        raise ValueError("world missing required key(s) including 'entity_concepts'")
-    if encoder is None: raise RuntimeError("Tokenizer not initialized.")
-    if p_inflect is None: raise RuntimeError("Inflect engine not initialized.")
+    """
+    Generate a narrative for a ListOps AST, ensuring only original atomic operands are mentioned,
+    with strict validation and world/owner narrative integration. Uses explicit retry loop with two-phase validation.
+    Does NOT include in-prompt few-shot examples.
+    """
+    # --- Initial validation ---
+    if not isinstance(ast, Node):
+        raise ValueError("ast must be an instance of Node")
+    if not isinstance(world, dict):
+        raise ValueError("world must be a dict")
+    required_keys = ("characters", "genre", "setting", "entity_concepts")
+    if not all(k in world for k in required_keys):
+        logger.error(f"World info missing required keys: {world.keys()}")
+        raise ValueError("world missing required key(s)")
+    if encoder is None:
+        raise RuntimeError("Tokenizer not initialized.")
+    if p_inflect is None:
+        raise RuntimeError("Inflect engine not initialized.")
 
     scenes = []
     tokens_used = 0
-    log_file_path = os.path.join(LOG_DIR, "verbose_listops_prompts.log")
-
-    # --- Get ALL original atomic values from the entire AST ---
-    all_atomic_operands_in_ast = get_atoms_in_subtree(ast)
-    logger.debug(f"All original atomic operands in AST: {all_atomic_operands_in_ast}")
-
-    # --- Track atoms processed so far ---
-    atoms_processed_so_far = set() # Atoms from subtrees whose beats have been generated
-
+    all_atoms = get_atoms_in_subtree(ast)
+    logger.debug(f"All atomic operands: {all_atoms}")
+    atoms_so_far = set()
     operator_nodes = [n for n in postorder(ast) if not isinstance(n, Atom)]
-    # Default padding paragraphs (override for single-atom case below)
     max_pad_paragraphs = 2
-
-    # --- Unify single-atom case by synthesizing dummy operator ---
     if not operator_nodes and isinstance(ast, Atom):
         operator_nodes = [OpNode("SUM", [ast])]
-        # disable padding for single-atom case
         max_pad_paragraphs = 0
 
-    # --- <<< MODIFIED PHASE 4b: Conditional LLM Naming / Thematic Owner Mapping >>> ---
+    # --- Owner mapping ---
     owner_map = {}
     if config.USE_OWNERSHIP_NARRATIVE:
         if operator_nodes:
             use_llm = config.USE_LLM_NAMING
-            mode = "LLM-based creative" if use_llm else "thematic"
-            logger.info(f"Assigning {mode} owner concepts to operator nodes (Phase 4b/4a)...")
             concepts = world.get("entity_concepts", [])
             characters = world.get("characters", [])
             for i, op_node in enumerate(operator_nodes):
                 if not isinstance(op_node, OpNode):
-                    logger.warning(f"Skipping non-OpNode: {type(op_node)} at index {i}")
                     continue
                 node_id = id(op_node)
                 owner_name = None
                 if use_llm:
                     child_owner_names = []
-                    for child_node in op_node.children:
-                        child_id = id(child_node)
-                        if isinstance(child_node, OpNode) and child_id in owner_map:
-                            child_owner_names.append(owner_map[child_id])
+                    for child in op_node.children:
+                        if isinstance(child, OpNode) and id(child) in owner_map:
+                            child_owner_names.append(owner_map[id(child)])
                     try:
                         owner_name = generate_owner_name_with_llm(world, op_node, child_owner_names)
                     except Exception as e:
                         logger.error(f"LLM Naming failed for OpNode {op_node.op}: {e}")
                         owner_name = None
-                    if owner_name:
-                        logger.debug(f"LLM assigned owner '{owner_name}' to node {op_node.op}")
-                    else:
-                        logger.warning(f"LLM naming failed for {op_node.op}, using fallback.")
-                if owner_name is None:
+                if not owner_name:
                     if concepts:
                         chosen_concept = random.choice(concepts)
                         if characters:
@@ -639,44 +633,26 @@ def generate_narrative(ast: Node, world: dict) -> str | None:
                             owner_name = f"the {chosen_concept} ({op_node.op} #{i+1})"
                     else:
                         owner_name = f"the_{op_node.op}_entity_{i+1}"
-                    logger.debug(f"Assigned owner '{owner_name}' to node {op_node.op} (fallback)")
                 owner_map[node_id] = owner_name
-            logger.info(f"Owner concept assignment complete. Map size: {len(owner_map)}")
-        else:
-            logger.warning("No operator nodes to assign owners to.")
-    # --- <<< END PHASE 4b MODIFICATION >>> ---
+    # --- End owner mapping ---
 
-    # --- Process Operator Beats ---
     total_ops = len(operator_nodes)
-    logger.info(f"Starting narrative generation: {total_ops} operator beats to process (post-order).")
+    logger.info(f"Starting narrative generation: {total_ops} operator beats.")
     last_scene_text = "The story begins..."
 
     for idx, node in enumerate(operator_nodes, start=1):
-        is_final_beat = (node is ast)
-
-        # --- Get atoms associated *only* with the children of this node ---
-        atoms_from_children_subtrees = set()
-        for child_node in node.children:
-            atoms_from_children_subtrees.update(get_atoms_in_subtree(child_node))
-
-        # The set of all atoms allowed to appear in this beat's text:
-        # Those already processed + those belonging to the direct children's subtrees.
-        allowed_atoms_in_this_beat = atoms_processed_so_far.union(atoms_from_children_subtrees)
-
-        # We still need the node's value for the prompt's hidden result info
+        is_final = (node is ast)
+        # Atoms from child subtrees
+        atoms_from_children = set()
+        for c in node.children:
+            atoms_from_children.update(get_atoms_in_subtree(c))
+        allowed_atoms = atoms_so_far.union(atoms_from_children)
         result = node.value
-        if result is None: logger.error(f"Node {node.op} has None value."); return None
+        if result is None:
+            logger.error(f"Node {node.op} has None value.")
+            return None
 
-        logger.info(
-            f"Processing operator {idx}/{total_ops}: {node.op}. "
-            f"Atoms from children: {atoms_from_children_subtrees}. "
-            f"Atoms processed before: {atoms_processed_so_far}. "
-            f"Allowed atoms now: {allowed_atoms_in_this_beat}."
-            f"{' (FINAL BEAT)' if is_final_beat else ''}"
-        )
-
-        # --- <<< START PHASE 2 MODIFICATION: Conditional Prompt Construction >>> ---
-        operation_concept = OP_LABELS.get(node.op, node.op)
+        op_label = OP_LABELS.get(node.op, node.op)
         ultra_strict_instruction = (
             "**ULTRA-STRICT NUMBER RULE:**\n"
             "*   You MUST NOT include ANY numbers (digits or words) in your response UNLESS they are original input numbers that have appeared previously in the story AND are essential for narrative context.\n"
@@ -684,57 +660,58 @@ def generate_narrative(ast: Node, world: dict) -> str | None:
             "*   DO NOT introduce any new numbers that were not part of the original inputs.\n"
             "*   Focus ONLY on describing the process or consequences narratively."
         )
-
+        operand_list_str = ", ".join(str(x) for x in sorted(atoms_from_children))
+        current_task_body = ""
+        final_task_body = ""
+        ownership_instruction_detail = ""
         if config.USE_OWNERSHIP_NARRATIVE:
             node_id = id(node)
             owner_name = owner_map.get(node_id, f"the_unnamed_{node.op}_entity")
-            if node_id not in owner_map:
-                logger.warning(f"Node {node.op} (id: {node_id}) not found in owner_map during prompt generation!")
-
-            ownership_instruction = (
+            ownership_instruction_detail = (
                 f"This part of the story revolves around an entity or concept known as '{owner_name}'. "
-                f"Its final state or significance is determined by applying a rule ({operation_concept}) to its constituent parts or related elements (which have been mentioned or established previously). "
+                f"Its final state or significance is determined by applying a rule ({op_label}) to its constituent parts or related elements (which have been mentioned or established previously). "
                 f"Describe narratively how '{owner_name}' is formed, evaluated, or what consequences arise from its state. "
                 f"Refer to the constituent parts implicitly as belonging to or defining '{owner_name}'. Avoid explicitly stating the operation (like 'taking the max'). Focus on the story."
             )
-
-            if is_final_beat:
+            current_task_body = (
+                f"Continue the story for 1-2 paragraphs. This scene focuses on the process or intermediate state involving '{owner_name}'. "
+                f"Its current relevance or form is shaped by applying the **{op_label}** rule to its constituent parts: [{operand_list_str}]. "
+                f"Describe character actions, thoughts, or plot developments related to '{owner_name}' at this stage.\n\n"
+                f"{ownership_instruction_detail}"
+            )
+            final_task_body = (
+                f"Write the concluding scene (1-2 paragraphs). This scene reveals the final significance or consequence related to '{owner_name}', "
+                f"whose nature was determined by the **{op_label}** rule applied to its components: [{operand_list_str}] (as described in the narrative flow). "
+                f"Focus on the ultimate outcome, character reactions, or plot resolution stemming from '{owner_name}'.\n\n"
+                f"{ownership_instruction_detail}"
+            )
+            if is_final:
                 task_header = "Final Task (Ownership Narrative)"
-                task_body = (
-                    f"Write the concluding scene (1-2 paragraphs). This scene reveals the final significance or consequence related to '{owner_name}', "
-                    f"whose nature was determined by the **{operation_concept}** rule applied to its components (as described in the narrative flow). "
-                    f"Focus on the ultimate outcome, character reactions, or plot resolution stemming from '{owner_name}'.\n\n"
-                    f"{ownership_instruction}"
-                )
                 beat_mode = f"{world['genre']}, writing the concluding scene about '{owner_name}'"
             else:
                 task_header = "Current Task (Ownership Narrative)"
-                task_body = (
-                    f"Continue the story for 1-2 paragraphs. This scene focuses on the process or intermediate state involving '{owner_name}'. "
-                    f"Its current relevance or form is shaped by applying the **{operation_concept}** rule to its constituent parts. "
-                    f"Describe character actions, thoughts, or plot developments related to '{owner_name}' at this stage.\n\n"
-                    f"{ownership_instruction}"
-                )
                 beat_mode = f"{world['genre']}, writing a continuous narrative involving '{owner_name}'"
-
         else:
-            if is_final_beat:
+            current_task_body = (
+                "Continue the story for 1-2 paragraphs. This part involves a logical step related to determining "
+                f"the **{op_label}** based on elements or values described previously: [{operand_list_str}]. "
+                "Focus entirely on the characters' actions, thoughts, and the unfolding plot. "
+                "Describe the *process* or *consequence* of this logical step."
+            )
+            final_task_body = (
+                "Write the concluding scene (1-2 paragraphs). This scene incorporates the *final* logical step, "
+                f"related to determining the **{op_label}** based on elements described previously: [{operand_list_str}]. "
+                "Focus on the final outcome, consequences, and character reactions resulting from this last step."
+            )
+            if is_final:
                 task_header = "Final Task"
-                task_body = (
-                    "Write the concluding scene (1-2 paragraphs). This scene incorporates the *final* logical step, "
-                    f"related to determining the **{operation_concept}** based on elements described previously. "
-                    "Focus on the final outcome, consequences, and character reactions resulting from this last step."
-                )
                 beat_mode = f"{world['genre']}, writing the concluding scene"
             else:
                 task_header = "Current Task"
-                task_body = (
-                    "Continue the story for 1-2 paragraphs. This part involves a logical step related to determining "
-                    f"the **{operation_concept}** based on elements or values described previously. "
-                    "Focus entirely on the characters' actions, thoughts, and the unfolding plot. "
-                    "Describe the *process* or *consequence* of this logical step."
-                )
                 beat_mode = f"{world['genre']}, writing a continuous narrative"
+
+        is_final_beat = is_final
+        actual_task_body = final_task_body if is_final_beat else current_task_body
 
         beat_prompt = BASE_BEAT_TEMPLATE.substitute(
             beat_mode=beat_mode,
@@ -742,53 +719,78 @@ def generate_narrative(ast: Node, world: dict) -> str | None:
             setting=world["setting"],
             snippet=last_scene_text[-150:],
             task_header=task_header,
-            task_body=task_body,
+            task_body=actual_task_body,
             ultra_strict_instruction=ultra_strict_instruction
         )
-        # --- <<< END PHASE 2 MODIFICATION >>> ---
-
-        if is_final_beat:
-            prompt_log_header = f"=== FINAL Operator Beat Prompt {idx}/{total_ops} (Op: {node.op}) ==="
-        else:
-            prompt_log_header = f"=== Intermediate Operator Beat Prompt {idx}/{total_ops} (Op: {node.op}) ==="
-
+        prompt_log_header = (
+            f"=== FINAL Operator Beat Prompt {idx}/{total_ops} (Op: {node.op}) ==="
+            if is_final else
+            f"=== Intermediate Operator Beat Prompt {idx}/{total_ops} (Op: {node.op}) ==="
+        )
         log_prompt(prompt_log_header, beat_prompt)
-
         estimated_prompt_tokens = len(encoder.encode(beat_prompt))
         if would_exceed_budget(tokens_used, estimated_prompt_tokens + MAX_BEAT_TOKENS, MAX_TOTAL_TOKENS, SAFETY_MARGIN):
             logger.warning(f"Approaching token limit before generating beat {idx}. Stopping.")
             return None
-
-        # ----------- Helper function for validating a candidate beat -----------
-        validate_beat = make_number_validator(allowed_atoms_in_this_beat)
-
-        # Use the retry helper
+        validate_forbidden_numbers = make_number_validator(allowed_atoms)
         system_prompt = "You are a storyteller focused on narrative flow. FOLLOW THE USER'S NUMBER RULES EXACTLY. No calculations, no results, NO FORBIDDEN NUMBERS."
-        beat_text = generate_with_retry(system_prompt, beat_prompt, MAX_BEAT_TOKENS, validate_beat, retries=config.MAX_BEAT_RETRIES)
+        # --- Explicit retry loop with two-step validation ---
+        beat_text = None
+        for attempt in range(1, config.MAX_BEAT_RETRIES + 1):
+            try:
+                resp = _client_create(
+                    model=MODEL,
+                    system=system_prompt,
+                    messages=[{"role": "user", "content": beat_prompt}],
+                    max_tokens=MAX_BEAT_TOKENS,
+                    temperature=0.7,
+                )
+                candidate = resp.content[0].text.strip()
+                # Refusal detection
+                if not candidate or candidate.lower().startswith(("i cannot", "i'm sorry", "i am unable")):
+                    logger.warning(f"API refusal on beat attempt {attempt}.")
+                    continue
+                # Step 1: Forbidden number check
+                if not validate_forbidden_numbers(candidate):
+                    logger.warning(f"Beat {idx} attempt {attempt}: Forbidden numbers found.")
+                    continue
+                # Step 2: Operand presence check
+                # For each atomic operand in atoms_from_children, ensure at least one is present
+                if not atoms_from_children:
+                    logger.warning(f"Beat {idx} attempt {attempt}: No operands to check presence for.")
+                    continue
+                found_operand = any(check_operand_presence(candidate, operand_val) for operand_val in atoms_from_children)
+                if not found_operand:
+                    logger.warning(f"Beat {idx} attempt {attempt}: No required operand present.")
+                    continue
+                # Passed both validations
+                beat_text = candidate
+                break
+            except Exception as e:
+                logger.warning(f"Error on beat {idx} attempt {attempt}: {e}")
+            time.sleep(config.RETRY_INITIAL_DELAY * (2 ** (attempt - 1)))
         if not beat_text:
-            logger.error(f"Beat {idx} ({node.op}) failed after {config.MAX_BEAT_RETRIES} attempts.")
+            logger.error(
+                f"Beat {idx} ({node.op}) failed after {config.MAX_BEAT_RETRIES} attempts. "
+                "Failure could be due to forbidden numbers, missing operands, API errors, or refusals."
+            )
             return None
         btoks = len(encoder.encode(beat_text))
-        atoms_processed_so_far.update(atoms_from_children_subtrees)
+        atoms_so_far.update(atoms_from_children)
         scenes.append(beat_text)
         tokens_used += btoks
         last_scene_text = beat_text
-        logger.info(f"Appended validated beat {idx}, tokens used: {btoks}, total: {tokens_used}")
+        logger.info(f"Appended beat {idx}, tokens used: {btoks}, total: {tokens_used}")
 
-        # ---------- Padding Generation (Ultra-strict: ZERO numbers) ----------
+        # Padding (zero numbers)
         pad_count = 0
-        add_padding = not is_final_beat
-
-        # --- Helper for validating padding ---
+        add_padding = not is_final
         validate_padding = make_number_validator(set())
-
         while add_padding and tokens_used < MAX_TOTAL_TOKENS - SAFETY_MARGIN and pad_count < max_pad_paragraphs:
             estimated_pad_prompt_tokens = 200
             if would_exceed_budget(tokens_used, estimated_pad_prompt_tokens + MAX_PAD_TOKENS, MAX_TOTAL_TOKENS, SAFETY_MARGIN):
                 logger.warning(f"Skipping padding after beat {idx}: Approaching token limit.")
-                add_padding = False
                 break
-
             padding_prompt = (
                 f"You are a {world['genre']} storyteller, writing filler text between scenes.\n"
                 f"Characters: {json.dumps(world['characters'])}\nSetting: {world['setting']}\n"
@@ -798,63 +800,59 @@ def generate_narrative(ast: Node, world: dict) -> str | None:
                 "**ULTRA-STRICT ABSOLUTE RULE:** This padding text MUST contain ZERO numbers. NO digits (e.g., 1, 2, 3). NO number words (e.g., one, two, three). NONE AT ALL.\n\n"
                 "Output only the narrative text for this padding, without titles or headings."
             )
-
-            # Use the generate_with_retry helper for padding
-            result = generate_with_retry(
-                system_prompt="You are a storyteller writing transitional text. FOLLOW THE USER'S NUMBER RULES EXACTLY. ZERO NUMBERS ALLOWED.",
-                user_prompt=padding_prompt,
-                max_tokens=MAX_PAD_TOKENS,
-                validate_fn=validate_padding,
-                retries=config.MAX_PAD_RETRIES,
-            )
-            if result is None:
+            pad_result = None
+            for pad_attempt in range(1, config.MAX_PAD_RETRIES + 1):
+                try:
+                    resp_pad = _client_create(
+                        model=MODEL,
+                        system="You are a storyteller writing transitional text. FOLLOW THE USER'S NUMBER RULES EXACTLY. ZERO NUMBERS ALLOWED.",
+                        messages=[{"role": "user", "content": padding_prompt}],
+                        max_tokens=MAX_PAD_TOKENS,
+                        temperature=0.7,
+                    )
+                    candidate_pad = resp_pad.content[0].text.strip()
+                    if not candidate_pad or candidate_pad.lower().startswith(("i cannot", "i'm sorry", "i am unable")):
+                        logger.warning(f"Padding refusal on attempt {pad_attempt}.")
+                        continue
+                    if not validate_padding(candidate_pad):
+                        logger.warning(f"Padding attempt {pad_attempt}: Found numbers.")
+                        continue
+                    pad_result = candidate_pad
+                    break
+                except Exception as e:
+                    logger.warning(f"Padding error on attempt {pad_attempt}: {e}")
+                time.sleep(config.RETRY_INITIAL_DELAY * (2 ** (pad_attempt - 1)))
+            if not pad_result:
                 logger.error("Padding generation failed.")
-                add_padding = False
-            else:
-                padding_text = result
-                ptoks = len(encoder.encode(padding_text))
-                if tokens_used + ptoks + SAFETY_MARGIN > MAX_TOTAL_TOKENS:
-                    logger.warning(f"Generated padding too long ({ptoks} tokens). Discarding.")
-                    add_padding = False
-                else:
-                    scenes.append(padding_text)
-                    tokens_used += ptoks
-                    last_scene_text = padding_text
-                    pad_count += 1
-                    logger.info(f"Appended strictly validated padding {pad_count}, tokens used: {ptoks}, total: {tokens_used}")
-            if pad_count >= max_pad_paragraphs:
-                add_padding = False
-            if tokens_used >= MAX_TOTAL_TOKENS - SAFETY_MARGIN:
-                logger.warning("Token limit reached during padding.")
-                add_padding = False
                 break
-        if tokens_used >= MAX_TOTAL_TOKENS - SAFETY_MARGIN: logger.warning("Token limit reached; stopping operator processing."); break
-    # --- End of Operator Loop ---
+            ptoks = len(encoder.encode(pad_result))
+            if tokens_used + ptoks + SAFETY_MARGIN > MAX_TOTAL_TOKENS:
+                logger.warning(f"Generated padding too long ({ptoks} tokens). Discarding.")
+                break
+            scenes.append(pad_result)
+            tokens_used += ptoks
+            last_scene_text = pad_result
+            pad_count += 1
+        if tokens_used >= MAX_TOTAL_TOKENS - SAFETY_MARGIN:
+            logger.warning("Token limit reached; stopping operator processing.")
+            break
 
     # --- Final Narrative Construction and Validation ---
-    if not scenes: logger.error("No scenes generated."); return None
-    narrative_body = "\n\n".join(scenes).strip()
-
-    # --- Final Overall Number Check ---
-    logger.info("Performing final check on the entire narrative body...")
-    logger.debug(f"Expected atoms overall (from original AST): {all_atomic_operands_in_ast}")
-    found_in_final_body = extract_numbers_from_text(narrative_body)
-    logger.debug(f"Numbers found in final body: {found_in_final_body}")
-
-    unexpected_in_final = found_in_final_body - all_atomic_operands_in_ast
-    if unexpected_in_final:
-        logger.error(f"FINAL VALIDATION FAILED: Unexpected numbers found in final narrative: {unexpected_in_final}. Not original atoms.")
+    if not scenes:
+        logger.error("No scenes generated.")
         return None
-    else:
-        logger.info("Final narrative validation passed.")
-
-    # --- Construct Final Prompt ---
+    narrative_body = "\n\n".join(scenes).strip()
+    found_in_final_body = extract_numbers_from_text(narrative_body)
+    unexpected = found_in_final_body - all_atoms
+    if unexpected:
+        logger.error(f"FINAL VALIDATION FAILED: Unexpected numbers found: {unexpected}")
+        return None
     question = (
         f"\n\n---\n\n"
         f"Analyze the narrative above to identify and perform the sequence of calculations embedded within it.  "
         f"What is the single, final numerical result?"
     )
-    judge_instructions = f"""
+    judge_instructions = """
 ---
 **Task:**
 
@@ -865,8 +863,7 @@ def generate_narrative(ast: Node, world: dict) -> str | None:
 
 **Final Answer:**
 """
-    few_shot_examples = SHOT_EXAMPLES.get(config.PROMPT_SHOT_COUNT, "")
-    final_prompt = few_shot_examples + narrative_body + question + judge_instructions
+    final_prompt = narrative_body + question + judge_instructions
     logger.info(f"Successfully generated and validated narrative prompt. Total tokens used (estimated): {tokens_used}")
     return final_prompt.strip()
 

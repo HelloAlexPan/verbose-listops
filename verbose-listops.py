@@ -30,22 +30,34 @@ from dataclasses import dataclass, field
 import tiktoken
 import anthropic
 from anthropic import Anthropic
-from anthropic.types import Message           # NEW – type hints
-from anthropic.types.beta.batches import Batch  # NEW – type hints
+# Optional type‑hints from the newest anthropic SDK.
+# If the user’s installed version is older, fall back to `Any`
+# so the script can still run without upgrade.
+from typing import Any
+
+try:
+    from anthropic.types import Message  # type: ignore
+except ImportError:  # older SDK – no typed stubs
+    Message = Any    # type: ignore
+
+try:
+    from anthropic.types.beta.batches import Batch  # type: ignore
+except ImportError:  # older SDK – Batch typing not available
+    Batch = Any      # type: ignore
 import concurrent.futures
 
 # ─── Configuration Constants ────────────────────────────────────────────────────────────────────────────
 
-NUM_SAMPLES_TO_GENERATE = 4                   # How many samples to generate
-OUTPUT_FILENAME = "verbose_listops_dataset.jsonl"
-DEFAULT_MAX_WORKERS = 8                       # ThreadPool workers
+NUM_SAMPLES_TO_GENERATE = 1                   # How many samples to generate
+OUTPUT_FILENAME = "verbose_listops_dataset_easy_sonnet_test2.jsonl"
+DEFAULT_MAX_WORKERS = 1000                       # ThreadPool workers
 
 # --- Output configuration ---
 LOG_DIR = os.path.expanduser("~/verbose_listops_logs")
-DEFAULT_MAX_TOTAL_TOKENS = 10_000
-DEFAULT_MAX_BEAT_TOKENS = 1_000
-DEFAULT_MAX_PAD_TOKENS  = 1_000
-MAX_TOKENS_BUFFER       = 1_000
+DEFAULT_MAX_TOTAL_TOKENS = 2000
+DEFAULT_MAX_BEAT_TOKENS = 400
+DEFAULT_MAX_PAD_TOKENS  = 200
+MAX_TOKENS_BUFFER       = 200
 PROMPT_SHOT_COUNT       = 3
 
 SHOT_EXAMPLES = {
@@ -95,7 +107,7 @@ DEFAULT_MAX_BRANCH = 3
 ATOM_MIN_VALUE     = 0
 ATOM_MAX_VALUE     = 9
 MIN_ARITY          = 2
-DEFAULT_MAX_OPS    = 10
+DEFAULT_MAX_OPS    = 4
 
 # --- API / logging ---
 RETRY_MAX_ATTEMPTS = 5
@@ -106,7 +118,7 @@ LOG_BACKUP_COUNT   = 3
 API_KEY = os.environ.get("ANTHROPIC_API_KEY") or "YOUR_API_KEY_HERE"
 
 # Model note: use Haiku for cheap batch testing; switch to Sonnet for prod
-MODEL = "claude-3-haiku-20240307"
+MODEL = "claude-3-7-sonnet-latest"
 
 MAX_TOTAL_TOKENS = DEFAULT_MAX_TOTAL_TOKENS
 SAFETY_MARGIN    = MAX_TOKENS_BUFFER
@@ -114,7 +126,7 @@ MAX_BEAT_TOKENS  = DEFAULT_MAX_BEAT_TOKENS
 MAX_PAD_TOKENS   = DEFAULT_MAX_PAD_TOKENS
 
 # --- Batch mode flags ---
-USE_BATCH_API_FOR_WORLDGEN       = False      # ← flip to True to enable batch
+USE_BATCH_API_FOR_WORLDGEN       = True      # ← flip to True to enable batch
 BATCH_POLLING_INTERVAL_SECONDS   = 15
 BATCH_COMPLETION_TIMEOUT_SECONDS = 1_800      # 30 min
 
@@ -140,10 +152,17 @@ if not logger.handlers:
 
 # ─── Anthropic client / tokenizer ─────────────────────────────────────────────
 try:
-    client  = Anthropic(api_key=API_KEY, timeout=60.0, connect_timeout=15.0)
+    # Newer SDKs accept `connect_timeout`; older ones raise TypeError.
+    try:
+        client = Anthropic(api_key=API_KEY, timeout=60.0, connect_timeout=15.0)
+    except TypeError:
+        # Fallback for older anthropic package versions
+        logger.info("Anthropic SDK does not support `connect_timeout`; using default constructor.")
+        client = Anthropic(api_key=API_KEY, timeout=60.0)
+
     encoder = tiktoken.get_encoding("cl100k_base")
 except Exception as e:
-    logger.error(f"Failed to init Anthropic client / tokenizer: {e}")
+    logger.error(f"Failed to init Anthropic client or tokenizer: {e}")
     client = None
     encoder = None
 
@@ -268,47 +287,214 @@ def generate_world(num_characters: int = 5) -> dict:
     return _parse_world_response(text, num_characters)
 
 # Batch helpers ---------------------------------------------------------------
-def prepare_batch_input_file(reqs: List[Dict[str,Any]]) -> str:
-    with tempfile.NamedTemporaryFile("w", suffix=".jsonl", delete=False) as f:
-        for r in reqs: f.write(json.dumps(r)+"\n")
+
+# --- Batch helpers ---------------------------------------------------------------
+def run_world_generation_batch_job(batch_requests: List[Dict[str, Any]]) -> Optional[Any]:
+    """
+    Create a Message Batch job using whichever interface the installed Anthropic
+    SDK exposes.
+
+    1. **Preferred (newer SDK ≥ 0.50)** – `client.beta.messages.batches.create`
+       accepts the `requests=[…]` list directly.
+    2. **Fallback (older pre‑release SDK)** – `client.beta.batches.upload` +
+       `client.beta.batches.create` that first uploads a JSONL file.
+
+    Returns the created batch object on success, or ``None`` on error.
+    """
+    if client is None:
+        raise RuntimeError("Anthropic client not initialized.")
+
+    # ── 1. Newer SDK path ────────────────────────────────────────────────────
+    if hasattr(client.beta, "messages") and hasattr(client.beta.messages, "batches"):
+        try:
+            logger.info("Creating batch via `client.beta.messages.batches.create` (new SDK).")
+            # Convert legacy entries with "body" → new "params" shape if needed
+            converted: List[Dict[str, Any]] = []
+            for r in batch_requests:
+                if "params" in r:
+                    # Already in new shape
+                    converted.append(r)
+                elif "body" in r:
+                    converted.append({
+                        "custom_id": r.get("custom_id"),
+                        "params": r["body"]          # copy the former body dict
+                    })
+                else:
+                    raise ValueError("Batch request missing required 'params' or 'body'")
+            batch_job = client.beta.messages.batches.create(requests=converted)
+            logger.info(f"Batch created. ID={batch_job.id}  Status={batch_job.processing_status}")
+            return batch_job
+        except Exception as e:
+            logger.error(f"Failed to create batch via new SDK path: {e}")
+
+    # ── 2. Legacy upload + create path (older SDK) ───────────────────────────
+    if hasattr(client.beta, "batches"):
+        try:
+            # Fall back to the previous two‑step “upload then create” flow.
+            logger.info("Falling back to legacy upload‑then‑create batch flow.")
+            # Create a temporary input file
+            tmp_path = prepare_batch_input_file(batch_requests, filename_prefix="worldgen_batch")
+            with open(tmp_path, "rb") as f:
+                uploaded_file = client.beta.batches.upload(file=f)
+            logger.info(f"Input file uploaded. File ID={uploaded_file.id}")
+
+            batch_job = client.beta.batches.create(
+                input_file_id=uploaded_file.id,
+                endpoint="/v1/messages",
+                completion_window="24h",
+            )
+            logger.info(f"Batch created. ID={batch_job.id}  Status={batch_job.status}")
+            return batch_job
+        except Exception as e:
+            logger.error(f"Legacy batch creation flow failed: {e}")
+
+    logger.critical("No compatible batch API found in the installed Anthropic SDK.")
+    return None
+# Helper for legacy batch input file creation (used only by fallback above)
+def prepare_batch_input_file(reqs: List[Dict[str,Any]], filename_prefix: str = "batch") -> str:
+    with tempfile.NamedTemporaryFile("w", suffix=".jsonl", prefix=filename_prefix, delete=False) as f:
+        for r in reqs:
+            f.write(json.dumps(r) + "\n")
     logger.info(f"Batch input file: {f.name}")
     return f.name
 
-def run_world_generation_batch_job(input_file: str) -> Optional[Batch]:
-    with open(input_file, "rb") as f:
-        uploaded = client.beta.batches.upload(file=f)
-    batch = client.beta.batches.create(
-        input_file_id=uploaded.id,
-        endpoint="/v1/messages",
-        completion_window="24h"
-    )
-    return batch
-
 def poll_batch_job(batch_id: str) -> Optional[Batch]:
+    """
+    Poll a batch job (either new or legacy API) until it completes, fails, or
+    times out. Works with both:
+
+    * `client.beta.messages.batches.retrieve(...)`   (newer SDKs)
+    * `client.beta.batches.retrieve(...)`            (older SDKs)
+    """
+    if client is None:
+        raise RuntimeError("Anthropic client not initialized.")
+
+    # Decide which retriever to use once, for efficiency.
+    if hasattr(client.beta, "messages") and hasattr(client.beta.messages, "batches"):
+        _retrieve = client.beta.messages.batches.retrieve  # type: ignore
+    elif hasattr(client.beta, "batches"):
+        _retrieve = client.beta.batches.retrieve           # type: ignore
+    else:
+        logger.critical("No batch retrieve method available in Anthropic SDK.")
+        return None
+
     start = time.time()
-    while time.time()-start < BATCH_COMPLETION_TIMEOUT_SECONDS:
-        bj = client.beta.batches.retrieve(batch_id=batch_id)
-        if bj.status == "completed":
+    while time.time() - start < BATCH_COMPLETION_TIMEOUT_SECONDS:
+        bj = _retrieve(batch_id)  # positional per SDK
+
+        # Use whichever status attribute exists
+        status = getattr(bj, "processing_status", getattr(bj, "status", None))
+
+        logger.info(f"Batch {batch_id} status: {status}")
+        if status in {"completed", "ended"}:
             return bj
-        if bj.status in {"failed","cancelled","expired"}:
-            logger.error(f"Batch {batch_id} ended with status {bj.status}")
+        elif status in {"failed", "cancelled", "expired"}:
+            logger.error(f"Batch {batch_id} finished with status {status}")
             return None
+
         time.sleep(BATCH_POLLING_INTERVAL_SECONDS)
+
     logger.error("Batch job timed out")
     return None
 
-def process_batch_results(bj: Batch, expected: int) -> Dict[str, Dict[str,Any]]:
-    out_id = bj.output_file_id
-    content = client.files.content(file_id=out_id)
-    mapping: Dict[str, Dict[str,Any]] = {}
-    for line in content.strip().splitlines():
-        item = json.loads(line)
-        cid  = item["custom_id"]
-        body = item["response"]["body"]["content"][0]["text"]
-        num_chars = int(cid.split("_")[3])     # sample_{i}_chars_{n}
-        mapping[cid] = _parse_world_response(body, num_chars)
-    if len(mapping)!=expected:
-        logger.warning("Mismatch processed vs expected results")
+def process_batch_results(bj: Batch, expected: int) -> Dict[str, Dict[str, Any]]:
+    """
+    Download or stream batch results and return a mapping from custom_id →
+    parsed world_info (or an error entry). Works with both the new SDK
+    (`client.beta.messages.batches.results`) and the legacy file‑based API.
+    """
+    if client is None:
+        raise RuntimeError("Anthropic client not initialized.")
+
+    use_new = hasattr(client.beta, "messages") and hasattr(client.beta.messages, "batches")
+
+    # ── Collect raw result records ───────────────────────────────────────────
+    records: List[Dict[str, Any]] = []
+    try:
+        if use_new:
+            # New SDK: stream `BetaMessageBatchIndividualResponse` objects
+            for item in client.beta.messages.batches.results(bj.id):  # type: ignore
+                # The object is pydantic; use `model_dump()` if available
+                rec = item.model_dump() if hasattr(item, "model_dump") else item.__dict__
+                records.append(rec)
+        else:
+            # Legacy SDK: download JSONL file and split into dicts
+            output_file_id = getattr(bj, "output_file_id", None)
+            if not output_file_id:
+                logger.error("Legacy batch result file ID missing.")
+                return {}
+            content = client.files.content(file_id=output_file_id)
+            for line in content.strip().splitlines():
+                records.append(json.loads(line))
+    except Exception as e:
+        logger.error(f"Failed to retrieve batch results: {e}")
+        return {}
+
+    # ── Parse each record into world_info or error ───────────────────────────
+    mapping: Dict[str, Dict[str, Any]] = {}
+    for rec in records:
+        cid = rec.get("custom_id")
+        if not cid:
+            logger.warning("Skipping batch record without custom_id")
+            continue
+
+        # Handle explicit error case
+        if "error" in rec:
+            mapping[cid] = {"error": rec["error"]}
+            continue
+
+        # --- Extract assistant message text for both schemas -----------------
+        message_text: Optional[str] = None
+
+        if "result" in rec:  # New SDK schema
+            res = rec["result"]
+            if res.get("type") == "succeeded":
+                try:
+                    message_text = res["message"]["content"][0]["text"]
+                except Exception as e:
+                    mapping[cid] = {"error": f"Could not read succeeded message text: {e}"}
+                    continue
+            else:
+                mapping[cid] = {"error": f"Batch entry did not succeed (type={res.get('type')})"}
+                continue
+
+        elif "response" in rec:  # Legacy schema
+            response = rec["response"]
+            try:
+                if "body" in response and "content" in response["body"]:
+                    message_text = response["body"]["content"][0]["text"]
+                elif "content" in response:
+                    message_text = response["content"][0]["text"]
+                else:
+                    raise KeyError("content missing")
+            except Exception as e:
+                mapping[cid] = {"error": f"Unable to extract message text: {e}"}
+                continue
+
+        else:
+            mapping[cid] = {"error": "Record lacks 'result' or 'response' field"}
+            continue
+
+        # num_chars was encoded into the custom_id ..._chars_{n}
+        try:
+            num_chars = int(cid.split("_")[3])
+        except Exception:
+            mapping[cid] = {"error": "Could not parse num_chars from custom_id"}
+            continue
+
+        # Parse the assistant‑returned JSON world description
+        try:
+            world_info = _parse_world_response(message_text.strip(), num_chars)
+            mapping[cid] = world_info
+        except Exception as e:
+            mapping[cid] = {
+                "error": f"World JSON parse error: {e}",
+                "raw_text": message_text
+            }
+
+    if len(mapping) != expected:
+        logger.warning("Processed result count does not match expected.")
+
     return mapping
 
 # ─── Narrative generation (unchanged except for max_pad_paragraphs fix) ───────
@@ -461,28 +647,38 @@ def main(num_samples:int=NUM_SAMPLES_TO_GENERATE, output_file:str=OUTPUT_FILENAM
                     "temperature":0.8
                 }
             })
-        tmp = prepare_batch_input_file(requests)
-        batch = run_world_generation_batch_job(tmp)
+        batch = run_world_generation_batch_job(requests)
         completed = poll_batch_job(batch.id) if batch else None
         worlds = process_batch_results(completed, len(pre)) if completed else {}
         with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as ex:
-            futs=[]
+            futs=[] # Initialize list to hold future objects
+            # --- First Loop: Submit tasks ---
             for i,ast,gt,ast_prefix,nchars in pre:
                 cid = f"sample_{i}_chars_{nchars}"
                 world = worlds.get(cid)
-                if world:
-                    futs.append(ex.submit(generate_narrative_for_sample,i,ast,gt,ast_prefix,world))
-                else:
-                    logger.error(f"No world for sample {i+1}")
-            for f in concurrent.futures.as_completed(futs):
-                r = f.result()
-                if r: results.append(r)
-        try:
-            os.remove(tmp)
-        except OSError:
-            pass
+                # Check if world exists AND does not contain an error key
+                if world and "error" not in world:
+                    # Only submit if world generation was successful
+                    futs.append(ex.submit(generate_narrative_for_sample, i, ast, gt, ast_prefix, world))
+                elif world and "error" in world:
+                     # Log error if world gen failed for this sample
+                     logger.error(f"World generation failed for sample {i+1}: {world['error']}")
+                else: # world is None
+                    # Log error if no result was found in the batch output
+                    logger.error(f"No world result found for sample {i+1} (custom_id: {cid})")
 
-    # write output
+            # --- Second Loop: Process results as they complete ---
+            # This loop MUST be outside the first loop (dedented)
+            for f in concurrent.futures.as_completed(futs):
+                try:
+                    r = f.result() # Get the result (or exception) from the future
+                    if r:
+                        results.append(r)
+                except Exception as exc:
+                    # Log any exception raised by generate_narrative_for_sample
+                    logger.error(f"Error processing narrative result: {exc}")
+
+    # --- Write output (already outside the 'with' block) ---
     with open(output_file,"a",encoding="utf-8") as fh:
         for rec in results:
             fh.write(json.dumps(rec,ensure_ascii=False)+"\n")

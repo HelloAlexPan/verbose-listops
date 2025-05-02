@@ -77,7 +77,7 @@ Here are suggested configurations for Easy, Medium, and Hard levels, keeping the
     ```
 *   **Rationale:** Increased context length, more operations requiring deeper reasoning, slightly more complex operations, more verbose beats and padding introduce more significant distractions. Reduced few-shot examples require better generalization.
 
-**Level 3: Hard (Approaching the Stated SOTA Limit)**
+**Level 3: Hard**
 
 *   **Goal:** Test complex, hierarchical reasoning in a very long context with significant, contextually relevant distractions and minimal guidance.
 *   **Tested Abilities Focus:** Long-context processing (advanced), Hierarchical Computation, Distraction Resistance (advanced), Implicit Instruction Following.

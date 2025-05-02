@@ -50,7 +50,7 @@ BASE_BEAT_TEMPLATE = Template(
 
 # --- Batch Generation & Output ---
 NUM_SAMPLES_TO_GENERATE = 2 # How many samples to generate in one run
-OUTPUT_FILENAME = "verbose_listops_dataset_ultra_strict_v4.jsonl" # Output file for the dataset
+OUTPUT_FILENAME = "gpt4.5-verbose_listops_dataset_ultra_strict_v4.jsonl" # Output file for the dataset
 DEFAULT_MAX_WORKERS = 8  # Default number of parallel threads for batch generation
 
 # --- Base configurations ---
@@ -547,12 +547,13 @@ def generate_owner_name_with_llm(
 
 
 
-# --- PHASE 2: generate_narrative (explicit retry loop, two-step validation, NO in-prompt examples) ---
+
+
+# --- Narrative Generation with REVISED-REVISED Strict Checks ---
 def generate_narrative(ast: Node, world: dict) -> str | None:
     """
-    Generate a narrative for a ListOps AST, ensuring only original atomic operands are mentioned,
-    with strict validation and world/owner narrative integration. Uses explicit retry loop with two-phase validation.
-    Does NOT include in-prompt few-shot examples.
+    Phase 1 + In-Prompt Examples (Corrected): Generate a narrative for a ListOps AST, ensuring only original atomic operands are mentioned,
+    with strict validation and world/owner narrative integration. Adds examples to the prompt.
     """
     # --- Initial validation ---
     if not isinstance(ast, Node):
@@ -567,6 +568,11 @@ def generate_narrative(ast: Node, world: dict) -> str | None:
         raise RuntimeError("Tokenizer not initialized.")
     if p_inflect is None:
         raise RuntimeError("Inflect engine not initialized.")
+
+    # --- In-prompt few-shot examples ---
+    prompt_examples = ""
+    for i in range(1, config.PROMPT_SHOT_COUNT + 1):
+        prompt_examples += SHOT_EXAMPLES.get(i, "")
 
     scenes = []
     tokens_used = 0
@@ -692,14 +698,17 @@ def generate_narrative(ast: Node, world: dict) -> str | None:
         is_final_beat = is_final
         actual_task_body = final_task_body if is_final_beat else current_task_body
 
-        beat_prompt = BASE_BEAT_TEMPLATE.substitute(
-            beat_mode=beat_mode,
-            characters=json.dumps(world["characters"]),
-            setting=world["setting"],
-            snippet=last_scene_text[-150:],
-            task_header=task_header,
-            task_body=actual_task_body,
-            ultra_strict_instruction=ultra_strict_instruction
+        beat_prompt = (
+            prompt_examples +
+            BASE_BEAT_TEMPLATE.substitute(
+                beat_mode=beat_mode,
+                characters=json.dumps(world["characters"]),
+                setting=world["setting"],
+                snippet=last_scene_text[-150:],
+                task_header=task_header,
+                task_body=actual_task_body,
+                ultra_strict_instruction=ultra_strict_instruction
+            )
         )
         prompt_log_header = (
             f"=== FINAL Operator Beat Prompt {idx}/{total_ops} (Op: {node.op}) ==="
@@ -726,13 +735,13 @@ def generate_narrative(ast: Node, world: dict) -> str | None:
                     max_tokens=MAX_BEAT_TOKENS,
                     temperature=0.7,
                 )
-                candidate = resp.choices[0].message.content.strip()
+                candidate_text = resp.choices[0].message.content.strip()
                 # Refusal detection
-                if not candidate or candidate.lower().startswith(("i cannot", "i'm sorry", "i am unable")):
+                if not candidate_text or candidate_text.lower().startswith(("i cannot", "i'm sorry", "i am unable")):
                     logger.warning(f"API refusal on beat attempt {attempt}.")
                     continue
                 # Step 1: Forbidden number check
-                if not validate_forbidden_numbers(candidate):
+                if not validate_forbidden_numbers(candidate_text):
                     logger.warning(f"Beat {idx} attempt {attempt}: Forbidden numbers found.")
                     continue
                 # Step 2: Operand presence check
@@ -740,12 +749,12 @@ def generate_narrative(ast: Node, world: dict) -> str | None:
                 if not atoms_from_children:
                     logger.warning(f"Beat {idx} attempt {attempt}: No operands to check presence for.")
                     continue
-                found_operand = any(check_operand_presence(candidate, operand_val) for operand_val in atoms_from_children)
+                found_operand = any(check_operand_presence(candidate_text, operand_val) for operand_val in atoms_from_children)
                 if not found_operand:
                     logger.warning(f"Beat {idx} attempt {attempt}: No required operand present.")
                     continue
                 # Passed both validations
-                beat_text = candidate
+                beat_text = candidate_text
                 break
             except Exception as e:
                 logger.warning(f"Error on beat {idx} attempt {attempt}: {e}")

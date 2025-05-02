@@ -47,7 +47,7 @@ DEFAULT_MAX_WORKERS = 8  # Default number of parallel threads for batch generati
 # --- Base configurations ---
 # Output Configuration
 LOG_DIR = os.path.expanduser("~/verbose_listops_logs")
-DEFAULT_MAX_TOTAL_TOKENS = 10000 # Overall token cap for narrative generation
+DEFAULT_MAX_TOTAL_TOKENS = 20000 # Overall token cap for narrative generation
 DEFAULT_MAX_BEAT_TOKENS = 1000 # Maximum tokens used for each story 'beat' (listops paragraph)
 DEFAULT_MAX_PAD_TOKENS = 1000 # Maximum tokens used for each story 'padding' section
 MAX_TOKENS_BUFFER = 1000 # Safety buffer to prevent exceeding token limits
@@ -93,9 +93,9 @@ SHOT_EXAMPLES = {
 }
 
 # --- AST Random ListOps problem gen params ---
-DEFAULT_MAX_OPS = 10 # Max operations (e.g. max, min ,etc.) in a problem
-MIN_ARITY = 2 # Min numbers in an operation
-DEFAULT_MAX_BRANCH = 3 # Max operations / numbers in an operation
+DEFAULT_MAX_OPS = 20 # Max operations (e.g. max, min ,etc.) in a problem
+MIN_ARITY = 5 # Min numbers in an operation
+DEFAULT_MAX_BRANCH = 8 # Max operations / numbers in an operation
 ATOM_MIN_VALUE = 1 # Minimum number
 ATOM_MAX_VALUE = 100 # Maximum number
 

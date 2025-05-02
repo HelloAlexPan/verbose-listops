@@ -19,8 +19,19 @@ import inflect
 
 
 import tiktoken
-import anthropic
-from anthropic import Anthropic
+import openai
+
+# --- OpenAI API Key and Tokenizer Initialization ---
+OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")
+if not OPENAI_API_KEY:
+    print("Warning: OPENAI_API_KEY environment variable not set. Using placeholder.")
+    OPENAI_API_KEY = "YOUR_API_KEY_HERE"
+
+try:
+    encoder = tiktoken.get_encoding("cl100k_base")
+except Exception as e:
+    print(f"Failed to initialize tokenizer: {e}")
+    encoder = None
 from string import Template
 
 # --- Prompt Templates ---
@@ -87,16 +98,10 @@ def log_prompt(header: str, prompt: str, path: str = os.path.join(LOG_DIR, "verb
 
 
 # --- API retry + logging config ---
- 
+
 LOG_MAX_BYTES = 5 * 1024 * 1024 # Maximum log file size (5MB)
 LOG_BACKUP_COUNT = 3 # Number of backup log files to keep
 
-# --- Anthropic Client Factory ---
-def init_anthropic(api_key: str):
-    """Initialize and return Anthropic client and tokenizer."""
-    client = Anthropic(api_key=api_key)
-    encoder = tiktoken.get_encoding("cl100k_base")
-    return client, encoder
 
 # --- Dataclasses ---
 @dataclass
@@ -118,12 +123,8 @@ class Config:
     USE_LLM_NAMING: bool = True  # If True, use LLM for owner names; else use thematic fallback
 config = Config()
 
-API_KEY = os.environ.get("ANTHROPIC_API_KEY")
-if not API_KEY:
-    print("Warning: ANTHROPIC_API_KEY environment variable not set. Using placeholder.")
-    API_KEY = "YOUR_API_KEY_HERE" # Placeholder
 
-MODEL = "claude-3-7-sonnet-latest" # Use Haiku for potentially faster/cheaper generation during testing strict rules
+MODEL = "gpt-4.5-preview"
 MAX_TOTAL_TOKENS = config.DEFAULT_MAX_TOTAL_TOKENS
 SAFETY_MARGIN = config.MAX_TOKENS_BUFFER
 MAX_BEAT_TOKENS = config.DEFAULT_MAX_BEAT_TOKENS
@@ -153,13 +154,6 @@ if not logger.handlers:
     logger.addHandler(console_handler)
 
 
-# --- Anthropic Client and Tokenizer ---
-try:
-    client, encoder = init_anthropic(API_KEY)
-except Exception as e:
-    logger.error(f"Failed to initialize Anthropic client or tokenizer: {e}")
-    client = None
-    encoder = None
 
 # --- Inflect Engine ---
 try:
@@ -170,22 +164,14 @@ except Exception as e:
 
 
 def retry_api_call(func: Callable):
-    """Decorator to retry Anthropic API calls on failure with exponential backoff."""
+    """Decorator to retry OpenAI API calls on failure with exponential backoff."""
     def wrapper(*args, **kwargs):
-        if client is None:
-            raise RuntimeError("Anthropic client not initialized.")
         delay = config.RETRY_INITIAL_DELAY
         for attempt in range(1, config.RETRY_MAX_ATTEMPTS + 1):
             try:
                 return func(*args, **kwargs)
-            except anthropic.APIConnectionError as e:
-                logger.warning(f"API connection error attempt {attempt}/{config.RETRY_MAX_ATTEMPTS}: {e}")
-            except anthropic.RateLimitError as e:
-                logger.warning(f"API rate limit error attempt {attempt}/{config.RETRY_MAX_ATTEMPTS}: {e}")
-            except anthropic.APIStatusError as e:
-                logger.warning(f"API status error attempt {attempt}/{config.RETRY_MAX_ATTEMPTS}: {e.status_code} - {e.response}")
             except Exception as e:
-                logger.warning(f"API call failed attempt {attempt}/{config.RETRY_MAX_ATTEMPTS}: {e}")
+                logger.warning(f"API call error attempt {attempt}/{config.RETRY_MAX_ATTEMPTS}: {e}")
             if attempt == config.RETRY_MAX_ATTEMPTS:
                 logger.error("Max retry attempts reached.")
                 raise
@@ -207,14 +193,16 @@ def generate_with_retry(system_prompt: str, user_prompt: str, max_tokens: int, v
     """
     for attempt in range(1, retries + 1):
         try:
-            resp = _client_create(
+            resp = _chat_completion_call(
                 model=MODEL,
-                system=system_prompt,
-                messages=[{"role": "user", "content": user_prompt}],
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt}
+                ],
                 max_tokens=max_tokens,
                 temperature=0.7,
             )
-            candidate = resp.content[0].text.strip()
+            candidate = resp.choices[0].message.content.strip()
             if not candidate or candidate.lower().startswith(("i cannot", "i'm sorry", "i am unable")):
                 logger.warning(f"API refusal on generate_with_retry attempt {attempt}.")
             elif validate_fn(candidate):
@@ -310,7 +298,8 @@ def postorder(node: Node):
 
 
 @retry_api_call
-def _client_create(**kwargs): return client.messages.create(**kwargs)
+def _chat_completion_call(**kwargs):
+    return openai.chat.completions.create(**kwargs)
 
 
 # --- JSON Cleaning Helper ---
@@ -345,8 +334,13 @@ def generate_world(num_characters: int = 5, num_concepts: int = 7) -> dict:
     )
 
     try:
-        resp = _client_create(model=MODEL, messages=[{"role": "user", "content": prompt}], max_tokens=2000, temperature=0.8)
-        text = resp.content[0].text.strip()
+        resp = _chat_completion_call(
+            model=MODEL,
+            messages=[{"role": "user", "content": prompt}],
+            max_tokens=2000,
+            temperature=0.8,
+        )
+        text = resp.choices[0].message.content.strip()
         cleaned = clean_and_parse_json_block(text)
         world = cleaned
 
@@ -451,9 +445,6 @@ def generate_owner_name_with_llm(
     Returns the generated name or None if generation fails after retries.
     --- REMOVED stop_sequences from API call, added post-processing ---
     """
-    if client is None:
-        logger.error("Cannot generate LLM name: Anthropic client not initialized.")
-        return None
 
     op_label = OP_LABELS.get(op_node.op, op_node.op)
     genre = world_info.get("genre", "unknown genre")
@@ -507,16 +498,16 @@ def generate_owner_name_with_llm(
     logger.debug(f"Prompt length: {len(prompt_content_for_log)}")
 
     try:
-        resp = _client_create(
+        resp = _chat_completion_call(
             model=MODEL,
-            system=system_prompt,
             messages=[
+                {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_prompt}
             ],
             max_tokens=max_name_tokens,
             temperature=0.75,
         )
-        raw_candidate = resp.content[0].text
+        raw_candidate = resp.choices[0].message.content
 
         # --- Post-processing to simulate stop sequences ---
         stop_chars = ['\n', '.', ',']
@@ -542,22 +533,10 @@ def generate_owner_name_with_llm(
         logger.debug(f"LLM generated owner name: '{candidate}' (processed from raw: '{raw_candidate}')")
         return candidate
 
-    except anthropic.APIStatusError as e:
-        error_body = "N/A"
-        try:
-            error_body = e.response.json()
-        except:
-            try:
-                error_body = e.response.text
-            except:
-                pass
-        logger.error(
-            f"LLM Naming API Status Error for OpNode {op_node.op}: {e.status_code} - {e.response}. "
-            f"Error Body: {error_body}. Prompt that failed:\n{prompt_content_for_log}"
-        )
-        raise
     except Exception as e:
-        logger.error(f"LLM Naming failed unexpectedly for OpNode {op_node.op}: {e}. Prompt that failed:\n{prompt_content_for_log}")
+        logger.error(
+            f"LLM Naming API Error: {e}. Prompt that failed:\n{prompt_content_for_log}"
+        )
         raise
 
 # --- END PHASE 4b Function ---
@@ -738,14 +717,16 @@ def generate_narrative(ast: Node, world: dict) -> str | None:
         beat_text = None
         for attempt in range(1, config.MAX_BEAT_RETRIES + 1):
             try:
-                resp = _client_create(
+                resp = _chat_completion_call(
                     model=MODEL,
-                    system=system_prompt,
-                    messages=[{"role": "user", "content": beat_prompt}],
+                    messages=[
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": beat_prompt}
+                    ],
                     max_tokens=MAX_BEAT_TOKENS,
                     temperature=0.7,
                 )
-                candidate = resp.content[0].text.strip()
+                candidate = resp.choices[0].message.content.strip()
                 # Refusal detection
                 if not candidate or candidate.lower().startswith(("i cannot", "i'm sorry", "i am unable")):
                     logger.warning(f"API refusal on beat attempt {attempt}.")
@@ -803,14 +784,16 @@ def generate_narrative(ast: Node, world: dict) -> str | None:
             pad_result = None
             for pad_attempt in range(1, config.MAX_PAD_RETRIES + 1):
                 try:
-                    resp_pad = _client_create(
+                    resp_pad = _chat_completion_call(
                         model=MODEL,
-                        system="You are a storyteller writing transitional text. FOLLOW THE USER'S NUMBER RULES EXACTLY. ZERO NUMBERS ALLOWED.",
-                        messages=[{"role": "user", "content": padding_prompt}],
+                        messages=[
+                            {"role": "system", "content": "You are a storyteller writing transitional text. FOLLOW THE USER'S NUMBER RULES EXACTLY. ZERO NUMBERS ALLOWED."},
+                            {"role": "user", "content": padding_prompt}
+                        ],
                         max_tokens=MAX_PAD_TOKENS,
                         temperature=0.7,
                     )
-                    candidate_pad = resp_pad.content[0].text.strip()
+                    candidate_pad = resp_pad.choices[0].message.content.strip()
                     if not candidate_pad or candidate_pad.lower().startswith(("i cannot", "i'm sorry", "i am unable")):
                         logger.warning(f"Padding refusal on attempt {pad_attempt}.")
                         continue
@@ -881,8 +864,8 @@ def generate_single_sample(sample_index: int) -> dict | None:
     logger.info(f"--- Starting generation for sample {sample_index + 1} ---")
     sample_start_time = time.time()
     try:
-        if client is None or encoder is None or p_inflect is None:
-             logger.error(f"[Sample {sample_index + 1}] Missing critical component. Aborting.")
+        if encoder is None or p_inflect is None:
+             logger.error(f"[Sample {sample_index + 1}] Missing tokenizer or inflect engine. Aborting.")
              return None
 
         logger.info(f"[Sample {sample_index + 1}] Building random AST...")

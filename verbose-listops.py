@@ -117,6 +117,8 @@ class Config:
     MAX_PAD_RETRIES: int = 3
     ATOM_MIN_VALUE: int = 1
     ATOM_MAX_VALUE: int = 100
+    USE_OWNERSHIP_NARRATIVE: bool = True  # Master switch for ownership feature
+    USE_LLM_NAMING: bool = True  # If True, use LLM for owner names; else use thematic fallback
 config = Config()
 
 API_KEY = os.environ.get("ANTHROPIC_API_KEY")
@@ -124,7 +126,7 @@ if not API_KEY:
     print("Warning: ANTHROPIC_API_KEY environment variable not set. Using placeholder.")
     API_KEY = "YOUR_API_KEY_HERE" # Placeholder
 
-MODEL = "claude-3-haiku-20240307" # Use Haiku for potentially faster/cheaper generation during testing strict rules
+MODEL = "claude-3-7-sonnet-latest" # Use Haiku for potentially faster/cheaper generation during testing strict rules
 MAX_TOTAL_TOKENS = config.DEFAULT_MAX_TOTAL_TOKENS
 SAFETY_MARGIN = config.MAX_TOKENS_BUFFER
 MAX_BEAT_TOKENS = config.DEFAULT_MAX_BEAT_TOKENS
@@ -317,31 +319,65 @@ def _client_create(**kwargs): return client.messages.create(**kwargs)
 # --- JSON Cleaning Helper ---
 def clean_and_parse_json_block(text: str):
     """Strip Markdown code fences and parse JSON."""
-    text = re.sub(r"^```(?:json)?", "", text).strip()
-    if text.endswith("```"):
-        text = text[: -3].strip()
-    return json.loads(text)
+    # Handle potential markdown fences and leading/trailing whitespace
+    text = re.sub(r"^\s*```(?:json)?\s*", "", text, flags=re.IGNORECASE | re.MULTILINE)
+    text = re.sub(r"\s*```\s*$", "", text, flags=re.IGNORECASE | re.MULTILINE)
+    text = text.strip()
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError as e:
+        logger.error(f"JSON Decode Error: {e} in text:\n---\n{text}\n---")
+        raise  # Re-raise after logging
 
-def generate_world(num_characters: int = 5) -> dict:
-    """Generates fictional world metadata."""
+def generate_world(num_characters: int = 5, num_concepts: int = 7) -> dict:
+    """Generates fictional world metadata including entity concepts."""
     if not isinstance(num_characters, int) or num_characters < 1: raise ValueError("num_characters must be positive int")
+    if not isinstance(num_concepts, int) or num_concepts < 1: raise ValueError("num_concepts must be positive int")
+
     prompt = (
         "You are a creative world-builder.\n"
         f"Generate {num_characters} distinct characters (name, role, quirk). Define a genre and setting.\n"
-        "Output *only* a valid JSON object: {\"characters\": [{\"name\": ..., \"role\": ..., \"quirk\": ...}, ...], \"genre\": ..., \"setting\": ...}\n"
+        f"Also, provide a list of {num_concepts} thematic concepts for groups, collections, or abstract entities relevant to this world (e.g., 'spell scrolls', 'cargo manifests', 'secret dossiers', 'market fluctuations', 'guild ranks'). Keep concepts concise (1-3 words).\n"
+        "Output *only* a valid JSON object with NO extra text before or after the JSON structure:\n"
+        "{\n"
+        "  \"characters\": [{\"name\": \"string\", \"role\": \"string\", \"quirk\": \"string\"}, ...],\n"
+        "  \"genre\": \"string\",\n"
+        "  \"setting\": \"string\",\n"
+        "  \"entity_concepts\": [\"string\", \"string\", ...]\n"
+        "}"
     )
+
     try:
         resp = _client_create(model=MODEL, messages=[{"role": "user", "content": prompt}], max_tokens=2000, temperature=0.8)
         text = resp.content[0].text.strip()
-        try:
-            cleaned = clean_and_parse_json_block(text)
-            world = cleaned
-            if not all(k in world for k in ["characters", "genre", "setting"]) or \
-               not isinstance(world["characters"], list) or len(world["characters"]) != num_characters:
-                 logger.error(f"Generated world JSON structure error: {text}"); raise RuntimeError("World JSON validation failed.")
-            return world
-        except json.JSONDecodeError as e: logger.error(f"Failed to parse world JSON: {text}. Error: {e}"); raise RuntimeError("JSON parse failed") from e
-    except Exception as e: logger.error(f"World gen API error: {e}"); raise RuntimeError("World gen failed") from e
+        cleaned = clean_and_parse_json_block(text)
+        world = cleaned
+
+        required_keys = ["characters", "genre", "setting", "entity_concepts"]
+        if not all(k in world for k in required_keys):
+            missing_keys = [k for k in required_keys if k not in world]
+            logger.error(f"Generated world JSON missing keys: {missing_keys}. Raw text: {text}")
+            raise RuntimeError(f"World JSON validation failed: Missing keys {missing_keys}")
+
+        if not isinstance(world["characters"], list) or len(world["characters"]) != num_characters:
+            logger.error(f"Generated world JSON 'characters' structure error or wrong count. Expected {num_characters}. Raw text: {text}")
+            raise RuntimeError("World JSON validation failed: Invalid 'characters' structure.")
+
+        if not isinstance(world["entity_concepts"], list) or not world["entity_concepts"]:
+            logger.error(f"Generated world JSON 'entity_concepts' structure error or empty list. Raw text: {text}")
+            raise RuntimeError("World JSON validation failed: Invalid 'entity_concepts' structure.")
+
+        logger.debug(f"Generated entity concepts: {world['entity_concepts']}")
+        return world
+
+    except json.JSONDecodeError:
+        raise RuntimeError("JSON parse failed")
+    except Exception as e:
+        logger.error(f"Error processing generated world JSON: {e}. Raw text: {text}")
+        raise RuntimeError("World JSON processing failed.") from e
+    except Exception as e:
+        logger.error(f"World gen API call or processing error: {e}")
+        raise RuntimeError("World gen failed") from e
 
 
 DIGIT_REGEX = re.compile(r'\b-?\d+\b')
@@ -404,13 +440,140 @@ def get_atoms_in_subtree(node: Node) -> Set[int]:
         atoms.update(get_atoms_in_subtree(child))
     return atoms
 
+# --- ADDED FOR PHASE 4b: LLM Naming Function ---
+@retry_api_call
+def generate_owner_name_with_llm(
+    world_info: dict,
+    op_node: OpNode,
+    child_owner_names: list[str],
+    max_name_tokens: int = 30,
+) -> str | None:
+    """
+    Uses an LLM call to generate a creative, thematic name for an OpNode's owner entity.
+    Relies on @retry_api_call for retries.
+    Returns the generated name or None if generation fails after retries.
+    --- REMOVED stop_sequences from API call, added post-processing ---
+    """
+    if client is None:
+        logger.error("Cannot generate LLM name: Anthropic client not initialized.")
+        return None
+
+    op_label = OP_LABELS.get(op_node.op, op_node.op)
+    genre = world_info.get("genre", "unknown genre")
+    setting = world_info.get("setting", "unknown setting")
+
+    # --- Restore World Info - Keep it Concise ---
+    characters_sample = world_info.get("characters", [])[:3]
+    characters_str = json.dumps([{"name": c.get("name", "N/A")} for c in characters_sample])
+    concepts_sample = world_info.get("entity_concepts", [])[:5]
+    concepts_str = json.dumps(concepts_sample)
+    # --- End World Info ---
+
+    # --- Restore Child Context - Keep it Concise ---
+    children_context = ""
+    if child_owner_names:
+        display_child_names = child_owner_names[:3]
+        children_context = (
+            f"This entity is formed from components related to: "
+            f"{', '.join(display_child_names)}"
+            f"{' and others...' if len(child_owner_names) > 3 else '.'}"
+        )
+    # --- End Child Context ---
+
+    # --- Restore Detailed Prompt ---
+    system_prompt = (
+        "You are a creative assistant specializing in generating short, evocative, thematic names "
+        "for concepts within a fictional narrative. Be concise. Output only the name."
+    )
+    user_prompt = (
+        f"Fictional World Context:\n"
+        f"- Genre: {genre}\n"
+        f"- Setting: {setting}\n"
+        f"- Sample Characters: {characters_str}\n"
+        f"- Sample Thematic Concepts: {concepts_str}\n\n"
+        f"Task: Generate a short (2-5 words), creative, and thematic name for an entity, "
+        f"collection, process, or concept within this world.\n\n"
+        f"Details about the entity to name:\n"
+        f"- It represents the outcome of an operation conceptually similar to finding the '{op_label}'.\n"
+        f"- {children_context}\n\n"
+        f"Instructions:\n"
+        f"- The name should fit the {genre} genre and {setting} setting.\n"
+        f"- Make it sound like a specific thing/idea in the story (e.g., 'The Oracle's Final Whisper', 'Sector Gamma Scan Results', 'Kaelen's Calculated Risk').\n"
+        f"- AVOID using the exact operation word (like '{op_node.op}' or '{op_label}').\n"
+        f"- Output only the generated name itself, with no quotes, labels, explanations, or introductory phrases like 'Here is a name:'."
+    )
+    # --- End Detailed Prompt ---
+
+    prompt_log_header = f"--- LLM Owner Naming Prompt (Op: {op_node.op}, Attempting Call - No Stop Sequences) ---"
+    prompt_content_for_log = f"System: {system_prompt}\nUser: {user_prompt}"
+    logger.debug(f"Attempting LLM naming call for {op_node.op} with prompt:\n{prompt_content_for_log}")
+    logger.debug(f"Prompt length: {len(prompt_content_for_log)}")
+
+    try:
+        resp = _client_create(
+            model=MODEL,
+            system=system_prompt,
+            messages=[
+                {"role": "user", "content": user_prompt}
+            ],
+            max_tokens=max_name_tokens,
+            temperature=0.75,
+        )
+        raw_candidate = resp.content[0].text
+
+        # --- Post-processing to simulate stop sequences ---
+        stop_chars = ['\n', '.', ',']
+        first_stop_index = len(raw_candidate)
+        for char in stop_chars:
+            idx = raw_candidate.find(char)
+            if idx != -1 and idx < first_stop_index:
+                first_stop_index = idx
+        processed_candidate = raw_candidate[:first_stop_index]
+        # --- End Post-processing ---
+
+        candidate = processed_candidate.strip()
+        candidate = re.sub(r'^(?:Here is a name:|Name:|Entity Name:|\"|\')', '', candidate, flags=re.IGNORECASE).strip()
+        candidate = re.sub(r'(?:\"|\')$', '', candidate).strip()
+
+        if not candidate or candidate.lower().startswith(("i cannot", "i'm sorry", "i am unable")):
+            logger.warning(f"LLM Naming: Invalid/refusal response content (raw: '{raw_candidate}')")
+            return None
+        if len(candidate) > max_name_tokens * 6:
+            logger.warning(f"LLM Naming: Name potentially too long after processing: '{candidate}' (raw: '{raw_candidate}')")
+            return None
+
+        logger.debug(f"LLM generated owner name: '{candidate}' (processed from raw: '{raw_candidate}')")
+        return candidate
+
+    except anthropic.APIStatusError as e:
+        error_body = "N/A"
+        try:
+            error_body = e.response.json()
+        except:
+            try:
+                error_body = e.response.text
+            except:
+                pass
+        logger.error(
+            f"LLM Naming API Status Error for OpNode {op_node.op}: {e.status_code} - {e.response}. "
+            f"Error Body: {error_body}. Prompt that failed:\n{prompt_content_for_log}"
+        )
+        raise
+    except Exception as e:
+        logger.error(f"LLM Naming failed unexpectedly for OpNode {op_node.op}: {e}. Prompt that failed:\n{prompt_content_for_log}")
+        raise
+
+# --- END PHASE 4b Function ---
+
 # --- Narrative Generation with REVISED-REVISED Strict Checks ---
 def generate_narrative(ast: Node, world: dict) -> str | None:
     """Generate narrative for each AST operator with strict number validation."""
     # --- Initial checks ---
     if not isinstance(ast, Node): raise ValueError("ast must be an instance of Node")
     if not isinstance(world, dict): raise ValueError("world must be a dict")
-    if not all(k in world for k in ("characters", "genre", "setting")): raise ValueError("world missing required key")
+    if not all(k in world for k in ("characters", "genre", "setting", "entity_concepts")):
+        logger.error(f"World info dictionary is missing required keys (needs 'entity_concepts'): {world.keys()}")
+        raise ValueError("world missing required key(s) including 'entity_concepts'")
     if encoder is None: raise RuntimeError("Tokenizer not initialized.")
     if p_inflect is None: raise RuntimeError("Inflect engine not initialized.")
 
@@ -434,6 +597,54 @@ def generate_narrative(ast: Node, world: dict) -> str | None:
         operator_nodes = [OpNode("SUM", [ast])]
         # disable padding for single-atom case
         max_pad_paragraphs = 0
+
+    # --- <<< MODIFIED PHASE 4b: Conditional LLM Naming / Thematic Owner Mapping >>> ---
+    owner_map = {}
+    if config.USE_OWNERSHIP_NARRATIVE:
+        if operator_nodes:
+            use_llm = config.USE_LLM_NAMING
+            mode = "LLM-based creative" if use_llm else "thematic"
+            logger.info(f"Assigning {mode} owner concepts to operator nodes (Phase 4b/4a)...")
+            concepts = world.get("entity_concepts", [])
+            characters = world.get("characters", [])
+            for i, op_node in enumerate(operator_nodes):
+                if not isinstance(op_node, OpNode):
+                    logger.warning(f"Skipping non-OpNode: {type(op_node)} at index {i}")
+                    continue
+                node_id = id(op_node)
+                owner_name = None
+                if use_llm:
+                    child_owner_names = []
+                    for child_node in op_node.children:
+                        child_id = id(child_node)
+                        if isinstance(child_node, OpNode) and child_id in owner_map:
+                            child_owner_names.append(owner_map[child_id])
+                    try:
+                        owner_name = generate_owner_name_with_llm(world, op_node, child_owner_names)
+                    except Exception as e:
+                        logger.error(f"LLM Naming failed for OpNode {op_node.op}: {e}")
+                        owner_name = None
+                    if owner_name:
+                        logger.debug(f"LLM assigned owner '{owner_name}' to node {op_node.op}")
+                    else:
+                        logger.warning(f"LLM naming failed for {op_node.op}, using fallback.")
+                if owner_name is None:
+                    if concepts:
+                        chosen_concept = random.choice(concepts)
+                        if characters:
+                            char_name = random.choice(characters).get("name", "Someone")
+                            possessive = f"{char_name}'" if char_name.endswith("s") else f"{char_name}'s"
+                            owner_name = f"{possessive} {chosen_concept}"
+                        else:
+                            owner_name = f"the {chosen_concept} ({op_node.op} #{i+1})"
+                    else:
+                        owner_name = f"the_{op_node.op}_entity_{i+1}"
+                    logger.debug(f"Assigned owner '{owner_name}' to node {op_node.op} (fallback)")
+                owner_map[node_id] = owner_name
+            logger.info(f"Owner concept assignment complete. Map size: {len(owner_map)}")
+        else:
+            logger.warning("No operator nodes to assign owners to.")
+    # --- <<< END PHASE 4b MODIFICATION >>> ---
 
     # --- Process Operator Beats ---
     total_ops = len(operator_nodes)
@@ -464,9 +675,8 @@ def generate_narrative(ast: Node, world: dict) -> str | None:
             f"{' (FINAL BEAT)' if is_final_beat else ''}"
         )
 
-        # --- ULTRA-STRICT prompt construction ---
+        # --- <<< START PHASE 2 MODIFICATION: Conditional Prompt Construction >>> ---
         operation_concept = OP_LABELS.get(node.op, node.op)
-        # --- ULTRA-STRICT NUMBER RULE ---
         ultra_strict_instruction = (
             "**ULTRA-STRICT NUMBER RULE:**\n"
             "*   You MUST NOT include ANY numbers (digits or words) in your response UNLESS they are original input numbers that have appeared previously in the story AND are essential for narrative context.\n"
@@ -475,23 +685,56 @@ def generate_narrative(ast: Node, world: dict) -> str | None:
             "*   Focus ONLY on describing the process or consequences narratively."
         )
 
-        if is_final_beat:
-            task_header = "Final Task"
-            task_body = (
-                "Write the concluding scene (1-2 paragraphs). This scene incorporates the *final* logical step, "
-                "related to determining the **$operation_concept** based on elements described previously. "
-                "Focus on the final outcome, consequences, and character reactions resulting from this last step."
+        if config.USE_OWNERSHIP_NARRATIVE:
+            node_id = id(node)
+            owner_name = owner_map.get(node_id, f"the_unnamed_{node.op}_entity")
+            if node_id not in owner_map:
+                logger.warning(f"Node {node.op} (id: {node_id}) not found in owner_map during prompt generation!")
+
+            ownership_instruction = (
+                f"This part of the story revolves around an entity or concept known as '{owner_name}'. "
+                f"Its final state or significance is determined by applying a rule ({operation_concept}) to its constituent parts or related elements (which have been mentioned or established previously). "
+                f"Describe narratively how '{owner_name}' is formed, evaluated, or what consequences arise from its state. "
+                f"Refer to the constituent parts implicitly as belonging to or defining '{owner_name}'. Avoid explicitly stating the operation (like 'taking the max'). Focus on the story."
             )
-            beat_mode = f"{world['genre']}, writing the concluding scene"
+
+            if is_final_beat:
+                task_header = "Final Task (Ownership Narrative)"
+                task_body = (
+                    f"Write the concluding scene (1-2 paragraphs). This scene reveals the final significance or consequence related to '{owner_name}', "
+                    f"whose nature was determined by the **{operation_concept}** rule applied to its components (as described in the narrative flow). "
+                    f"Focus on the ultimate outcome, character reactions, or plot resolution stemming from '{owner_name}'.\n\n"
+                    f"{ownership_instruction}"
+                )
+                beat_mode = f"{world['genre']}, writing the concluding scene about '{owner_name}'"
+            else:
+                task_header = "Current Task (Ownership Narrative)"
+                task_body = (
+                    f"Continue the story for 1-2 paragraphs. This scene focuses on the process or intermediate state involving '{owner_name}'. "
+                    f"Its current relevance or form is shaped by applying the **{operation_concept}** rule to its constituent parts. "
+                    f"Describe character actions, thoughts, or plot developments related to '{owner_name}' at this stage.\n\n"
+                    f"{ownership_instruction}"
+                )
+                beat_mode = f"{world['genre']}, writing a continuous narrative involving '{owner_name}'"
+
         else:
-            task_header = "Current Task"
-            task_body = (
-                "Continue the story for 1-2 paragraphs. This part involves a logical step related to determining "
-                "the **$operation_concept** based on elements or values described previously. "
-                "Focus entirely on the characters' actions, thoughts, and the unfolding plot. "
-                "Describe the *process* or *consequence* of this logical step."
-            )
-            beat_mode = f"{world['genre']}, writing a continuous narrative"
+            if is_final_beat:
+                task_header = "Final Task"
+                task_body = (
+                    "Write the concluding scene (1-2 paragraphs). This scene incorporates the *final* logical step, "
+                    f"related to determining the **{operation_concept}** based on elements described previously. "
+                    "Focus on the final outcome, consequences, and character reactions resulting from this last step."
+                )
+                beat_mode = f"{world['genre']}, writing the concluding scene"
+            else:
+                task_header = "Current Task"
+                task_body = (
+                    "Continue the story for 1-2 paragraphs. This part involves a logical step related to determining "
+                    f"the **{operation_concept}** based on elements or values described previously. "
+                    "Focus entirely on the characters' actions, thoughts, and the unfolding plot. "
+                    "Describe the *process* or *consequence* of this logical step."
+                )
+                beat_mode = f"{world['genre']}, writing a continuous narrative"
 
         beat_prompt = BASE_BEAT_TEMPLATE.substitute(
             beat_mode=beat_mode,
@@ -499,9 +742,11 @@ def generate_narrative(ast: Node, world: dict) -> str | None:
             setting=world["setting"],
             snippet=last_scene_text[-150:],
             task_header=task_header,
-            task_body=task_body.replace("$operation_concept", operation_concept),
+            task_body=task_body,
             ultra_strict_instruction=ultra_strict_instruction
         )
+        # --- <<< END PHASE 2 MODIFICATION >>> ---
+
         if is_final_beat:
             prompt_log_header = f"=== FINAL Operator Beat Prompt {idx}/{total_ops} (Op: {node.op}) ==="
         else:
@@ -654,7 +899,7 @@ def generate_single_sample(sample_index: int) -> dict | None:
         logger.info(f"[Sample {sample_index + 1}] AST evaluation complete. Ground Truth: {ground_truth_answer}")
 
         logger.info(f"[Sample {sample_index + 1}] Generating world metadata...")
-        world_info = generate_world(num_characters=random.randint(3, 6))
+        world_info = generate_world(num_characters=random.randint(3, 6), num_concepts=random.randint(5, 10))
         logger.info(f"[Sample {sample_index + 1}] World metadata generated.")
         logger.debug(f"[Sample {sample_index + 1}] World Info: {world_info}")
 
@@ -683,7 +928,11 @@ def generate_single_sample(sample_index: int) -> dict | None:
                  "prompt_shot_count": config.PROMPT_SHOT_COUNT,
                  "max_beat_retries": config.MAX_BEAT_RETRIES,
                  "max_pad_retries": config.MAX_PAD_RETRIES,
-                 "validation_mode": "ultra_strict_prompts_revised_revised_validation"
+                 "validation_mode": (
+                     "ultra_strict_prompts_llm_ownership_v4b" if (config.USE_OWNERSHIP_NARRATIVE and config.USE_LLM_NAMING)
+                     else "ultra_strict_prompts_thematic_ownership_v4a" if config.USE_OWNERSHIP_NARRATIVE
+                     else "ultra_strict_prompts_revised_revised_validation"
+                 ),
             }
         }
         sample_end_time = time.time()

@@ -2,7 +2,7 @@
 
 ## HIGHLY EXPERIMENTAL — WIP
 
-Basically, this is a very hard, novel ML eval that generated using a very complex agentic system.
+Basically, this is a very hard, novel ML eval wherein the test dataset is generated through a very complex agentic system.
 
 ## Overview
 

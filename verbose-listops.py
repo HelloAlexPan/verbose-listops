@@ -28,12 +28,15 @@ from dataclasses import dataclass, field
 import tiktoken
 import anthropic
 from anthropic import Anthropic
+import concurrent.futures
+import threading
 
 # ─── Configuration Constants ────────────────────────────────────────────────────────────────────────────
 
 # --- Batch Generation & Output ---
-NUM_SAMPLES_TO_GENERATE = 1 # How many samples to generate in one run
+NUM_SAMPLES_TO_GENERATE = 4 # How many samples to generate in one run
 OUTPUT_FILENAME = "verbose_listops_dataset.jsonl" # Output file for the dataset
+DEFAULT_MAX_WORKERS = 8  # Default number of parallel threads for batch generation
 
 # --- Base configurations ---
 # Base configurations are provided for testing purposes to save API costs and increase generation speed.
@@ -87,22 +90,16 @@ SHOT_EXAMPLES = {
 }
 
 # --- AST Random ListOps problem gen params ---
-# SOTA models cannot solve the below config at 10k tokens but can solve the ListOps equivalent:
+# SOTA models cannot solve the above config at 10k tokens but can solve the ListOps equivalent:
 # DEFAULT_MAX_BRANCH = 20
 # ATOM_MIN_VALUE = -100
 # ATOM_MAX_VALUE = 100
 # MIN_ARITY = 10
 
-# DEFAULT_MAX_BRANCH = 3 # Default maximum branching factor for AST nodes
-# ATOM_MIN_VALUE = 0 # Minimum value for leaf nodes (atoms)
-# ATOM_MAX_VALUE = 9 # Maximum value for leaf nodes (atoms)
-# MIN_ARITY = 2 # Minimum number of children for operator nodes
-# DEFAULT_MAX_OPS = 10 # Default number of operations for a single problem
-
-DEFAULT_MAX_BRANCH = 20 # Default maximum branching factor for AST nodes
-ATOM_MIN_VALUE = -100 # Minimum value for leaf nodes (atoms)
-ATOM_MAX_VALUE = 100 # Maximum value for leaf nodes (atoms)
-MIN_ARITY = 10 # Minimum number of children for operator nodes
+DEFAULT_MAX_BRANCH = 3 # Default maximum branching factor for AST nodes
+ATOM_MIN_VALUE = 0 # Minimum value for leaf nodes (atoms)
+ATOM_MAX_VALUE = 9 # Maximum value for leaf nodes (atoms)
+MIN_ARITY = 2 # Minimum number of children for operator nodes
 DEFAULT_MAX_OPS = 10 # Default number of operations for a single problem
 
 
@@ -684,17 +681,88 @@ def ast_to_prefix(node: Node) -> str:
     return "(" + " ".join(parts) + ")"
 
 
-def main(num_samples: int = NUM_SAMPLES_TO_GENERATE, output_file: str = OUTPUT_FILENAME):
+# --- HELPER FOR SINGLE SAMPLE GENERATION ---
+def generate_single_sample(sample_index: int) -> dict | None:
+    """
+    Generates a single Verbose ListOps sample.
+
+    Args:
+        sample_index: The index of the sample being generated (for logging).
+
+    Returns:
+        A dictionary containing the sample data on success, or None on failure.
+    """
+    logger.info(f"--- Starting generation for sample {sample_index + 1} ---")
+    sample_start_time = time.time()
+    try:
+        # 1. Build AST
+        logger.info(f"[Sample {sample_index + 1}] Building random AST...")
+        ast = build_random_ast(max_ops=DEFAULT_MAX_OPS, max_branch=DEFAULT_MAX_BRANCH)
+        validate_ast(ast)
+        ast_prefix_string = ast_to_prefix(ast)
+        logger.debug(f"[Sample {sample_index + 1}] Generated AST: {ast_prefix_string}")
+
+        # 2. Evaluate AST
+        logger.info(f"[Sample {sample_index + 1}] Evaluating AST...")
+        ground_truth_answer = eval_node(ast)
+        logger.info(f"[Sample {sample_index + 1}] AST evaluation complete. Ground Truth: {ground_truth_answer}")
+
+        # 3. Generate World
+        logger.info(f"[Sample {sample_index + 1}] Generating world metadata...")
+        world_info = generate_world(num_characters=random.randint(3, 6))
+        logger.info(f"[Sample {sample_index + 1}] World metadata generated.")
+        logger.debug(f"[Sample {sample_index + 1}] World Info: {world_info}")
+
+        # 4. Generate Narrative
+        logger.info(f"[Sample {sample_index + 1}] Starting narrative rendering...")
+        narrative_prompt = generate_narrative(ast, world_info)
+        logger.info(f"[Sample {sample_index + 1}] Narrative rendering complete.")
+
+        # 5. Prepare Sample Data
+        sample_data = {
+            "id": f"verbose_listop_{datetime.datetime.now().strftime('%Y%m%d%H%M%S')}_{sample_index + 1}",
+            "ast_prefix": ast_prefix_string,
+            "ground_truth": ground_truth_answer,
+            "world_info": world_info,
+            "narrative_prompt": narrative_prompt,
+            "metadata": {
+                 "generation_timestamp": datetime.datetime.now().isoformat(),
+                 "model_used": MODEL,
+                 "max_ops": DEFAULT_MAX_OPS,
+                 "max_branch": DEFAULT_MAX_BRANCH,
+                 "prompt_shot_count": PROMPT_SHOT_COUNT,
+            }
+        }
+        sample_end_time = time.time()
+        logger.info(f"--- Successfully generated sample {sample_index + 1} in {sample_end_time - sample_start_time:.2f} seconds ---")
+        return sample_data
+
+    except ValueError as e:
+        logger.error(f"[Sample {sample_index + 1}] Data validation error during generation: {e}")
+    except RuntimeError as e:
+        logger.error(f"[Sample {sample_index + 1}] Runtime error (likely API or parsing) during generation: {e}")
+    except Exception as e:
+        # Use exc_info=True to log the full traceback for unexpected errors
+        logger.exception(f"[Sample {sample_index + 1}] An unexpected error occurred during generation: {e}")
+
+    sample_end_time = time.time()
+    logger.error(f"--- Failed to generate sample {sample_index + 1} after {sample_end_time - sample_start_time:.2f} seconds ---")
+    return None  # Indicate failure
+
+
+# --- MAIN FUNCTION FOR PARALLEL EXECUTION zoom zoom ---
+def main(num_samples: int = NUM_SAMPLES_TO_GENERATE, output_file: str = OUTPUT_FILENAME, max_workers: int = DEFAULT_MAX_WORKERS):
     """
     Orchestrates building the AST, generating world, rendering narrative,
-    and saving the generated samples to a JSONL file.
+    and saving the generated samples to a JSONL file using parallel workers.
 
     Args:
         num_samples: The number of samples to generate.
         output_file: The path to the output JSONL file.
+        max_workers: The maximum number of parallel threads to use for generation.
     """
-    logger.info(f"Script started. Generating {num_samples} samples.")
-    samples_generated = 0
+    logger.info(f"Script started. Generating {num_samples} samples using up to {max_workers} workers.")
+    samples_generated_successfully = 0
     samples_failed = 0
 
     # Ensure the output directory exists if the path includes directories
@@ -703,95 +771,64 @@ def main(num_samples: int = NUM_SAMPLES_TO_GENERATE, output_file: str = OUTPUT_F
         os.makedirs(output_dir, exist_ok=True)
 
     start_time = time.time()
+    results = []  # List to store successfully generated sample data
 
-    for i in range(num_samples):
-        sample_start_time = time.time()
-        logger.info(f"--- Generating sample {i+1}/{num_samples} ---")
-        try:
-            # 1. Build AST
-            logger.info("Building random AST...")
-            # Adjust max_ops dynamically or keep fixed? Let's keep fixed for now.
-            ast = build_random_ast(max_ops=DEFAULT_MAX_OPS, max_branch=DEFAULT_MAX_BRANCH)
-            validate_ast(ast)
-            ast_prefix_string = ast_to_prefix(ast) # Get prefix string before evaluation modifies node state if needed
-            logger.debug(f"Generated AST: {ast_prefix_string}")
+    # Use ThreadPoolExecutor for I/O-bound tasks (API calls)
+    with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+        # Submit all tasks
+        future_to_index = {executor.submit(generate_single_sample, i): i for i in range(num_samples)}
 
-            # 2. Evaluate AST
-            logger.info("Evaluating AST...")
-            ground_truth_answer = eval_node(ast)
-            logger.info(f"AST evaluation complete. Ground Truth: {ground_truth_answer}")
-
-            # 3. Generate World
-            logger.info("Generating world metadata...")
-            # Generate a new world for each sample for diversity
-            world_info = generate_world(num_characters=random.randint(3, 6)) # Randomize characters slightly
-            logger.info("World metadata generated.")
-            logger.debug(f"World Info: {world_info}")
-
-            # 4. Generate Narrative
-            logger.info("Starting narrative rendering...")
-            narrative_prompt = generate_narrative(ast, world_info)
-            logger.info("Narrative rendering complete.")
-            # logger.debug(f"Generated Narrative/Prompt:\n{narrative_prompt}") # Log full narrative only if needed
-
-            # 5. Prepare Sample Data
-            sample_data = {
-                "id": f"verbose_listop_{datetime.datetime.now().strftime('%Y%m%d%H%M%S')}_{i+1}",
-                "ast_prefix": ast_prefix_string,
-                "ground_truth": ground_truth_answer,
-                "world_info": world_info,
-                "narrative_prompt": narrative_prompt, # This includes narrative, question, and instructions
-                "metadata": {
-                     "generation_timestamp": datetime.datetime.now().isoformat(),
-                     "model_used": MODEL,
-                     "max_ops": DEFAULT_MAX_OPS,
-                     "max_branch": DEFAULT_MAX_BRANCH,
-                     "prompt_shot_count": PROMPT_SHOT_COUNT,
-                }
-            }
-
-            # 6. Save Sample to JSONL file
+        # Process completed tasks
+        for future in concurrent.futures.as_completed(future_to_index):
+            index = future_to_index[future]
             try:
-                with open(output_file, 'a', encoding='utf-8') as f:
+                sample_data = future.result()  # Get the result (dict or None)
+                if sample_data:
+                    results.append(sample_data)
+                    samples_generated_successfully += 1
+                else:
+                    # Failure already logged within generate_single_sample
+                    samples_failed += 1
+            except Exception as exc:
+                # Catch potential exceptions raised *by the future itself*
+                logger.error(f"[Sample {index + 1}] task generated an unexpected exception: {exc}")
+                samples_failed += 1
+
+    logger.info(f"Parallel generation phase complete. Writing {samples_generated_successfully} successful samples to {output_file}...")
+
+    # Write all collected results to the file at once
+    try:
+        with open(output_file, 'a', encoding='utf-8') as f:
+            for sample_data in results:
+                try:
                     json_record = json.dumps(sample_data, ensure_ascii=False)
                     f.write(json_record + '\n')
-                samples_generated += 1
-                logger.info(f"Successfully generated and saved sample {i+1}/{num_samples}.")
-            except IOError as e:
-                 logger.error(f"Failed to write sample {i+1} to file {output_file}: {e}")
-                 samples_failed += 1
-            except Exception as e:
-                 logger.error(f"Failed to serialize sample {i+1} data: {e}")
-                 samples_failed += 1
+                except TypeError as e:
+                    logger.error(f"Failed to serialize sample data: {e}. Sample: {sample_data.get('id', 'Unknown ID')}")
+                    samples_failed += 1
+                    samples_generated_successfully -= 1
+                except Exception as e:
+                    logger.error(f"Unexpected error writing sample {sample_data.get('id', 'Unknown ID')} to file: {e}")
+                    samples_failed += 1
+                    samples_generated_successfully -= 1
 
-
-        except ValueError as e:
-            logger.error(f"Data validation error during generation of sample {i+1}: {e}")
-            samples_failed += 1
-        except RuntimeError as e:
-            logger.error(f"Runtime error (likely API or parsing) during generation of sample {i+1}: {e}")
-            samples_failed += 1
-        except Exception as e:
-            logger.exception(f"An unexpected error occurred during generation of sample {i+1}: {e}") # Use exc_info=True
-            samples_failed += 1
-        finally:
-             sample_end_time = time.time()
-             logger.info(f"Sample {i+1} processing took {sample_end_time - sample_start_time:.2f} seconds.")
-
+    except IOError as e:
+        logger.error(f"Fatal error opening or writing batch to file {output_file}: {e}")
+        samples_failed = num_samples
+        samples_generated_successfully = 0
 
     end_time = time.time()
     total_time = end_time - start_time
     logger.info(f"--- Batch generation complete ---")
     logger.info(f"Total samples attempted: {num_samples}")
-    logger.info(f"Successfully generated: {samples_generated}")
-    logger.info(f"Failed generations: {samples_failed}")
+    logger.info(f"Successfully generated and written: {samples_generated_successfully}")
+    logger.info(f"Failed generations or writes: {samples_failed}")
     logger.info(f"Total time: {total_time:.2f} seconds")
-    logger.info(f"Dataset saved to: {output_file}")
+    logger.info(f"Dataset output file: {output_file}")
 
     logging.shutdown()
 
 
 if __name__ == "__main__":
-    # Maybe add command-line argument parsing using argparse to override NUM_SAMPLES_TO_GENERATE, OUTPUT_FILENAME, etc.
-    # Right now it uses constants defined at the top.
-    main()
+    # TODO: Add argparse to override NUM_SAMPLES_TO_GENERATE, OUTPUT_FILENAME, max_workers (currently uses: constants + default max_workers==8)
+    main(max_workers=DEFAULT_MAX_WORKERS)

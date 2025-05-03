@@ -2,11 +2,9 @@
 
 ## HIGHLY EXPERIMENTAL — WIP
 
-Basically, this is a very hard, novel ML eval wherein the test dataset is generated through a very complex agentic system.
-
 ## Overview
 
-Welcome to the Verbose ListOps Evaluation Benchmark repository. This project provides tools to generate challenging evaluation tasks for sequence models, particularly Large Language Models (LLMs). The benchmark assesses reasoning capabilities when faced with tasks embedded within extremely long, narratively structured, and potentially distracting contexts.
+Welcome to the Verbose ListOps Evaluation Benchmark repository. This project provides tools to synthetically generate multi-hop qa evaluation tasks of variable difficulity for Large Language Models (LLMs). The benchmark assesses reasoning capabilities when faced with tasks embedded within extremely long, narratively structured, and potentially distracting contexts.
 
 It builds upon the 2018 [ListOps benchmark](https://arxiv.org/abs/1804.06028) by transforming its concise, symbolic problem representation into lengthy, natural language narratives generated dynamically using an LLM (currently Anthropic's Claude). The core Python script, `verbose-listops.py`, orchestrates this process.
 

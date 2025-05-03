@@ -543,39 +543,87 @@ NUMBER_WORDS_REGEX = re.compile(NUMBER_WORDS_PATTERN, re.IGNORECASE)
 
 
 def extract_numbers_from_text(text: str) -> Set[int]:
-    """Extracts integers (digits and basic words, handles 'minus'/'negative')."""
+    """Extracts integers (digits and words), ignoring specified ordinals."""
+    # --- DEBUG START ---
+    logger.debug(f"--- extract_numbers_from_text START ---")
+    logger.debug(f"Input text (first 200 chars): '{text[:200]}...'")
+    # --- DEBUG END ---
+
     if not text:
         return set()
+
     found_numbers = set()
+
+    # --- DEBUG START ---
+    logger.debug("Checking for digits...")
+    # --- DEBUG END ---
     for match in DIGIT_REGEX.finditer(text):
+        digit_str = match.group(0)
+        # --- DEBUG START ---
+        logger.debug(f"  Found digit string: '{digit_str}'")
+        # --- DEBUG END ---
         try:
-            value = int(match.group(0))
+            value = int(digit_str)
+            # --- DEBUG START ---
+            logger.debug(f"    Parsed as int: {value}")
+            # --- DEBUG END ---
+            # Only allow 'one' in word form; skip digit '1' - KEEPING THIS RULE
+            if value == 1:
+                # --- DEBUG START ---
+                logger.debug(f"    Skipping digit 1 (only word 'one' allowed).")
+                # --- DEBUG END ---
+                continue
+            found_numbers.add(value)
+            # --- DEBUG START ---
+            logger.debug(f"    Added {value} to found_numbers.")
+            # --- DEBUG END ---
         except ValueError:
+            # --- DEBUG START ---
+            logger.debug(f"    Failed to parse '{digit_str}' as int.")
+            # --- DEBUG END ---
             continue
-        # Only allow 'one' in word form; skip digit '1'
-        if value == 1:
-            continue
-        found_numbers.add(value)
-    # Verification Note: Hyphenated numbers (e.g., "twenty-three") are handled
-    # correctly as inflect generates them with hyphens, and the regex is built
-    # from these hyphenated keys in EXPANDED_NUMBER_WORDS_DICT.
+
+    # --- DEBUG START ---
+    logger.debug("Checking for number words...")
+    # --- DEBUG END ---
     for match in NUMBER_WORDS_REGEX.finditer(text):
         sign_word = match.group(1)
         number_word = match.group(2).lower()
-        # <<<--- START ORDINAL CHECK ---<<<
+        # --- DEBUG START ---
+        logger.debug(f"  Found potential number word: '{match.group(0)}' -> word: '{number_word}', sign: '{sign_word}'")
+        # --- DEBUG END ---
+
+        # Ordinal Check
         if number_word in ORDINAL_WORDS_TO_IGNORE:
-            logger.debug(f"Ignoring ordinal word: '{number_word}'")
-            continue  # Skip this match for ordinals
-        # >>>--- END ORDINAL CHECK --->>>
-        value = EXPANDED_NUMBER_WORDS_DICT.get(
-            number_word
-        )  # Use the expanded dictionary
+            # --- DEBUG START ---
+            logger.debug(f"    Ignoring ordinal word: '{number_word}'")
+            # --- DEBUG END ---
+            continue
+
+        # Dictionary Lookup
+        value = EXPANDED_NUMBER_WORDS_DICT.get(number_word)
+        # --- DEBUG START ---
+        logger.debug(f"    Dictionary lookup for '{number_word}': {value}")
+        # --- DEBUG END ---
+
         if value is not None:
             if sign_word and value != 0:
                 value = -value
+                # --- DEBUG START ---
+                logger.debug(f"    Applied negative sign: {value}")
+                # --- DEBUG END ---
             found_numbers.add(value)
+            # --- DEBUG START ---
+            logger.debug(f"    Added {value} to found_numbers.")
+            # --- DEBUG END ---
         else:
-            logger.warning(f"Word '{number_word}' found by regex but not in dict.")
+            # This case should ideally not happen if regex is built from dict keys
+            logger.warning(f"    Word '{number_word}' found by regex but not in dict.")
+
+    # --- DEBUG START ---
+    logger.debug(f"Final found_numbers: {found_numbers}")
+    logger.debug(f"--- extract_numbers_from_text END ---")
+    # --- DEBUG END ---
     return found_numbers
 
 
@@ -911,9 +959,21 @@ def _generate_narrative_recursive(
             atom_words = [p_inflect.number_to_words(a) for a in sorted(direct_atom_values)]
             operand_desc_parts.append(f"direct values: {', '.join(atom_words)}")
         except Exception as e:
-             logger.warning(f"Inflect error generating operand words: {e}")
-             operand_desc_parts.append(f"direct values: {', '.join(map(str, sorted(direct_atom_values)))}")
+            logger.warning(f"Inflect error generating operand words: {e}")
+            operand_desc_parts.append(f"direct values: {', '.join(map(str, sorted(direct_atom_values)))}")
     operand_context_str = "; ".join(operand_desc_parts) if operand_desc_parts else "previously established context"
+
+    # --- Build a user-friendly list of direct atom values for scene preambles ---
+    try:
+        obj_items = [f"{p_inflect.number_to_words(x)} ({x})" for x in sorted(direct_atom_values)]
+        if len(obj_items) == 1:
+            object_list_str = obj_items[0]
+        elif len(obj_items) == 2:
+            object_list_str = " and ".join(obj_items)
+        else:
+            object_list_str = ", ".join(obj_items[:-1]) + ", and " + obj_items[-1]
+    except Exception:
+        object_list_str = ", ".join(str(x) for x in sorted(direct_atom_values))
 
     # --- Demarcate object counts vs computed result for inclusion ---
     # Build the list string for the prompt (MUST INCLUDE part)
@@ -987,7 +1047,7 @@ def _generate_narrative_recursive(
     # Build the instruction string
     ultra_strict_instruction = (
         "**STRICT NUMBER RULE:**\n"
-        f"*   You MUST include the following numbers (use digits): {object_list_str}{result_rule}.\n"
+        f"*   You MUST include the following numbers (use digits): {must_include_combined_str}.\n"
         f"*   You MUST NOT mention any numbers from this forbidden list: {must_avoid_str}.\n"
         f"{may_use_clause}"
         "*   NO OTHER numbers besides these are allowed (no intermediate calculations, no unrelated values)."

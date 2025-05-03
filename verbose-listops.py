@@ -144,7 +144,7 @@ class Config:
 config = Config()
 
 
-MODEL = "gpt-4.1"
+MODEL = "gpt-4.5-preview"
 MAX_TOTAL_TOKENS = config.DEFAULT_MAX_TOTAL_TOKENS
 SAFETY_MARGIN = config.MAX_TOKENS_BUFFER
 MAX_BEAT_TOKENS = config.DEFAULT_MAX_BEAT_TOKENS
@@ -591,53 +591,53 @@ def make_number_validator(
     logger.debug(f"Creating validator with: Allowed={allowed_atoms}, Forbidden={forbidden_atoms}, OperandCount={operand_count}")
 
     def validate(text: str) -> bool:
-    found_numbers = extract_numbers_from_text(text)
-    logger.debug(f"Validator Input Text: \"{text[:100]}...\"")
-    logger.debug(f"Validator Found Numbers: {found_numbers}")
+        found_numbers = extract_numbers_from_text(text)
+        logger.debug(f"Validator Input Text: \"{text[:100]}...\"")
+        logger.debug(f"Validator Found Numbers: {found_numbers}")
 
-    # Rule 1: Check if all required atoms are present
-    missing_expected = allowed_atoms - found_numbers
-    if missing_expected:
-        logger.debug(f"Validation FAIL (Rule 1): Missing required numbers: {missing_expected}")
-        return False
+        # Rule 1: Check if all required atoms are present
+        missing_expected = allowed_atoms - found_numbers
+        if missing_expected:
+            logger.debug(f"Validation FAIL (Rule 1): Missing required numbers: {missing_expected}")
+            return False
 
-    # Rule 2: Check if any forbidden atoms are present
-    found_forbidden = found_numbers & forbidden_atoms
-    if found_forbidden:
-        logger.debug(f"Validation FAIL (Rule 2): Found forbidden numbers: {found_forbidden}")
-        return False
+        # Rule 2: Check if any forbidden atoms are present
+        found_forbidden = found_numbers & forbidden_atoms
+        if found_forbidden:
+            logger.debug(f"Validation FAIL (Rule 2): Found forbidden numbers: {found_forbidden}")
+            return False
 
-    # Identify numbers found that were NOT explicitly required
-    unexpected_found = found_numbers - allowed_atoms
-    logger.debug(f"Validator Unexpected Found (Before Rule 3/4): {unexpected_found}")
+        # Identify numbers found that were NOT explicitly required
+        unexpected_found = found_numbers - allowed_atoms
+        logger.debug(f"Validator Unexpected Found (Before Rule 3/4): {unexpected_found}")
 
-    # Check unexpected numbers against conditional allowances (Rules 3 & 4)
-    truly_disallowed_extras = set()
-    for extra_num in unexpected_found:
-        # Rule 4 Check: Is it the number 1?
-        is_allowed_one = (extra_num == 1)
+        # Check unexpected numbers against conditional allowances (Rules 3 & 4)
+        truly_disallowed_extras = set()
+        for extra_num in unexpected_found:
+            # Rule 4 Check: Is it the number 1?
+            is_allowed_one = (extra_num == 1)
 
-        # Rule 3 Check: Is it the operand count?
-        # Ensure operand_count itself isn't forbidden (Rule 2 already checked this, but good practice)
-        is_allowed_count = (extra_num == operand_count and extra_num not in forbidden_atoms)
+            # Rule 3 Check: Is it the operand count?
+            # Ensure operand_count itself isn't forbidden (Rule 2 already checked this, but good practice)
+            is_allowed_count = (extra_num == operand_count and extra_num not in forbidden_atoms)
 
-        # If it's NOT allowed by Rule 3 or 4, add to disallowed set
-        if not (is_allowed_one or is_allowed_count):
-             # Double-check it wasn't forbidden (Rule 2 check is primary, this is belt-and-suspenders)
-             if extra_num not in forbidden_atoms:
-                 truly_disallowed_extras.add(extra_num)
-             # If it was forbidden, Rule 2 already caught it, no need to add here.
+            # If it's NOT allowed by Rule 3 or 4, add to disallowed set
+            if not (is_allowed_one or is_allowed_count):
+                 # Double-check it wasn't forbidden (Rule 2 check is primary, this is belt-and-suspenders)
+                 if extra_num not in forbidden_atoms:
+                     truly_disallowed_extras.add(extra_num)
+                 # If it was forbidden, Rule 2 already caught it, no need to add here.
 
-    # Rule 5: If any truly disallowed extras remain, fail
-    if truly_disallowed_extras:
-        logger.debug(f"Validation FAIL (Rule 5): Found unexpected/disallowed numbers: {truly_disallowed_extras}")
+        # Rule 5: If any truly disallowed extras remain, fail
+        if truly_disallowed_extras:
+            logger.debug(f"Validation FAIL (Rule 5): Found unexpected/disallowed numbers: {truly_disallowed_extras}")
+            logger.debug(f"--> Context: Allowed={allowed_atoms}, Forbidden={forbidden_atoms}, OperandCount={operand_count}, Found={found_numbers}")
+            return False
+
+        # If all checks pass
+        logger.debug(f"Validation PASS")
         logger.debug(f"--> Context: Allowed={allowed_atoms}, Forbidden={forbidden_atoms}, OperandCount={operand_count}, Found={found_numbers}")
-        return False
-
-    # If all checks pass
-    logger.debug(f"Validation PASS")
-    logger.debug(f"--> Context: Allowed={allowed_atoms}, Forbidden={forbidden_atoms}, OperandCount={operand_count}, Found={found_numbers}")
-    return True
+        return True
 
     return validate
 
@@ -869,90 +869,127 @@ def _generate_narrative_recursive(
 
     # --- Process Current Operator Node (After Children) ---
     logger.debug(f"Finished processing children for operator {getattr(node, 'op', 'Atom')}. Now processing node itself.")
-    # Track and log which beat out of total is being generated
     beat_counter["current"] += 1
     logger.info(f"Generating beat {beat_counter['current']}/{beat_counter['total']} for operator {node.op} ({owner_name})")
     op_label = OP_LABELS.get(node.op, node.op)
-    # Identify direct atom children and atoms to introduce in *this* beat
+
+    # Identify direct atom children and calculate operand count
     direct_atom_children = [c for c in node.children if isinstance(c, Atom)]
-    operand_count = len(direct_atom_children)
+    operand_count = len(direct_atom_children) # CORRECT: Calculate operand_count here
     logger.debug(f"Calculated operand_count for node {node.op}: {operand_count}")
     direct_atom_values = {a.n for a in direct_atom_children}
 
-    # Allow descriptive counts (e.g., “three caches”, “four compartments”) and list-start “one”
-    count_val = len(direct_atom_values)
+    # --- FIX: Define the set of STRICTLY REQUIRED atoms ---
+    # Start with the direct operands
+    required_atoms_for_beat = set(direct_atom_values)
 
-    # For SUM, AVG, and SM, include computed result, the count, and “one”
+    # Add the calculated result ONLY for specific operators
+    result_val = None
     if node.op in ("SUM", "AVG", "SM"):
         result_val = node.value if getattr(node, "value", None) is not None else eval_node(node)
-        allowed_values = direct_atom_values | {result_val, count_val, 1}
-        # <<<--- START VERIFICATION LOG ---<<<
-        logger.debug(f"Verification (Op: {node.op}): Result {result_val} included in allowed_values: {allowed_values}")
-        # >>>--- END VERIFICATION LOG --->>>
-        # Verification Note: Confirmed that for SUM, AVG, SM nodes, the calculated
-        # node.value (result_val) is correctly added to the set of allowed numbers
-        # for the current beat's validation.
-    else:
-        # For MED, MIN, MAX, include direct values plus the count and “one”
-        allowed_values = direct_atom_values | {count_val, 1}
+        required_atoms_for_beat.add(result_val)
+        logger.debug(f"Verification (Op: {node.op}): Result {result_val} ADDED to required_atoms_for_beat: {required_atoms_for_beat}")
+    # --- END FIX ---
 
-    atoms_to_introduce_this_beat = allowed_values - introduced_atoms
+    # Determine which of these required atoms haven't been introduced yet
+    # This is what MUST be present in the current beat's text
+    atoms_to_introduce_this_beat = required_atoms_for_beat - introduced_atoms
+
+    # Forbidden atoms remain the same (previously introduced atoms)
     forbidden_atoms_for_prompt = introduced_atoms
+
     # --- Semantic Layer: primary object concept ---
     primary_object = world["object"]
 
-    # Prepare operand descriptions
+    # Prepare operand descriptions (using direct_atom_values)
     operand_desc_parts = []
     if child_owner_names:
         operand_desc_parts.append(f"results from: {', '.join(child_owner_names)}")
     if direct_atom_values:
-        atom_words = [p_inflect.number_to_words(a) for a in sorted(direct_atom_values)]
-        operand_desc_parts.append(f"direct values: {', '.join(atom_words)}")
+        # Use p_inflect safely
+        try:
+            atom_words = [p_inflect.number_to_words(a) for a in sorted(direct_atom_values)]
+            operand_desc_parts.append(f"direct values: {', '.join(atom_words)}")
+        except Exception as e:
+             logger.warning(f"Inflect error generating operand words: {e}")
+             operand_desc_parts.append(f"direct values: {', '.join(map(str, sorted(direct_atom_values)))}")
     operand_context_str = "; ".join(operand_desc_parts) if operand_desc_parts else "previously established context"
 
     # --- Demarcate object counts vs computed result for inclusion ---
+    # Build the list string for the prompt (MUST INCLUDE part)
+    must_include_list = []
     if direct_atom_values:
-        items = [f"{p_inflect.number_to_words(x)} ({x})" for x in sorted(direct_atom_values)]
-        if len(items) == 1:
-            object_list_str = items[0]
-        elif len(items) == 2:
-            object_list_str = " and ".join(items)
-        else:
-            object_list_str = ", ".join(items[:-1]) + ", and " + items[-1]
+        try:
+            items = [f"{p_inflect.number_to_words(x)} ({x})" for x in sorted(direct_atom_values)]
+            must_include_list.extend(items)
+        except Exception as e:
+            logger.warning(f"Inflect error generating must_include object list: {e}")
+            must_include_list.extend([f"{x} ({x})" for x in sorted(direct_atom_values)])
+
+    operation_result_list_str = ""
+    if result_val is not None: # Check if result_val was calculated
+        try:
+            result_word = p_inflect.number_to_words(result_val)
+            result_desc = f"{result_word} ({result_val})"
+            must_include_list.append(result_desc)
+            operation_result_list_str = f", which is the number of {primary_object} they end up with." # Adjusted phrasing slightly
+        except Exception as e:
+            logger.warning(f"Inflect error generating must_include result: {e}")
+            must_include_list.append(f"{result_val} ({result_val})")
+            operation_result_list_str = f", which is the number of {primary_object} they end up with."
+
+
+    # Combine required operands and result (if applicable) into one string for the prompt
+    if len(must_include_list) == 0:
+         # This case should ideally not happen if there are direct atoms or a result
+         logger.error(f"No required numbers identified for beat {node.op}. This might indicate an AST structure issue.")
+         must_include_combined_str = "Error: No numbers identified" # Fallback
+    elif len(must_include_list) == 1:
+        must_include_combined_str = must_include_list[0]
+    elif len(must_include_list) == 2:
+        must_include_combined_str = " and ".join(must_include_list)
     else:
-        object_list_str = "None"
-    operation_result_list_str = None
-    if node.op in ("SUM", "AVG", "SM"):
-        result_val = node.value if getattr(node, "value", None) is not None else eval_node(node)
-        operation_result_list_str = f"{p_inflect.number_to_words(result_val)} ({result_val})"
-    # Prepare number rule strings
+        must_include_combined_str = ", ".join(must_include_list[:-1]) + ", and " + must_include_list[-1]
+
+
+    # Prepare number rule strings for the prompt
     if forbidden_atoms_for_prompt:
-        must_avoid_str = ", ".join(f"{p_inflect.number_to_words(x)} ({x})" for x in sorted(forbidden_atoms_for_prompt))
+        try:
+            must_avoid_str = ", ".join(f"{p_inflect.number_to_words(x)} ({x})" for x in sorted(forbidden_atoms_for_prompt))
+        except Exception as e:
+            logger.warning(f"Inflect error generating must_avoid list: {e}")
+            must_avoid_str = ", ".join(map(str, sorted(forbidden_atoms_for_prompt)))
     else:
         must_avoid_str = "None"
 
-    # For inclusion rules, objects first, then result if present
-    if object_list_str:
-        objects_rule = f"Numbers you MUST include: {object_list_str}"
-    else:
-        raise BeatGenerationError(f"No operand atoms available for operator {node.op}")
-    if operation_result_list_str:
-        result_rule = f", and {operation_result_list_str}, which is the number of {object_list_str} they end up with."
-    else:
-        result_rule = ""
-    try:
-        operand_count_word = p_inflect.number_to_words(operand_count) if p_inflect else str(operand_count)
-    except Exception: # Handle potential inflect errors
-         operand_count_word = str(operand_count)
 
-    # Combine required operands and result (if applicable) into one string for the prompt
-    must_include_combined = f"{object_list_str}{result_rule}" # result_rule is empty if no result needed
+    # --- FIX: Build the MAY USE clause correctly, checking against forbidden ---
+    may_use_parts = []
+    # Check operand count
+    if operand_count not in forbidden_atoms_for_prompt:
+        try:
+            operand_count_word = p_inflect.number_to_words(operand_count) if p_inflect else str(operand_count)
+            may_use_parts.append(f"the number {operand_count} ('{operand_count_word}', the count of items being considered)")
+        except Exception as e:
+            logger.warning(f"Inflect error generating operand_count word for prompt: {e}")
+            may_use_parts.append(f"the number {operand_count} (the count of items being considered)")
 
+    # Check number 1
+    if 1 not in forbidden_atoms_for_prompt:
+        may_use_parts.append("the number 1 ('one')")
+
+    # Construct the MAY USE sentence dynamically
+    if may_use_parts:
+        may_use_clause = f"*   You MAY use { ' and '.join(may_use_parts) } for natural narrative flow.\n"
+    else:
+        may_use_clause = "" # No MAY USE clause if both are forbidden
+    # --- END FIX ---
+    # Build the instruction string
     ultra_strict_instruction = (
         "**STRICT NUMBER RULE:**\n"
-        f"*   You MUST include the following numbers (use digits): {must_include_combined}.\n"
+        f"*   You MUST include the following numbers (use digits): {object_list_str}{result_rule}.\n"
         f"*   You MUST NOT mention any numbers from this forbidden list: {must_avoid_str}.\n"
-        f"*   You MAY use the number {operand_count} ('{operand_count_word}', the count of items being considered) and the number 1 ('one') for natural narrative flow, *unless* they are in the forbidden list above.\n"
+        f"{may_use_clause}"
         "*   NO OTHER numbers besides these are allowed (no intermediate calculations, no unrelated values)."
     )
 
@@ -1073,9 +1110,9 @@ def _generate_narrative_recursive(
         return scenes, tokens_used, last_scene_text
 
     validate_beat_numbers = make_number_validator(
-        allowed_atoms=atoms_to_introduce_this_beat, # Or 'allowed_values' depending on your variable name
+        allowed_atoms=required_atoms_for_beat, # <-- Use the set containing ONLY required numbers
         forbidden_atoms=forbidden_atoms_for_prompt,
-        operand_count=operand_count # <-- PASS THE CALCULATED COUNT
+        operand_count=operand_count # Pass operand_count separately
     )
     # Also update the call for validate_padding if needed (operand_count would likely be 0)
     
@@ -1115,14 +1152,22 @@ def _generate_narrative_recursive(
         if attempt < config.MAX_BEAT_RETRIES:
             logger.warning(f"Beat {beat_counter['current']}/{beat_counter['total']} retry {attempt}/{config.MAX_BEAT_RETRIES} for operator {node.op} ({owner_name}): {reason}")
             time.sleep(config.RETRY_INITIAL_DELAY * (2 ** (attempt - 1)))
-
-    if not beat_text:
+    else:  # If generation failed after all retries
         logger.error(
             f"Operator {node.op} ({owner_name}) failed after {config.MAX_BEAT_RETRIES} attempts. Aborting narrative generation."
         )
         raise BeatGenerationError(
             f"Failed to generate narrative beat for operator {node.op} ({owner_name})"
         )
+
+    if beat_text:
+        btoks = len(encoder.encode(beat_text))
+        scenes.append(beat_text)
+        tokens_used += btoks
+        last_scene_text = beat_text
+        # CORRECTLY update introduced atoms ONLY with what was required for this beat
+        introduced_atoms.update(required_atoms_for_beat)
+        logger.debug(f"Beat {beat_counter['current']} successful. Introduced atoms updated: {introduced_atoms}")
 
     btoks = len(encoder.encode(beat_text))
     scenes.append(beat_text)

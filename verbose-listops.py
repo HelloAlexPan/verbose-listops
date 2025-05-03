@@ -1078,36 +1078,40 @@ def _generate_narrative_recursive(
     # --- Operator-specific semantic templates ---
     if node.op == "SUM":
         scene_preamble = (
-            f"In this stage, the characters discover "
-            f"{object_list_str} {primary_object} in separate locations, "
-            f"and they collect all of them."
+            f"In this stage, the characters discover separate caches or groups containing " # More explicit
+            f"{object_list_str} {primary_object} respectively. "
+            f"They collect all of these {primary_object}, combining their haul."
         )
     elif node.op == "MED":
         scene_preamble = (
-            f"In this stage, the characters discover {object_list_str} {primary_object}. "
-            f"But for a reason you concoct, they can only collect the middle amount (median) of {primary_object}s."
+            f"In this stage, the characters discover separate caches or groups containing " # More explicit
+            f"{object_list_str} {primary_object} respectively. "
+            f"But for a reason you concoct, they can only collect the cache containing the middle quantity (median) of {primary_object}s."
         )
     elif node.op == "MIN":
         scene_preamble = (
-            f"In this stage, the characters discover {object_list_str} {primary_object} lying or stored in different areas. "
-            f"But for a reason you concoct, they can only access or retrieve from the area or storage space that contains the smallest quantity (MIN) of {primary_object} for collection."
+            f"In this stage, the characters discover separate caches or storage areas containing " # More explicit
+            f"{object_list_str} {primary_object} respectively. "
+            f"But for a reason you concoct, they can only access or retrieve from the area containing the smallest quantity (MIN) of {primary_object}." # Clarified quantity
         )
     elif node.op == "MAX":
         scene_preamble = (
-            f"In this stage, the characters discover {object_list_str} {primary_object} lying or stored in different areas. "
-            f"But for a reason you concoct, they can only access or retrieve from the area or storage space that contains the largest quantity (MAX) of {primary_object} for collection."
+            f"In this stage, the characters discover separate caches or storage areas containing " # More explicit
+            f"{object_list_str} {primary_object} respectively. "
+            f"But for a reason you concoct, they can only access or retrieve from the area containing the largest quantity (MAX) of {primary_object}." # Clarified quantity
         )
     elif node.op == "AVG":
         scene_preamble = (
-            f"In this stage, the characters discover "
-            f"{object_list_str} {primary_object} in separate locations, "
-            f"They collect them all, but for some reason you concoct, they are forced to give away their haul so that they are left only with the average of these objects. (e.g., they collect 3, 4, and 5 {primary_object}, but can only walk away with 4)."
+            f"In this stage, the characters discover separate caches or groups containing " # More explicit
+            f"{object_list_str} {primary_object} respectively. "
+            f"They collect all these {primary_object}, but for some reason you concoct, they are forced to give away their haul so that they are left only with a quantity equal to the average of the initial amounts (e.g., they find groups of 3, 4, and 5 {primary_object}, but can only walk away with 4 {primary_object})." # Clarified quantity
         )
     elif node.op == "SM":
         scene_preamble = (
-            f"In this stage, the characters discover "
-            f"{object_list_str} {primary_object} in separate locations, "
-            f"They collect them all, but for some reason you concoct, they are forced to give away their haul so that they are left only with its final digit (e.g., they collect a total of 27, and can only walk away with 7)."
+            f"In this stage, the characters discover separate caches or groups containing " # More explicit
+            f"{object_list_str} {primary_object} respectively. "
+            f"They collect all these {primary_object}, combining their haul. However, for a reason you concoct, "
+            f"they are forced to give away most of their collection, leaving them only with a quantity equal to the final digit of the total number gathered (e.g., they collect a total of 27 {primary_object}, and can only walk away with 7 {primary_object})." # Clarified quantity
         )
     # Decide header and mode
     task_header = "Final Discovery" if is_final_op else "Discovery Step"

@@ -12,7 +12,7 @@ Despite sharing the exact core task of the ListOps benchmark, current SOTA model
 
 Standard long-context tests often focus on "needle-in-a-haystack" retrieval – finding a specific fact within a large document. Verbose ListOps is significantly more challenging, requiring not just finding information, but understanding relationships, extracting structured operations, ignoring sophisticated distractions, and performing multi-step computations based on information scattered across potentially enormous token lengths. Further, verbose-listops is extensible enough to generate narratives that intelligently 'tricks' both human and machine evaluators in sophisticated ways.
 
-Due to the nature of this computational task and its simulation of real-world human behaviours, this dataset is especially well-suited to understanding the ability of frontier models to extract and score arbitrarily defined predictive signals from large corpora of unstructured text, such as qualification signals from sales transcripts.
+Due to the nature of this computational task and its simulation of real-world human behaviours, this dataset is especially well-suited to understanding whether frontier models _can_ excel at extracting and scoring arbitrarily defined predictive signals from large corpora of unstructured text, such as qualification signals from sales transcripts. Today's LLM's already excel at LLM-as-Judge tasks, and this benchmark attempts to understand whether they are able to synthesize simple judge tasks across long contexts.
 
 ## Comparison with Similar Benchmarks
 

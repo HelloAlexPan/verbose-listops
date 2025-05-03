@@ -128,7 +128,7 @@ class Config:
     RETRY_INITIAL_DELAY: int = 0.5
     MAX_BEAT_RETRIES: int = 5
     MAX_PAD_RETRIES: int = 5
-    ATOM_MIN_VALUE: int = 1
+    ATOM_MIN_VALUE: int = 1 # currently only supports p+ integers
     ATOM_MAX_VALUE: int = 100
     USE_OWNERSHIP_NARRATIVE: bool = True  # Master switch for ownership feature
     USE_LLM_NAMING: bool = (
@@ -898,10 +898,10 @@ def _generate_narrative_recursive(
         result_rule = ""
 
     ultra_strict_instruction = (
-        "**ULTRA-STRICT NUMBER RULE:**\n"
-        f"*   {objects_rule}{result_rule}\n"
-        "*   YOU ARE DISALLOWED FROM MENTIONING ANY NUMBERS OTHER THAN THOSE MENTIONED ABOVE. This includes calculation steps and intermediate sums in making calculations.\n"
-        "*   When mentioning numbers, use digits rather than their written word forms." 
+        "STRICT NUMBER RULE:\n"
+        f"* You MUST include the following numbers (use digits): {objects_rule}.\n"
+        f"* You MAY OPTIONALLY use the number {result_rule} and the number 1 for natural narrative flow\n"
+        "* NO OTHER numbers besides these are allowed (no intermediate calculations, no unrelated values)."
     )
 
     is_final_op = is_root

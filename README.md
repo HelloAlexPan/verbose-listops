@@ -28,6 +28,8 @@ While Verbose ListOps has a unique combination of features (ListOps core task, L
 | **Strengths** | - Tests resistance to highly relevant, narrative distraction.<br>- LLM-generated context potentially mimics future noisy data.<br>- Core task requires precise hierarchical execution.<br>- Highly configurable generation process. | - Uses a diverse set of established basic reasoning tasks (bAbI).<br>- Employs natural text for background context.<br>- Very high scalability in context length demonstrated.<br>- Established benchmark with published results. | - Leverages well-understood existing reasoning questions.<br>- Covers multiple types of reasoning.<br>- Directly measures impact of context length on known task performance. |
 | **Weaknesses** | - Narrative quality/distraction level can be variable.<br> | - Core bAbI task is synthetically simplistic.<br>- Background text distraction is less targeted.<br>- Performance heavily relies on finding sparse facts in potentially unrelated text. | - "Context expansion" method is artificial and less realistic.<br>- Effectiveness depends heavily on *how* context is added.<br>- May not fully capture challenges of naturally long/narrative texts. |
 
+Among these benchmarks, verbose‑listops most closely mirrors LongReason’s approach. Unlike LongReason—which only varies difficulty by context length—verbose‑listops offers two levers: context length and the intrinsic complexity of the ListOps problem it narrativizes.
+
 ## The Core ListOps Task
 
 The underlying computational task remains identical to the original ListOps benchmark. Models processing the generated narrative must effectively:

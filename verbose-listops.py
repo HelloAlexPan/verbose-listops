@@ -18,13 +18,18 @@ from typing import Callable, Set
 from dataclasses import dataclass, field
 import re
 import concurrent.futures
+
 import inflect
+
+# Ordinals to ignore when extracting numbers
+ORDINAL_WORDS_TO_IGNORE = {
+    "first", "second", "third",
+}
 
 
 import tiktoken
 import openai
 
-# from anthropic import Anthropic
 
 # --- OpenAI API Key and Tokenizer Initialization ---
 OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")
@@ -230,7 +235,7 @@ def generate_with_retry(
     retries: int = config.MAX_BEAT_RETRIES,
 ):
     """
-    Helper to call the Anthropic API with retries and apply a validation function.
+    Helper to call the OpenAI ChatCompletion API with retries and apply a validation function.
     Returns the first candidate text that passes validate_fn, or None if all attempts fail.
     """
     for attempt in range(1, retries + 1):
@@ -551,9 +556,17 @@ def extract_numbers_from_text(text: str) -> Set[int]:
         if value == 1:
             continue
         found_numbers.add(value)
+    # Verification Note: Hyphenated numbers (e.g., "twenty-three") are handled
+    # correctly as inflect generates them with hyphens, and the regex is built
+    # from these hyphenated keys in EXPANDED_NUMBER_WORDS_DICT.
     for match in NUMBER_WORDS_REGEX.finditer(text):
         sign_word = match.group(1)
         number_word = match.group(2).lower()
+        # <<<--- START ORDINAL CHECK ---<<<
+        if number_word in ORDINAL_WORDS_TO_IGNORE:
+            logger.debug(f"Ignoring ordinal word: '{number_word}'")
+            continue  # Skip this match for ordinals
+        # >>>--- END ORDINAL CHECK --->>>
         value = EXPANDED_NUMBER_WORDS_DICT.get(
             number_word
         )  # Use the expanded dictionary
@@ -568,40 +581,63 @@ def extract_numbers_from_text(text: str) -> Set[int]:
 
 # --- Factory for number validation ---
 def make_number_validator(
-    allowed_atoms: Set[int], forbidden_atoms: Set[int]
+    allowed_atoms: Set[int],
+    forbidden_atoms: Set[int],
+    operand_count: int # <-- ADD THIS ARGUMENT
 ) -> Callable[[str], bool]:
     """
-    Return a validator function that returns True if the text contains
-    only numbers in allowed_atoms and none in forbidden_atoms.
+    Return a validator function based on new rules, including operand count.
     """
+    logger.debug(f"Creating validator with: Allowed={allowed_atoms}, Forbidden={forbidden_atoms}, OperandCount={operand_count}")
 
     def validate(text: str) -> bool:
-        found = extract_numbers_from_text(text)
-        # Check 0: Ensure all expected numbers are present
-        missing_expected = allowed_atoms - found
-        if missing_expected:
-            logger.debug(
-                f"Validation FAIL: Missing expected numbers from allowed set {allowed_atoms}: {missing_expected}"
-            )
-            return False
-        # Check 1: Are there any numbers found that are NOT in the allowed set?
-        unexpected_allowed = found - allowed_atoms
-        if unexpected_allowed:
-            logger.debug(
-                f"Validation FAIL: Found numbers not in allowed set {allowed_atoms}: {unexpected_allowed}"
-            )
-            return False
-        # Check 2: Are there any numbers found that ARE in the forbidden set?
-        found_forbidden = found & forbidden_atoms
-        if found_forbidden:
-            logger.debug(
-                f"Validation FAIL: Found numbers that are in the forbidden set {forbidden_atoms}: {found_forbidden}"
-            )
-            return False
-        logger.debug(
-            f"Validation PASS: Found numbers {found} are within allowed {allowed_atoms} and not in forbidden {forbidden_atoms}."
-        )
-        return True
+    found_numbers = extract_numbers_from_text(text)
+    logger.debug(f"Validator Input Text: \"{text[:100]}...\"")
+    logger.debug(f"Validator Found Numbers: {found_numbers}")
+
+    # Rule 1: Check if all required atoms are present
+    missing_expected = allowed_atoms - found_numbers
+    if missing_expected:
+        logger.debug(f"Validation FAIL (Rule 1): Missing required numbers: {missing_expected}")
+        return False
+
+    # Rule 2: Check if any forbidden atoms are present
+    found_forbidden = found_numbers & forbidden_atoms
+    if found_forbidden:
+        logger.debug(f"Validation FAIL (Rule 2): Found forbidden numbers: {found_forbidden}")
+        return False
+
+    # Identify numbers found that were NOT explicitly required
+    unexpected_found = found_numbers - allowed_atoms
+    logger.debug(f"Validator Unexpected Found (Before Rule 3/4): {unexpected_found}")
+
+    # Check unexpected numbers against conditional allowances (Rules 3 & 4)
+    truly_disallowed_extras = set()
+    for extra_num in unexpected_found:
+        # Rule 4 Check: Is it the number 1?
+        is_allowed_one = (extra_num == 1)
+
+        # Rule 3 Check: Is it the operand count?
+        # Ensure operand_count itself isn't forbidden (Rule 2 already checked this, but good practice)
+        is_allowed_count = (extra_num == operand_count and extra_num not in forbidden_atoms)
+
+        # If it's NOT allowed by Rule 3 or 4, add to disallowed set
+        if not (is_allowed_one or is_allowed_count):
+             # Double-check it wasn't forbidden (Rule 2 check is primary, this is belt-and-suspenders)
+             if extra_num not in forbidden_atoms:
+                 truly_disallowed_extras.add(extra_num)
+             # If it was forbidden, Rule 2 already caught it, no need to add here.
+
+    # Rule 5: If any truly disallowed extras remain, fail
+    if truly_disallowed_extras:
+        logger.debug(f"Validation FAIL (Rule 5): Found unexpected/disallowed numbers: {truly_disallowed_extras}")
+        logger.debug(f"--> Context: Allowed={allowed_atoms}, Forbidden={forbidden_atoms}, OperandCount={operand_count}, Found={found_numbers}")
+        return False
+
+    # If all checks pass
+    logger.debug(f"Validation PASS")
+    logger.debug(f"--> Context: Allowed={allowed_atoms}, Forbidden={forbidden_atoms}, OperandCount={operand_count}, Found={found_numbers}")
+    return True
 
     return validate
 
@@ -839,6 +875,8 @@ def _generate_narrative_recursive(
     op_label = OP_LABELS.get(node.op, node.op)
     # Identify direct atom children and atoms to introduce in *this* beat
     direct_atom_children = [c for c in node.children if isinstance(c, Atom)]
+    operand_count = len(direct_atom_children)
+    logger.debug(f"Calculated operand_count for node {node.op}: {operand_count}")
     direct_atom_values = {a.n for a in direct_atom_children}
 
     # Allow descriptive counts (e.g., “three caches”, “four compartments”) and list-start “one”
@@ -848,6 +886,12 @@ def _generate_narrative_recursive(
     if node.op in ("SUM", "AVG", "SM"):
         result_val = node.value if getattr(node, "value", None) is not None else eval_node(node)
         allowed_values = direct_atom_values | {result_val, count_val, 1}
+        # <<<--- START VERIFICATION LOG ---<<<
+        logger.debug(f"Verification (Op: {node.op}): Result {result_val} included in allowed_values: {allowed_values}")
+        # >>>--- END VERIFICATION LOG --->>>
+        # Verification Note: Confirmed that for SUM, AVG, SM nodes, the calculated
+        # node.value (result_val) is correctly added to the set of allowed numbers
+        # for the current beat's validation.
     else:
         # For MED, MIN, MAX, include direct values plus the count and “one”
         allowed_values = direct_atom_values | {count_val, 1}
@@ -896,12 +940,20 @@ def _generate_narrative_recursive(
         result_rule = f", and {operation_result_list_str}, which is the number of {object_list_str} they end up with."
     else:
         result_rule = ""
+    try:
+        operand_count_word = p_inflect.number_to_words(operand_count) if p_inflect else str(operand_count)
+    except Exception: # Handle potential inflect errors
+         operand_count_word = str(operand_count)
+
+    # Combine required operands and result (if applicable) into one string for the prompt
+    must_include_combined = f"{object_list_str}{result_rule}" # result_rule is empty if no result needed
 
     ultra_strict_instruction = (
-        "STRICT NUMBER RULE:\n"
-        f"* You MUST include the following numbers (use digits): {objects_rule}.\n"
-        f"* You MAY OPTIONALLY use the number {result_rule} and the number 1 for natural narrative flow\n"
-        "* NO OTHER numbers besides these are allowed (no intermediate calculations, no unrelated values)."
+        "**STRICT NUMBER RULE:**\n"
+        f"*   You MUST include the following numbers (use digits): {must_include_combined}.\n"
+        f"*   You MUST NOT mention any numbers from this forbidden list: {must_avoid_str}.\n"
+        f"*   You MAY use the number {operand_count} ('{operand_count_word}', the count of items being considered) and the number 1 ('one') for natural narrative flow, *unless* they are in the forbidden list above.\n"
+        "*   NO OTHER numbers besides these are allowed (no intermediate calculations, no unrelated values)."
     )
 
     is_final_op = is_root
@@ -983,6 +1035,16 @@ def _generate_narrative_recursive(
          "\"At dawn, fifteen torches blazed along the ramparts, followed by twenty-five banners and thirty-five drums heralding the city’s awakening.\"\n"
          "Invalid Example:\n"
          "\"At dawn, fifteen torches blazed along the ramparts, followed by twenty-five banners, thirty-five drums, and three carrots heralding the city’s awakening.\"\n"
+ 
+         "Example 4 (Failure Case):\n"
+         "**REVISED STRICT NUMBER RULE:**\n"
+         "*   MUST ONLY INCLUDE: [twenty (20), twenty-four (24)].\n"
+         "*   FORBIDDEN: [ten (10)].\n"
+         "*   MAY USE: 2 ('two', item count), 1 ('one').\n"
+         "*   NO OTHER numbers allowed.\n"
+         "Invalid Example Text:\n"
+         "\"They found the cache of 20 crystals and the other with 24. Kaelen took three steps back.\" <-- FAIL\n"
+         "Reasoning: The number 'three' (3) was mentioned. It was not required (20, 24), not forbidden (10), not the allowed count (2), and not the allowed number one (1). Therefore, it violates the 'NO OTHER numbers' rule.\n"
      )
 
     beat_prompt = prompt_examples + BASE_BEAT_TEMPLATE.substitute(
@@ -1011,9 +1073,12 @@ def _generate_narrative_recursive(
         return scenes, tokens_used, last_scene_text
 
     validate_beat_numbers = make_number_validator(
-        allowed_atoms=atoms_to_introduce_this_beat,
-        forbidden_atoms=forbidden_atoms_for_prompt
+        allowed_atoms=atoms_to_introduce_this_beat, # Or 'allowed_values' depending on your variable name
+        forbidden_atoms=forbidden_atoms_for_prompt,
+        operand_count=operand_count # <-- PASS THE CALCULATED COUNT
     )
+    # Also update the call for validate_padding if needed (operand_count would likely be 0)
+    
 
     system_prompt = "You are a storyteller focused on narrative flow. FOLLOW THE USER'S NUMBER RULES EXACTLY. Use numbers rather than word forms."
     beat_text = None
@@ -1065,10 +1130,13 @@ def _generate_narrative_recursive(
     last_scene_text = beat_text
     introduced_atoms.update(atoms_to_introduce_this_beat)
 
-    # Padding logic unchanged; uses updated introduced_atoms
     pad_count = 0
     add_padding = not is_final_op
-    validate_padding = make_number_validator(allowed_atoms=set(), forbidden_atoms=introduced_atoms)
+    validate_padding = make_number_validator(
+        allowed_atoms=set(),
+        forbidden_atoms=introduced_atoms, # Use the up-to-date set
+        operand_count=0 # Padding has no operands
+    )
     while add_padding and tokens_used < MAX_TOTAL_TOKENS - SAFETY_MARGIN and pad_count < max_pad_paragraphs:
         if would_exceed_budget(tokens_used, 200 + MAX_PAD_TOKENS, MAX_TOTAL_TOKENS, SAFETY_MARGIN):
             break

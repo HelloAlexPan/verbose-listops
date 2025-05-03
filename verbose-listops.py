@@ -20,6 +20,7 @@ import inflect
 
 import tiktoken
 import openai
+# from anthropic import Anthropic
 
 # --- OpenAI API Key and Tokenizer Initialization ---
 OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")
@@ -153,6 +154,13 @@ if not logger.handlers:
     console_handler.setFormatter(formatter)
     logger.addHandler(console_handler)
 
+    # Initialize OpenAI client now that logger and API key are defined
+    try:
+        openai.api_key = OPENAI_API_KEY
+        logger.info("OpenAI client configured.")
+    except Exception as e:
+        logger.error(f"Failed to configure OpenAI client: {e}")
+
 
 
 # --- Inflect Engine ---
@@ -253,7 +261,17 @@ def build_random_ast(max_ops: int, max_branch: int = DEFAULT_MAX_BRANCH) -> Node
             return Atom(random.randint(config.ATOM_MIN_VALUE, config.ATOM_MAX_VALUE))
         count += 1
         op = random.choice(ops)
-        arity = random.randint(MIN_ARITY, max_branch)
+        # Enforce odd arity for MED operator to avoid even-child median ambiguity
+        if op == "MED":
+            # Build a list of possible odd arities within range
+            possible_arities = [n for n in range(MIN_ARITY, max_branch + 1) if n % 2 == 1]
+            # Fallback to MIN_ARITY adjusted to odd if necessary
+            if not possible_arities:
+                arity = MIN_ARITY if MIN_ARITY % 2 == 1 else MIN_ARITY + 1
+            else:
+                arity = random.choice(possible_arities)
+        else:
+            arity = random.randint(MIN_ARITY, max_branch)
         children = [helper() for _ in range(arity)]
         return OpNode(op, children)
     root = helper()
@@ -571,14 +589,14 @@ def generate_narrative(ast: Node, world: dict) -> str | None:
 
     # --- In-prompt few-shot examples ---
     prompt_examples = ""
-    for i in range(1, config.PROMPT_SHOT_COUNT + 1):
-        prompt_examples += SHOT_EXAMPLES.get(i, "")
+    # for i in range(1, config.PROMPT_SHOT_COUNT + 1):
+    #     prompt_examples += SHOT_EXAMPLES.get(i, "")
 
     scenes = []
     tokens_used = 0
     all_atoms = get_atoms_in_subtree(ast)
     logger.debug(f"All atomic operands: {all_atoms}")
-    atoms_so_far = set()
+    # atoms_so_far = set()  # <<< REMOVE atoms_so_far >>>
     operator_nodes = [n for n in postorder(ast) if not isinstance(n, Atom)]
     max_pad_paragraphs = 2
     if not operator_nodes and isinstance(ast, Atom):
@@ -631,21 +649,27 @@ def generate_narrative(ast: Node, world: dict) -> str | None:
         atoms_from_children = set()
         for c in node.children:
             atoms_from_children.update(get_atoms_in_subtree(c))
-        allowed_atoms = atoms_so_far.union(atoms_from_children)
+        # <<< START CHANGE 1: Define allowed_atoms STRICTLY for this beat's validation >>>
+        allowed_atoms_for_this_beat_validation = atoms_from_children
+        # <<< END CHANGE 1 >>>
         result = node.value
         if result is None:
             logger.error(f"Node {node.op} has None value.")
             return None
 
         op_label = OP_LABELS.get(node.op, node.op)
+        # Pre-calculate operand list for strict instruction
+        operand_list_str = ", ".join(str(x) for x in sorted(atoms_from_children))
+        # <<< START CHANGE 2: Simplify ULTRA-STRICT instruction >>>
         ultra_strict_instruction = (
             "**ULTRA-STRICT NUMBER RULE:**\n"
-            "*   You MUST NOT include ANY numbers (digits or words) in your response UNLESS they are original input numbers that have appeared previously in the story AND are essential for narrative context.\n"
-            "*   DO NOT mention any intermediate calculation results.\n"
-            "*   DO NOT introduce any new numbers that were not part of the original inputs.\n"
+            f"*   You MUST narratively incorporate references to the specific numbers required for THIS step (representing: {operand_list_str}).\n"
+            f"*   You MUST NOT include ANY OTHER numbers (digits or words) in your response. Only the numbers listed above ({operand_list_str}) are permitted in this scene.\n"
+            "*   DO NOT mention any intermediate calculation results or the final numerical answer for this step.\n"
+            "*   DO NOT introduce any new numbers not present in the original problem.\n"
             "*   Focus ONLY on describing the process or consequences narratively."
         )
-        operand_list_str = ", ".join(str(x) for x in sorted(atoms_from_children))
+        # <<< END CHANGE 2 >>>
         current_task_body = ""
         final_task_body = ""
         ownership_instruction_detail = ""
@@ -720,7 +744,9 @@ def generate_narrative(ast: Node, world: dict) -> str | None:
         if would_exceed_budget(tokens_used, estimated_prompt_tokens + MAX_BEAT_TOKENS, MAX_TOTAL_TOKENS, SAFETY_MARGIN):
             logger.warning(f"Approaching token limit before generating beat {idx}. Stopping.")
             return None
-        validate_forbidden_numbers = make_number_validator(allowed_atoms)
+        # <<< START CHANGE 3: Use the STRICT validator for forbidden numbers >>>
+        validate_forbidden_numbers = make_number_validator(allowed_atoms_for_this_beat_validation)
+        # <<< END CHANGE 3 >>>
         system_prompt = "You are a storyteller focused on narrative flow. FOLLOW THE USER'S NUMBER RULES EXACTLY. No calculations, no results, NO FORBIDDEN NUMBERS."
         # --- Explicit retry loop with two-step validation ---
         beat_text = None
@@ -744,14 +770,23 @@ def generate_narrative(ast: Node, world: dict) -> str | None:
                 if not validate_forbidden_numbers(candidate_text):
                     logger.warning(f"Beat {idx} attempt {attempt}: Forbidden numbers found.")
                     continue
-                # Step 2: Operand presence check
-                # For each atomic operand in atoms_from_children, ensure at least one is present
+                # Step 2: Strengthened operand presence check
                 if not atoms_from_children:
-                    logger.warning(f"Beat {idx} attempt {attempt}: No operands to check presence for.")
-                    continue
-                found_operand = any(check_operand_presence(candidate_text, operand_val) for operand_val in atoms_from_children)
-                if not found_operand:
-                    logger.warning(f"Beat {idx} attempt {attempt}: No required operand present.")
+                    all_operands_present = True
+                else:
+                    all_operands_present = all(
+                        check_operand_presence(candidate_text, operand_val)
+                        for operand_val in atoms_from_children
+                    )
+
+                if not all_operands_present:
+                    missing_operands = {
+                        op for op in atoms_from_children
+                        if not check_operand_presence(candidate_text, op)
+                    }
+                    logger.warning(
+                        f"Beat {idx} attempt {attempt}: Not all required operands present. Missing: {missing_operands}. Required: {atoms_from_children}."
+                    )
                     continue
                 # Passed both validations
                 beat_text = candidate_text
@@ -766,7 +801,11 @@ def generate_narrative(ast: Node, world: dict) -> str | None:
             )
             return None
         btoks = len(encoder.encode(beat_text))
-        atoms_so_far.update(atoms_from_children)
+        # <<< REMOVE atoms_so_far update >>>
+        # atoms_successfully_introduced_in_beat = extract_numbers_from_text(beat_text)
+        # atoms_so_far.update(
+        #     atoms_successfully_introduced_in_beat.intersection(all_atoms)
+        # )
         scenes.append(beat_text)
         tokens_used += btoks
         last_scene_text = beat_text

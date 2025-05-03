@@ -35,6 +35,7 @@ htmlcov/
 coverage.xml
 
 # Logs
+logs/
 *.log
 
 # OS-specific files

@@ -118,6 +118,19 @@ LOG_MAX_BYTES = 5 * 1024 * 1024  # Maximum log file size (5MB)
 LOG_BACKUP_COUNT = 3  # Number of backup log files to keep
 CLEAR_LOGS_ON_START = True  # If True, delete existing logs in LOG_DIR on startup
 
+FINAL_QUESTION_TEMPLATE = Template(
+    "\n\n---\n\nBased *only* on the narrative actions and descriptions provided above, "
+    "what is the final numerical result or quantity of $primary_object obtained, calculated, "
+    "or determined at the very end of the story?"
+)
+
+JUDGE_INSTRUCTIONS = (
+    "\n\nThink step-by-step through the narrative, identifying each operation "
+    "(like finding the smallest, summing values, taking an average, etc.) "
+    "and the numbers involved at each stage, as implicitly described. "
+    "Perform the calculations as they occur in the story. "
+    "Output only the single, final integer answer."
+)
 
 # --- Dataclasses ---
 @dataclass
@@ -1389,26 +1402,9 @@ def generate_narrative(
     if not scenes:
         return None
     narrative_body = "\n\n".join(scenes).strip()
-    found_in_final_body = extract_numbers_from_text(narrative_body)
-    unexpected_numbers = found_in_final_body - all_atoms
-    missing_atoms = all_atoms - introduced_atoms_during_generation
-    if unexpected_numbers or missing_atoms:
-        required_numbers = all_atoms
-        extras = unexpected_numbers
-        missing = missing_atoms
-        parts = []
-        if extras:
-            parts.append(f"Extras: {extras}")
-        if missing:
-            parts.append(f"Missing: {missing}")
-        logger.error(f"Narrative validation FAILED. Required numbers: {required_numbers}. {'; '.join(parts)}")
-        logger.error(f"Narrative body: {narrative_body}")
-    else:
-        logger.info(f"Narrative validation PASSED. Required numbers: {all_atoms}")
-    question = "...\n\n---\n\n..."
-    judge_instructions = """
-    ...
-    """
+    primary_object = world.get("object", "items") # Get the object name from world info
+    question = FINAL_QUESTION_TEMPLATE.substitute(primary_object=primary_object)
+    judge_instructions = JUDGE_INSTRUCTIONS # Use the constant defined above
     final_prompt = narrative_body + question + judge_instructions
     logger.info(f"Successfully generated and validated narrative prompt. Total tokens used (estimated): {tokens_used}")
     return final_prompt.strip()

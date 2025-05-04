@@ -53,9 +53,9 @@ BASE_BEAT_TEMPLATE = Template(
 #  Configuration Constants 
 
 # --- Batch Generation & Output ---
-NUM_SAMPLES_TO_GENERATE = 8 # How many samples to generate in one run
-OUTPUT_FILENAME = "gpt4.5-verbose_listops_dataset_ultra_strict_v4.jsonl"  # Output file for the dataset
-DEFAULT_MAX_WORKERS = 8  # Default number of parallel threads for batch generation
+NUM_SAMPLES_TO_GENERATE = 20 # How many samples to generate in one run
+OUTPUT_FILENAME = "4o-mini-verbose_listops_dataset_ultra_strict_v4.jsonl"  # Output file for the dataset
+DEFAULT_MAX_WORKERS = 20  # Default number of parallel threads for batch generation
 
 # --- COMPREHENSIVE FEW-SHOT EXAMPLES (Illustrating Success & Failure) ---
 # Each tuple: (example_rules_string, good_output, bad_output, failure_reason)
@@ -202,7 +202,7 @@ def log_prompt(
 
 LOG_MAX_BYTES = 5 * 1024 * 1024  # Maximum log file size (5MB)
 LOG_BACKUP_COUNT = 3  # Number of backup log files to keep
-CLEAR_LOGS_ON_START = True  # If True, delete existing logs in LOG_DIR on startup
+CLEAR_LOGS_ON_START = False  # If True, delete existing logs in LOG_DIR on startup
 
 FINAL_QUESTION_TEMPLATE = Template( # Note: $primary_object is no longer used in this version
     "\n\n---\n\n**Final Question:** Carefully follow the main sequence of calculations described throughout the *entire narrative* above, focusing on the primary objective the characters are pursuing. Identify the single, concluding calculation performed as the **final step of that primary objective**. What is the **single integer** value that results *exclusively* from this final, top-level calculation related to the main task? Ignore any unrelated side-calculations or estimations mentioned incidentally, especially if they occur late in the narrative but are not part of the core sequence."
@@ -261,7 +261,7 @@ class GenerationContext:
     max_pad_paragraphs: int = 2
 
 
-MODEL = "gpt-4.5-preview"
+MODEL = "gpt-4o"
 MAX_TOTAL_TOKENS = config.DEFAULT_MAX_TOTAL_TOKENS
 SAFETY_MARGIN = config.MAX_TOKENS_BUFFER
 MAX_BEAT_TOKENS = config.DEFAULT_MAX_BEAT_TOKENS
@@ -391,7 +391,7 @@ def generate_with_retry(
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": user_prompt},
                 ],
-                max_tokens=max_tokens,
+                max_completion_tokens=max_tokens,
                 temperature=0.7,
             )
             candidate = resp.choices[0].message.content.strip()
@@ -587,7 +587,7 @@ def generate_world(num_characters: int = 5, num_concepts: int = 7) -> dict:
         resp = _chat_completion_call(
             model=MODEL,
             messages=[{"role": "user", "content": prompt}],
-            max_tokens=2000,
+            max_completion_tokens=2000,
             temperature=0.8,
         )
         text = resp.choices[0].message.content.strip()
@@ -969,7 +969,7 @@ def generate_owner_name_with_llm(
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_prompt},
             ],
-            max_tokens=max_name_tokens,
+            max_completion_tokens=max_name_tokens,
             temperature=0.75, # Keep some creativity
         )
         raw_candidate = resp.choices[0].message.content
@@ -1488,7 +1488,7 @@ def _generate_narrative_recursive(
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": beat_prompt},
                 ],
-                max_tokens=MAX_BEAT_TOKENS,
+                max_completion_tokens=MAX_BEAT_TOKENS,
                 temperature=0.4,
             )
             candidate_text = resp.choices[0].message.content.strip()
@@ -1965,4 +1965,13 @@ def main(
 
 
 if __name__ == "__main__":
-    main(max_workers=config.DEFAULT_MAX_WORKERS)
+    main(
+        num_samples=config.NUM_SAMPLES_TO_GENERATE, # Pass config explicitly if desired
+        output_file=OUTPUT_FILENAME,               # Or rely on defaults in main() signature
+        max_workers=config.DEFAULT_MAX_WORKERS
+    )
+
+    total_count   = config.NUM_SAMPLES_TO_GENERATE
+    success_count = len(samples)
+    success_rate  = (success_count / total_count * 100) if total_count else 0
+    logger.info(f"Generation success rate: {success_rate:.2f}% ({success_count}/{total_count})")

@@ -18,7 +18,7 @@ Due to the nature of this computational task and its simulation of real-world hu
 
 While Verbose ListOps has a unique combination of features (ListOps core task, LLM-generated narrative context, specific padding mechanism), several other benchmarks evaluate related aspects of long-context reasoning. Here's a comparison:
 
-| Feature            | verbose‑listops (This Work) | LongReason (2025) | BABILong (2024) |
+| Feature            | verbose‑listops             | LongReason (2025) | BABILong (2024) |
 | :----------------- | :-------------------------- | :---------------- | :-------------- |
 | **Core Task** | ListOps (Hierarchical list operations) | Diverse (Reading Comp, Logic, Math) | bAbI (Simple reasoning tasks) |
 | **Context Gen.** | LLM-generated narrative around ListOps AST | LLM expansion of seed tasks | bAbI facts hidden in PG19 text |
@@ -30,7 +30,7 @@ While Verbose ListOps has a unique combination of features (ListOps core task, L
 | **Pros** | Dual difficulty knobs, Coherent expansion, Deterministic & Validated, Hierarchical logic | Diverse tasks, Controlled lengths, Auto-verified | Extreme scale, Deterministic seeds, Multi-task coverage |
 | **Cons** | Domain-specific (ListOps), Pipeline complexity (LLM calls), Potential narrative noise | Length-only tuning, Fixed complexity, Synthetic coherence risk | Simplistic reasoning, Unrealistic distractors, Single knob |
 
-Among these benchmarks, verbose‑listops most closely mirrors LongReason’s approach but offers finer control over intrinsic task difficulty alongside context length, using a more structured narrative generation process with rigorous validation.
+Among these benchmarks, verbose‑listops most closely mirrors LongReason’s approach. Unlike LongReason—which only varies difficulty by context length—verbose‑listops offers two levers: context length and the intrinsic complexity of the ListOps problem it narrativizes.
 
 ## The Core ListOps Task
 

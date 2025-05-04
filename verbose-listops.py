@@ -777,8 +777,7 @@ def get_atoms_in_subtree(node: Node) -> Set[int]:
         atoms.update(get_atoms_in_subtree(child))
     return atoms
 
-
-# --- ADDED FOR PHASE 4b: LLM Naming Function ---
+# @retry_api_call # Apply decorator outside the function definition if needed
 def generate_owner_name_with_llm(
     world_info: dict,
     op_node: OpNode,
@@ -786,40 +785,53 @@ def generate_owner_name_with_llm(
     max_name_tokens: int = 30,
 ) -> str | None:
     """
-    Uses an LLM call to generate a creative, thematic name for an OpNode's owner entity.
+    Uses an LLM call to generate a creative, thematic, and NARRATIVELY USEFUL name
+    for an element related to an OpNode's step. Prioritizes concrete elements.
     Relies on @retry_api_call for retries.
     Returns the generated name or None if generation fails after retries.
-    --- REMOVED stop_sequences from API call, added post-processing ---
     """
 
     op_label = OP_LABELS.get(op_node.op, op_node.op)
     genre = world_info.get("genre", "unknown genre")
     setting = world_info.get("setting", "unknown setting")
 
-    # --- Restore World Info - Keep it Concise ---
+    # --- World Info (Concise) ---
     characters_sample = world_info.get("characters", [])[:3]
     characters_str = json.dumps(
         [{"name": c.get("name", "N/A")} for c in characters_sample]
     )
-    concepts_sample = world_info.get("entity_concepts", [])[:5]
-    concepts_str = json.dumps(concepts_sample)
+    concepts_sample = world_info.get("entity_concepts", [])[:5] # Assuming you might add this back later
+    concepts_str = json.dumps(concepts_sample if concepts_sample else ["generic items", "hidden mechanisms"]) # Add fallback concepts if empty
     # --- End World Info ---
 
-    # --- Restore Child Context - Keep it Concise ---
+    # --- Child Context (Concise) ---
     children_context = ""
     if child_owner_names:
         display_child_names = child_owner_names[:3]
         children_context = (
-            f"This entity is formed from components related to: "
-            f"{', '.join(display_child_names)}"
+            f"This step might build upon previous outcomes conceptually known as: " # Keep conceptual
+            f"{', '.join(f'{name}' for name in display_child_names)}"
             f"{' and others...' if len(child_owner_names) > 3 else '.'}"
         )
     # --- End Child Context ---
 
-    # --- REFINED LLM Naming Prompt ---
+    # --- Create a more narrative description of the operation ---
+    # Helps steer away from pure function
+    op_narrative_desc = {
+        "MAX": "selecting the largest amount or most significant item discovered",
+        "MIN": "choosing the smallest amount or least significant item discovered",
+        "SUM": "combining several discovered amounts or items into a total",
+        "MED": "finding the middle or balancing value among several options",
+        "AVG": "calculating a representative average value from several amounts",
+        "SM": "determining a final code or quantity based on the last digit of a sum",
+    }.get(op_node.op, f"performing an operation related to '{op_label}'") # Fallback remains
+    # --- End narrative description ---
+
+
+    # --- REVISED LLM Naming Prompt ---
     system_prompt = (
-        "You are a creative assistant specializing in generating short, evocative, thematic names "
-        "for concepts within a fictional narrative. Be concise. Output only the name."
+        "You are a creative assistant specializing in generating SHORT, CONCISE, and NARRATIVELY USEFUL names " # Emphasize usefulness
+        "for elements within a fictional story. Be concise. Output only the name."
     )
     user_prompt = (
         f"Fictional World Context:\n"
@@ -827,21 +839,27 @@ def generate_owner_name_with_llm(
         f"- Setting: {setting}\n"
         f"- Sample Characters: {characters_str}\n"
         f"- Sample Thematic Concepts: {concepts_str}\n\n"
-        f"Task: Generate a short (2-5 words), creative, and thematic name for an entity, "
-        f"collection, process, or concept within this world.\n\n"
-        f"Details about the entity to name:\n"
-        f"- It represents the outcome of an operation conceptually similar to '{op_label}'.\n"
-        f"- **Narrative Context:** This operation likely occurs *after* other steps have been completed. " # Added context
-        f"It might combine results from previous steps (represented conceptually by: {children_context if children_context else 'N/A'}) " # Clarified role of children
-        f"and/or involve newly introduced elements.\n\n"
+        f"Task: Generate a SHORT (2-4 words), CONCISE, and THEMATIC name for a specific element relevant to the *current narrative step*. "
+        f"This element should represent the focus or result of this step and MUST be something characters could plausibly refer to or interact with.\n"
+        f"**Prioritize names for:**\n" # Make it more concrete with examples
+        f"*   **Physical objects:** 'The Sunstone Cache', 'Barnaby's Combined Gadget', 'The Seven Echo Stones'.\n"
+        f"*   **Specific locations:** 'The Echoing Chamber', 'Mirabel's Calculation Point', 'The Median Platform'.\n"
+        f"*   **Documents/Readings:** 'The Final Tally Sheet', 'Gearsmith's Rhyming Scroll', 'The Cogsworth Ledger'.\n"
+        f"*   **Significant character actions/decisions:** 'Kaelen's Low Bid', 'The Professor's Risky Calculation', 'Mirabel's Final Selection'.\n\n"
+        f"Details about the current narrative step:\n"
+        f"- It involves the characters {op_narrative_desc}.\n" # Use narrative description
+        f"- {children_context}\n\n" # Include child context if available
         f"Instructions:\n"
-        f"- The name should fit the {genre} genre and {setting} setting.\n"
-        f"- Make it sound like a specific thing/idea in the story (e.g., 'The Oracle's Final Whisper', 'Sector Gamma Scan Results', 'Kaelen's Calculated Risk').\n"
-        f"- AVOID using the exact operation word (like '{op_node.op}' or '{op_label}') or generic terms like 'Result' or 'Calculation'.\n" # Strengthened avoidance
-        f"- Output only the generated name itself, with no quotes, labels, explanations, or introductory phrases like 'Here is a name:'."
+        f"- The name MUST fit the {genre} genre and {setting} setting.\n"
+        f"- Make it sound like something the characters could naturally refer to in dialogue or narration (e.g., 'Let's check the Final Tally Sheet', 'They approached the Median Platform').\n"
+        f"- **Strongly prefer names linked to tangible objects, places, or specific character actions over abstract concepts.**\n" # Explicit prioritization
+        f"- AVOID using the exact operation word (like '{op_node.op}') or generic terms like 'Result', 'Value', 'Calculation', 'Step', 'Process', 'Assembly', 'Equilibrium', 'Median', 'Average', 'Modulo'.\n" # Add more forbidden generics
+        f"- Keep it concise (ideally 2-4 words).\n"
+        f"- Output ONLY the generated name itself, with no quotes, labels, explanations, or introductory phrases."
     )
-    # --- END REFINED IMPLEMENTATION ---
-    prompt_log_header = f"--- LLM Owner Naming Prompt (Op: {op_node.op}, Attempting Call - No Stop Sequences) ---"
+    # --- END REVISED IMPLEMENTATION ---
+
+    prompt_log_header = f"--- LLM Owner Naming Prompt (Op: {op_node.op}, Attempting Call - Revised for Narrative Use) ---"
     prompt_content_for_log = f"System: {system_prompt}\nUser: {user_prompt}"
     logger.debug(
         f"Attempting LLM naming call for {op_node.op} with prompt:\n{prompt_content_for_log}"
@@ -849,6 +867,7 @@ def generate_owner_name_with_llm(
     logger.debug(f"Prompt length: {len(prompt_content_for_log)}")
 
     try:
+        # Apply retry logic here if not using decorator
         resp = _chat_completion_call(
             model=MODEL,
             messages=[
@@ -856,11 +875,11 @@ def generate_owner_name_with_llm(
                 {"role": "user", "content": user_prompt},
             ],
             max_tokens=max_name_tokens,
-            temperature=0.75,
+            temperature=0.75, # Keep some creativity
         )
         raw_candidate = resp.choices[0].message.content
 
-        # --- Post-processing to simulate stop sequences ---
+        # --- Post-processing (Keep existing logic) ---
         stop_chars = ["\n", ".", ","]
         first_stop_index = len(raw_candidate)
         for char in stop_chars:
@@ -868,8 +887,6 @@ def generate_owner_name_with_llm(
             if idx != -1 and idx < first_stop_index:
                 first_stop_index = idx
         processed_candidate = raw_candidate[:first_stop_index]
-        # --- End Post-processing ---
-
         candidate = processed_candidate.strip()
         candidate = re.sub(
             r"^(?:Here is a name:|Name:|Entity Name:|\"|\')",
@@ -878,6 +895,8 @@ def generate_owner_name_with_llm(
             flags=re.IGNORECASE,
         ).strip()
         candidate = re.sub(r"(?:\"|\')$", "", candidate).strip()
+        # --- End Post-processing ---
+
 
         if not candidate or candidate.lower().startswith(
             ("i cannot", "i'm sorry", "i am unable")
@@ -886,11 +905,18 @@ def generate_owner_name_with_llm(
                 f"LLM Naming: Invalid/refusal response content (raw: '{raw_candidate}')"
             )
             return None
-        if len(candidate) > max_name_tokens * 6:
+        # Add a check for overly generic terms that might slip through
+        generic_terms_lower = {"result", "value", "calculation", "step", "process", "assembly", "equilibrium", "median", "average", "modulo", "outcome", "determination"}
+        if any(term in candidate.lower().split() for term in generic_terms_lower):
+             logger.warning(f"LLM Naming: Generated name '{candidate}' contains a generic term. Rejecting.")
+             return None # Reject overly generic names
+
+        if len(candidate.split()) > 5: # Stricter word count check
             logger.warning(
-                f"LLM Naming: Name potentially too long after processing: '{candidate}' (raw: '{raw_candidate}')"
+                f"LLM Naming: Name potentially too long ({len(candidate.split())} words): '{candidate}'"
             )
-            return None
+            # Optionally reject long names, or just log the warning
+            # return None
 
         logger.debug(
             f"LLM generated owner name: '{candidate}' (processed from raw: '{raw_candidate}')"
@@ -900,8 +926,12 @@ def generate_owner_name_with_llm(
         logger.error(
             f"LLM Naming API Error: {e}. Prompt that failed:\n{prompt_content_for_log}"
         )
-        raise
+        # Decide whether to raise or return None based on desired robustness
+        # raise # Option 1: Fail fast
+        return None # Option 2: Allow fallback naming
 
+
+# Ensure the decorator is applied if needed
 generate_owner_name_with_llm = retry_api_call(generate_owner_name_with_llm)
 
 
@@ -1153,18 +1183,17 @@ def _generate_narrative_recursive(
     )
 
     if node.op in ("MED", "MIN", "MAX") and has_operator_children and has_direct_atom_children:
-    ownership_instruction_detail += (
-        f"Specifically, you need to describe the comparison between the conceptual outcome(s) (like '{child_owner_names[0]}') "
-        f"and the new numerical value(s) ({direct_values_str}). "
-        f"Focus on the *process* of selecting the correct one based on the '{op_label}' rule, "
-        f"ensuring only the required numbers ({direct_values_str}) are mentioned numerically. "
-        f"Do NOT state the numerical value of '{child_owner_names[0]}' or the final numerical result of this step."
-    )
+        ownership_instruction_detail += (
+            f"Specifically, you need to describe the comparison between the conceptual outcome(s) (like '{child_owner_names[0]}') "
+            f"and the new numerical value(s) ({direct_values_str}). "
+            f"Focus on the *process* of selecting the correct one based on the '{op_label}' rule, "
+            f"ensuring only the required numbers ({direct_values_str}) are mentioned numerically. "
+            f"Do NOT state the numerical value of '{child_owner_names[0]}' or the final numerical result of this step."
+        )
     else:
         ownership_instruction_detail += (
-         f"Focus on the *action* of applying the rule in this specific scene."
-     )
-
+            f"Focus on the *action* of applying the rule in this specific scene."
+        )
 
 
     # --- END IMPLEMENTATION ---

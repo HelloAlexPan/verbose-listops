@@ -6,7 +6,7 @@
 
 Welcome to the Verbose ListOps Evaluation Benchmark repository. This project provides tools to synthetically generate multi-hop QA evaluation tasks of variable difficulty for Large Language Models (LLMs). The benchmark assesses reasoning capabilities when faced with tasks embedded within extremely long, narratively structured, and potentially distracting contexts.
 
-It builds upon the 2018 ListOps benchmark by transforming its concise, symbolic problem representation into lengthy, natural language narratives generated dynamically using an LLM (e.g., OpenAI's GPT series, Anthropic's Claude). The core Python script, `verbose-listops.py`, orchestrates this process. The generation process now uses a **post-order traversal** of the ListOps problem structure, resulting in more natural narrative flows where inner calculations are resolved before outer ones.
+It builds upon the 2018 ListOps benchmark by first, reversing the traversal order of a ListOps problem, and then transforming its concise, symbolic problem representation into lengthy, natural language narratives generated dynamically using an LLM (e.g., OpenAI's GPT series, Anthropic's Claude). The core Python script, `verbose-listops.py`, orchestrates this process. 
 
 Despite sharing the exact core task of the ListOps benchmark, current SOTA models universally fail verbose-listops narratives—even with multiple-shot prompting—at just 10,000 tokens, whilst successfully solving their identical standard ListOps representations. However, on easier problems, few-shot prompting has a significant effect on improving success rate.
 
@@ -18,17 +18,17 @@ Due to the nature of this computational task and its simulation of real-world hu
 
 While Verbose ListOps has a unique combination of features (ListOps core task, LLM-generated narrative context, specific padding mechanism), several other benchmarks evaluate related aspects of long-context reasoning. Here's a comparison:
 
-| Feature             | verbose‑listops (This Work)                                                                 | LongReason (Hypothetical 2025)                                                              | BABILong (Hypothetical 2024)                                                                 |
-| :------------------ | :------------------------------------------------------------------------------------------ | :------------------------------------------------------------------------------------------ | :------------------------------------------------------------------------------------------- |
-| **Core Task**       | ListOps (Hierarchical list operations)                                                      | Diverse (Reading Comp, Logic, Math)                                                         | bAbI (Simple reasoning tasks)                                                                |
-| **Context Gen.**    | LLM-generated narrative around ListOps AST                                                  | LLM expansion of seed tasks                                                                 | bAbI facts hidden in PG19 text                                                               |
-| **Difficulty Knobs**| 1. Context Length (via padding) <br> 2. ListOps Complexity (depth, branching)               | Context Length Only                                                                         | Context Length Only                                                                          |
-| **Coherence**       | High (LLM generates related story beats & padding)                                          | Moderate (Risk of drift in expansion)                                                       | Low (Random book sentences as distractors)                                                   |
-| **Reasoning Type**  | Hierarchical, sequential computation within narrative                                       | Varies by seed task                                                                         | Simple retrieval, deduction (bAbI patterns)                                                  |
-| **Scalability**     | Configurable contexts (e.g., > 50K tokens)                                                  | Controlled lengths (8K-128K)                                                                | Extreme scalability (Millions of tokens)                                                     |
-| **Verification**    | Deterministic AST evaluation; Strict number validation in narrative via agentic checks      | LLM auto-verification                                                                       | Based on known bAbI answers                                                                  |
-| **Pros**            | Dual difficulty knobs, Coherent expansion, Deterministic & Validated, Hierarchical logic    | Diverse tasks, Controlled lengths, Auto-verified                                            | Extreme scale, Deterministic seeds, Multi-task coverage                                      |
-| **Cons**            | Domain-specific (ListOps), Pipeline complexity (LLM calls), Potential narrative noise       | Length-only tuning, Fixed complexity, Synthetic coherence risk                              | Simplistic reasoning, Unrealistic distractors, Single knob                                     |
+| Feature            | verbose‑listops (This Work) | LongReason (2025) | BABILong (2024) |
+| :----------------- | :-------------------------- | :---------------- | :-------------- |
+| **Core Task** | ListOps (Hierarchical list operations) | Diverse (Reading Comp, Logic, Math) | bAbI (Simple reasoning tasks) |
+| **Context Gen.** | LLM-generated narrative around ListOps AST | LLM expansion of seed tasks | bAbI facts hidden in PG19 text |
+| **Difficulty Knobs** | 1. Context Length (via padding) <br> 2. ListOps Complexity (depth, branching) | Context Length Only | Context Length Only |
+| **Coherence** | High (LLM generates related story beats & padding) | Moderate (Risk of drift in expansion) | Low (Random book sentences as distractors) |
+| **Reasoning Type** | Hierarchical, sequential computation within narrative | Varies by seed task | Simple retrieval, deduction (bAbI patterns) |
+| **Scalability** | Configurable contexts (e.g., > 50K tokens) | Controlled lengths (8K-128K) | Extreme scalability (Millions of tokens) |
+| **Verification** | Deterministic AST evaluation; Strict number validation in narrative via agentic checks | LLM auto-verification | Based on known bAbI answers |
+| **Pros** | Dual difficulty knobs, Coherent expansion, Deterministic & Validated, Hierarchical logic | Diverse tasks, Controlled lengths, Auto-verified | Extreme scale, Deterministic seeds, Multi-task coverage |
+| **Cons** | Domain-specific (ListOps), Pipeline complexity (LLM calls), Potential narrative noise | Length-only tuning, Fixed complexity, Synthetic coherence risk | Simplistic reasoning, Unrealistic distractors, Single knob |
 
 Among these benchmarks, verbose‑listops most closely mirrors LongReason’s approach but offers finer control over intrinsic task difficulty alongside context length, using a more structured narrative generation process with rigorous validation.
 
@@ -92,8 +92,6 @@ This approach provides a challenging test case where the core task is simple, bu
 *   Track the hierarchy and dependencies of the operations as presented narratively, using thematic names or context to link steps.
 *   Correctly identify and use direct numerical inputs for each step while ignoring numerical results from prior steps mentioned conceptually.
 *   Answer a direct question about the final result of the embedded ListOps task.
-
-The **post-order generation** significantly improves narrative coherence compared to previous versions, making the embedded task flow more naturally within the story. It tests whether models can truly use their long context for complex reasoning within noisy, narratively structured data.
 
 ## Code Implementation Details
 

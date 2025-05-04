@@ -15,17 +15,15 @@ from typing import Callable, Set
 from dataclasses import dataclass, field
 import re
 import concurrent.futures
-
 import inflect
+import tiktoken
+from functools import lru_cache
+import openai
 
 # Ordinals to ignore when extracting numbers
 ORDINAL_WORDS_TO_IGNORE = {
     "first", "second", "third",
 }
-
-
-import tiktoken
-import openai
 
 
 # --- OpenAI API Key and Tokenizer Initialization ---
@@ -43,16 +41,15 @@ from string import Template
 
 # --- Prompt Templates ---
 BASE_BEAT_TEMPLATE = Template(
-    "You are a $beat_mode storyteller.\n"
+    "You are a $beat_mode storyteller writing the next sequential scene in an ongoing narrative.\n" # Added "sequential"
     "Characters: $characters\n"
     "Setting: $setting\n"
-    'Previous Scene Snippet: "...$snippet"\n\n'
+    'Previous Scene Snippet (End of last scene): "...$snippet"\n\n'
     "--- $task_header ---\n"
-    "$task_body\n\n"
-    "$ultra_strict_instruction\n\n"
-    "Output only the narrative text for this scene, without titles or headings."
+    "$task_body\n\n" # This will contain the refined ownership_instruction_detail
+    "$ultra_strict_instruction\n\n" # This will contain the refined number rules
+    "Output only the narrative text for this new scene, continuing from the snippet. Do not include titles, headings, or explanations." # Clarified output expectation
 )
-
 #  Configuration Constants 
 
 # --- Batch Generation & Output ---
@@ -86,10 +83,6 @@ EXAMPLE_TEXTS = [
     ),
 ]
 
-SHOT_EXAMPLES = {0: ""}
-for idx, txt in enumerate(EXAMPLE_TEXTS, start=1):
-    SHOT_EXAMPLES[idx] = f"<Prompt Shot>\n{txt}\n</Prompt Shot>\n"
-
 # --- AST Random ListOps problem gen params ---
 DEFAULT_MAX_OPS = 5  # Max operations (e.g. max, min ,etc.) in a problem
 MIN_ARITY = 3  # Min numbers in an operation
@@ -116,19 +109,18 @@ LOG_BACKUP_COUNT = 3  # Number of backup log files to keep
 CLEAR_LOGS_ON_START = True  # If True, delete existing logs in LOG_DIR on startup
 
 FINAL_QUESTION_TEMPLATE = Template(
-    "\n\n---\n\nBased *only* on the narrative actions and descriptions provided above, "
-    "what is the final numerical result or quantity of $primary_object obtained, calculated, "
+    "\n\n---\n\nBased *solely* on the sequence of events and operations described *throughout the entire narrative above*, " # Added emphasis
+    "what is the single, final numerical result or quantity of $primary_object obtained, calculated, "
     "or determined at the very end of the story?"
 )
 
 JUDGE_INSTRUCTIONS = (
-    "\n\nThink step-by-step through the narrative, identifying each operation "
+    "\n\nThink step-by-step through the narrative from beginning to end, identifying each operation "
     "(like finding the smallest, summing values, taking an average, etc.) "
-    "and the numbers involved at each stage, as implicitly described. "
-    "Perform the calculations as they occur in the story. "
-    "Output only the single, final integer answer."
+    "and the numbers involved *at the specific stage they are introduced or calculated* in the story. " # Added emphasis on stage
+    "Perform the calculations sequentially as they occur. "
+    "Output only the single, final integer answer derived from the root operation described last in the narrative." # Clarified root operation
 )
-
 # --- Dataclasses ---
 @dataclass
 class Config:
@@ -152,6 +144,32 @@ class Config:
 
 
 config = Config()
+
+
+# --- GenerationContext dataclass for shared mutable state in recursive narrative generation ---
+from dataclasses import dataclass
+import logging
+
+@dataclass
+class GenerationContext:
+    """
+    Container that groups together the mutable state shared across the
+    recursive narrative‑generation calls.  Replaces the long positional
+    parameter list that _generate_narrative_recursive previously required.
+    """
+    world: dict
+    config: Config
+    encoder: any
+    p_inflect: any
+    logger: logging.Logger
+    owner_map: dict
+    all_atoms: set
+    introduced_atoms: set
+    scenes: list
+    tokens_used: int
+    last_scene_text: str
+    beat_counter: dict
+    max_pad_paragraphs: int = 2
 
 
 MODEL = "gpt-4.5-preview"
@@ -199,6 +217,7 @@ if not logger.handlers:
         logger.error(f"Failed to configure OpenAI client: {e}")
 
 
+
 # --- Inflect Engine ---
 try:
     p_inflect = inflect.engine()
@@ -207,24 +226,51 @@ except Exception as e:
     p_inflect = None
 
 
-def retry_api_call(func: Callable):
-    """Decorator to retry OpenAI API calls on failure with exponential backoff."""
+# --- Safe, memoised wrapper around inflect.number_to_words -----------------
+@lru_cache(maxsize=None)
+def num_to_words(n: int) -> str:
+    """
+    Convert an int to its English word form using inflect with memoisation.
+    Falls back to the digit string if inflect is unavailable or raises.
+    """
+    if p_inflect is None:
+        return str(n)
+    try:
+        return p_inflect.number_to_words(n)
+    except Exception:
+        return str(n)
+# --------------------------------------------------------------------------
 
-    def wrapper(*args, **kwargs):
-        delay = config.RETRY_INITIAL_DELAY
-        for attempt in range(1, config.RETRY_MAX_ATTEMPTS + 1):
-            try:
-                return func(*args, **kwargs)
-            except Exception as e:
-                logger.warning(
-                    f"API call error attempt {attempt}/{config.RETRY_MAX_ATTEMPTS}: {e}"
-                )
+# --- Generic retry helper (centralised back‑off policy) -------------------
+def with_retry(func: Callable, *args, **kwargs):
+    """
+    Call `func` with the supplied args/kwargs, retrying on exception
+    using exponential back‑off.
+    The policy is defined by `config.RETRY_MAX_ATTEMPTS` and
+    `config.RETRY_INITIAL_DELAY`.
+    """
+    delay = config.RETRY_INITIAL_DELAY
+    for attempt in range(1, config.RETRY_MAX_ATTEMPTS + 1):
+        try:
+            return func(*args, **kwargs)
+        except Exception as e:
+            logger.warning(
+                f"Retryable error calling {getattr(func, '__name__', repr(func))} "
+                f"(attempt {attempt}/{config.RETRY_MAX_ATTEMPTS}): {e}"
+            )
             if attempt == config.RETRY_MAX_ATTEMPTS:
-                logger.error("Max retry attempts reached.")
+                logger.error("Max retry attempts reached. Raising.")
                 raise
             time.sleep(delay)
             delay *= 2
+# --------------------------------------------------------------------------
 
+
+
+def retry_api_call(func: Callable):
+    """Decorator that applies the shared `with_retry` policy to `func`."""
+    def wrapper(*args, **kwargs):
+        return with_retry(func, *args, **kwargs)
     return wrapper
 
 
@@ -489,9 +535,6 @@ def generate_world(num_characters: int = 5, num_concepts: int = 7) -> dict:
     except Exception as e:
         logger.error(f"Error processing generated world JSON: {e}. Raw text: {text}")
         raise RuntimeError("World JSON processing failed.") from e
-    except Exception as e:
-        logger.error(f"World gen API call or processing error: {e}")
-        raise RuntimeError("World gen failed") from e
 
 
 # --- Number Extraction (Enhanced with Inflect for Words up to MAX_VALUE) ---
@@ -533,7 +576,7 @@ def _build_expanded_number_words_dict(
     num_word_dict = {}
     for i in range(max_val + 1):
         try:
-            word = p_inflect.number_to_words(i)
+            word = num_to_words(i)
             num_word_dict[word.lower()] = i
         except Exception as e:
             logger.warning(f"Inflect failed to convert {i} to words: {e}")
@@ -736,7 +779,6 @@ def get_atoms_in_subtree(node: Node) -> Set[int]:
 
 
 # --- ADDED FOR PHASE 4b: LLM Naming Function ---
-@retry_api_call
 def generate_owner_name_with_llm(
     world_info: dict,
     op_node: OpNode,
@@ -774,7 +816,7 @@ def generate_owner_name_with_llm(
         )
     # --- End Child Context ---
 
-    # --- Restore Detailed Prompt ---
+    # --- REFINED LLM Naming Prompt ---
     system_prompt = (
         "You are a creative assistant specializing in generating short, evocative, thematic names "
         "for concepts within a fictional narrative. Be concise. Output only the name."
@@ -788,16 +830,17 @@ def generate_owner_name_with_llm(
         f"Task: Generate a short (2-5 words), creative, and thematic name for an entity, "
         f"collection, process, or concept within this world.\n\n"
         f"Details about the entity to name:\n"
-        f"- It represents the outcome of an operation conceptually similar to finding the '{op_label}'.\n"
-        f"- {children_context}\n\n"
+        f"- It represents the outcome of an operation conceptually similar to '{op_label}'.\n"
+        f"- **Narrative Context:** This operation likely occurs *after* other steps have been completed. " # Added context
+        f"It might combine results from previous steps (represented conceptually by: {children_context if children_context else 'N/A'}) " # Clarified role of children
+        f"and/or involve newly introduced elements.\n\n"
         f"Instructions:\n"
         f"- The name should fit the {genre} genre and {setting} setting.\n"
         f"- Make it sound like a specific thing/idea in the story (e.g., 'The Oracle's Final Whisper', 'Sector Gamma Scan Results', 'Kaelen's Calculated Risk').\n"
-        f"- AVOID using the exact operation word (like '{op_node.op}' or '{op_label}').\n"
+        f"- AVOID using the exact operation word (like '{op_node.op}' or '{op_label}') or generic terms like 'Result' or 'Calculation'.\n" # Strengthened avoidance
         f"- Output only the generated name itself, with no quotes, labels, explanations, or introductory phrases like 'Here is a name:'."
     )
-    # --- End Detailed Prompt ---
-
+    # --- END REFINED IMPLEMENTATION ---
     prompt_log_header = f"--- LLM Owner Naming Prompt (Op: {op_node.op}, Attempting Call - No Stop Sequences) ---"
     prompt_content_for_log = f"System: {system_prompt}\nUser: {user_prompt}"
     logger.debug(
@@ -853,12 +896,13 @@ def generate_owner_name_with_llm(
             f"LLM generated owner name: '{candidate}' (processed from raw: '{raw_candidate}')"
         )
         return candidate
-
     except Exception as e:
         logger.error(
             f"LLM Naming API Error: {e}. Prompt that failed:\n{prompt_content_for_log}"
         )
         raise
+
+generate_owner_name_with_llm = retry_api_call(generate_owner_name_with_llm)
 
 
 # --- END PHASE 4b Function ---
@@ -870,29 +914,29 @@ class BeatGenerationError(Exception):
 
 # --- Narrative Generation with REVISED Parent Operator Prompting ---
 
+# --- Narrative Generation with REVISED Parent Operator Prompting ---
+
 def _generate_narrative_recursive(
     node: Node,
-    world: dict,
-    config: Config,
-    encoder,
-    p_inflect,
-    logger,
-    owner_map: dict,
-    all_atoms: set,
-    introduced_atoms: Set[int],
-    scenes: list,
-    tokens_used: int,
-    last_scene_text: str,
-    beat_counter: dict,
-    is_root: bool, # Flag to know if this is the root node call
-    max_pad_paragraphs: int = 2,
+    context: "GenerationContext",
+    is_root: bool,  # Flag to know if this is the root node call
 ):
     """
     Recursive helper for POST-ORDER strict narrative generation.
     Processes children first, then the current node.
     Handles nested operators with specific prompt instructions.
-    Returns (scenes, tokens_used, last_scene_text).
+    Modifies the context object directly.
     """
+    # --- Unpack shared context (read-only access mostly, modification happens via context object) ---
+    world = context.world
+    config = context.config
+    encoder = context.encoder
+    p_inflect = context.p_inflect
+    logger = context.logger
+    owner_map = context.owner_map
+    all_atoms = context.all_atoms
+    # introduced_atoms, scenes, tokens_used, last_scene_text are accessed/modified via context
+
     node_id = id(node)
     owner_name = owner_map.get(node_id, f"the_unnamed_{node.op}_entity" if isinstance(node, OpNode) else "atom")
     logger.debug(f"_generate_narrative_recursive (POST-ORDER): processing node {getattr(node, 'op', 'Atom')} with owner '{owner_name}'")
@@ -900,43 +944,35 @@ def _generate_narrative_recursive(
     # --- Base case: Atom ---
     if isinstance(node, Atom):
         logger.debug(f"Node is Atom ({node.n}), returning.")
-        return scenes, tokens_used, last_scene_text
+        # No scene generation or state change needed for atoms in post-order
+        return # State is managed in context
 
     # --- Recursive Step: Process Children First (Post-Order) ---
-    child_owner_names = [] # Collect owner names of direct OpNode children
+    child_owner_names = []  # Collect owner names of direct OpNode children
     for child in node.children:
-        scenes, tokens_used, last_scene_text = _generate_narrative_recursive(
+        # Recursively call for the child. State updates happen within the context object.
+        _generate_narrative_recursive(
             child,
-            world,
-            config,
-            encoder,
-            p_inflect,
-            logger,
-            owner_map,
-            all_atoms,
-            introduced_atoms,
-            scenes,
-            tokens_used,
-            last_scene_text,
-            beat_counter,
-            is_root=False, # Children are never the root
-            max_pad_paragraphs=max_pad_paragraphs,
+            context, # Pass the mutable context down
+            is_root=False,
         )
-        # Collect owner names ONLY for OpNode children that have names
+
+        # Collect owner names ONLY for OpNode children that have names AFTER the child call returns
         if isinstance(child, OpNode) and id(child) in owner_map:
              child_owner_names.append(owner_map[id(child)])
         elif isinstance(child, OpNode):
              # Log if an OpNode child somehow doesn't have a name mapped
              logger.warning(f"OpNode child {child.op} of parent {node.op} has no owner name in map.")
 
-        if tokens_used >= MAX_TOTAL_TOKENS - SAFETY_MARGIN:
+        # Check token budget *after* each child call returns and updates context.tokens_used
+        if context.tokens_used >= MAX_TOTAL_TOKENS - SAFETY_MARGIN:
             logger.warning(f"Token limit reached after processing child of operator {getattr(node, 'op', 'Atom')}. Stopping further generation for this branch.")
-            return scenes, tokens_used, last_scene_text
+            return # Stop processing further children or the parent node
 
-    # --- Process Current Operator Node (After Children) ---
-    logger.debug(f"Finished processing children for operator {getattr(node, 'op', 'Atom')}. Now processing node itself.")
-    beat_counter["current"] += 1
-    logger.info(f"Generating beat {beat_counter['current']}/{beat_counter['total']} for operator {node.op} ({owner_name})")
+    # --- Process Current Operator Node (After All Children Have Been Processed) ---
+    logger.debug(f"Finished processing children for operator {getattr(node, 'op', 'Atom')} ({owner_name}). Now processing node itself.")
+    context.beat_counter["current"] += 1
+    logger.info(f"Generating beat {context.beat_counter['current']}/{context.beat_counter['total']} for operator {node.op} ({owner_name})")
     op_label = OP_LABELS.get(node.op, node.op)
 
     # Identify direct atom children and calculate operand count
@@ -948,13 +984,18 @@ def _generate_narrative_recursive(
     # Define the set of STRICTLY REQUIRED atoms for this beat
     required_atoms_for_beat = set(direct_atom_values)
     result_val = None
+    # Ensure value is calculated if needed (should be pre-calculated by eval_node, but belt-and-suspenders)
+    if node.value is None:
+        logger.warning(f"Node {node.op} value was None, recalculating.")
+        eval_node(node) # Ensure value is present
     if node.op in ("SUM", "AVG", "SM"):
-        result_val = node.value if getattr(node, "value", None) is not None else eval_node(node)
+        result_val = node.value
         required_atoms_for_beat.add(result_val)
         logger.debug(f"Verification (Op: {node.op}): Result {result_val} ADDED to required_atoms_for_beat: {required_atoms_for_beat}")
 
-    # Determine forbidden atoms
-    forbidden_atoms_for_prompt = introduced_atoms
+    # Determine forbidden atoms (atoms introduced by *previous* beats, accessed via context)
+    # In post-order, 'introduced_atoms' contains everything from the children processed *before* this node.
+    forbidden_atoms_for_prompt = context.introduced_atoms.copy() # Use a copy to avoid modification issues if needed later
 
     # --- Semantic Layer: primary object concept ---
     primary_object = world["object"]
@@ -963,27 +1004,18 @@ def _generate_narrative_recursive(
     # MUST INCLUDE list (direct atoms + result if applicable)
     must_include_list = []
     if direct_atom_values:
-        try:
-            items = [f"{p_inflect.number_to_words(x)} ({x})" for x in sorted(direct_atom_values)]
-            must_include_list.extend(items)
-        except Exception as e:
-            logger.warning(f"Inflect error generating must_include object list: {e}")
-            must_include_list.extend([f"{x} ({x})" for x in sorted(direct_atom_values)])
+        items = [f"{num_to_words(x)} ({x})" for x in sorted(direct_atom_values)]
+        must_include_list.extend(items)
 
     operation_result_list_str = ""
     if result_val is not None:
-        try:
-            result_word = p_inflect.number_to_words(result_val)
-            result_desc = f"{result_word} ({result_val})"
-            must_include_list.append(result_desc)
-            operation_result_list_str = f", which is the number of {primary_object} they end up with."
-        except Exception as e:
-            logger.warning(f"Inflect error generating must_include result: {e}")
-            must_include_list.append(f"{result_val} ({result_val})")
-            operation_result_list_str = f", which is the number of {primary_object} they end up with."
+        result_word = num_to_words(result_val)
+        result_desc = f"{result_word} ({result_val})"
+        must_include_list.append(result_desc)
+        operation_result_list_str = f", which is the number of {primary_object} they end up with."
 
     if not must_include_list:
-         must_include_combined_str = "None applicable for this step" # Should only happen if no direct atoms AND no result (e.g. MIN/MAX/MED with only OpNode children)
+         must_include_combined_str = "None applicable for this step"
          logger.debug(f"No direct atoms or result value to MUST INCLUDE for {node.op} ({owner_name}).")
     elif len(must_include_list) == 1:
         must_include_combined_str = must_include_list[0]
@@ -993,26 +1025,22 @@ def _generate_narrative_recursive(
         must_include_combined_str = ", ".join(must_include_list[:-1]) + ", and " + must_include_list[-1]
 
     # MUST AVOID list
-    if forbidden_atoms_for_prompt:
-        try:
-            must_avoid_str = ", ".join(f"{p_inflect.number_to_words(x)} ({x})" for x in sorted(forbidden_atoms_for_prompt))
-        except Exception as e:
-            logger.warning(f"Inflect error generating must_avoid list: {e}")
-            must_avoid_str = ", ".join(map(str, sorted(forbidden_atoms_for_prompt)))
+    # We need to be careful here. Forbidden should be atoms introduced *before* this beat,
+    # BUT *not* the atoms required for *this* beat.
+    truly_forbidden_for_prompt = forbidden_atoms_for_prompt - required_atoms_for_beat
+    if truly_forbidden_for_prompt:
+        must_avoid_str = ", ".join(f"{num_to_words(x)} ({x})" for x in sorted(truly_forbidden_for_prompt))
     else:
         must_avoid_str = "None"
 
-    # MAY USE clause (checking against forbidden)
+    # MAY USE clause (checking against *truly* forbidden)
     may_use_parts = []
-    if operand_count > 0 and operand_count not in forbidden_atoms_for_prompt: # Only allow count if there are direct atoms
-        try:
-            operand_count_word = p_inflect.number_to_words(operand_count) if p_inflect else str(operand_count)
-            may_use_parts.append(f"the number {operand_count} ('{operand_count_word}', the count of direct items being considered)")
-        except Exception as e:
-            logger.warning(f"Inflect error generating operand_count word for prompt: {e}")
-            may_use_parts.append(f"the number {operand_count} (the count of direct items being considered)")
-
-    if 1 not in forbidden_atoms_for_prompt:
+    # Allow operand count only if > 0 and not forbidden
+    if operand_count > 0 and operand_count not in truly_forbidden_for_prompt:
+        operand_count_word = num_to_words(operand_count)
+        may_use_parts.append(f"the number {operand_count} ('{operand_count_word}', the count of direct items being considered)")
+    # Allow 'one' if not forbidden
+    if 1 not in truly_forbidden_for_prompt:
         may_use_parts.append("the number 1 ('one')")
 
     if may_use_parts:
@@ -1020,33 +1048,32 @@ def _generate_narrative_recursive(
     else:
         may_use_clause = ""
 
+    # --- REFINED: Ultra Strict Instruction for Post-Order ---
     # Final number rule instruction string
     ultra_strict_instruction = (
-        "**REVISED STRICT NUMBER RULE:**\n"
-        f"*   You MUST include the following numbers (use digits): {must_include_combined_str}{operation_result_list_str}.\n"
-        f"*   You MUST NOT mention any numbers from this forbidden list: {must_avoid_str}.\n"
-        f"{may_use_clause}"
-        "*   NO OTHER numbers besides these are allowed (no intermediate calculations, no unrelated values)."
+        "**ULTRA-STRICT NUMBER RULES (Apply ONLY to THIS Scene):**\n"
+        f"*   **MUST INCLUDE:** The narrative for *this specific scene* must explicitly mention the following numbers (use digits): {must_include_combined_str}{operation_result_list_str}. These represent the direct inputs and/or the calculated result *for this step only*.\n"
+        f"*   **MUST AVOID (FORBIDDEN):** Do NOT mention any numbers from this list: {must_avoid_str}. These numbers belong to *other, previously completed* steps or unrelated parts of the story.\n"
+        f"{may_use_clause}" # This clause already checks against the forbidden list
+        "*   **ABSOLUTELY NO OTHER NUMBERS:** Do not introduce any other numerical values, intermediate calculations, counts (unless explicitly allowed in MAY USE), or unrelated figures into this scene's text.\n"
+        "**Adhere strictly to these rules for this scene only.**"
     )
-
+    # --- END REFINED IMPLEMENTATION ---
     # --- Build the scene preamble (explicit quantities) ---
-    # Use object_list_str which contains "word (digit)" format for direct atoms
+    # (This logic remains the same, depends only on direct_atom_values)
     object_list_str_for_preamble = ""
     if direct_atom_values:
-        try:
-            items = [f"{p_inflect.number_to_words(x)} ({x})" for x in sorted(direct_atom_values)]
-            if len(items) == 1:
-                object_list_str_for_preamble = items[0]
-            elif len(items) == 2:
-                object_list_str_for_preamble = " and ".join(items)
-            else:
-                object_list_str_for_preamble = ", ".join(items[:-1]) + ", and " + items[-1]
-        except Exception:
-            object_list_str_for_preamble = ", ".join(str(x) for x in sorted(direct_atom_values))
+        items = [f"{num_to_words(x)} ({x})" for x in sorted(direct_atom_values)]
+        if len(items) == 1:
+            object_list_str_for_preamble = items[0]
+        elif len(items) == 2:
+            object_list_str_for_preamble = " and ".join(items)
+        else:
+            object_list_str_for_preamble = ", ".join(items[:-1]) + ", and " + items[-1]
 
     scene_preamble = "" # Default empty
-    # Only generate preambles if there are direct atoms to describe
     if direct_atom_values:
+        # (Keep the existing if/elif block for SUM, MED, MIN, MAX, AVG, SM based on node.op)
         if node.op == "SUM":
             scene_preamble = (
                 f"In this stage, the characters discover separate caches or groups containing "
@@ -1085,55 +1112,43 @@ def _generate_narrative_recursive(
                  f"they are forced to give away most of their collection, leaving them only with a quantity equal to the final digit of the total number gathered (e.g., they collect a total of 27 {primary_object}, and can only walk away with 7 {primary_object})."
              )
 
-    # --- IMPLEMENTATION: Dynamic Ownership Instruction Detail ---
+    # (This logic remains the same, depends on child_owner_names collected earlier and direct_atom_values)
     has_operator_children = bool(child_owner_names)
     has_direct_atom_children = bool(direct_atom_values)
     ownership_instruction_detail = ""
+    input_description_parts = [] # Describe the inputs for this step
 
+    # Describe inputs from previous steps (child operations)
     if has_operator_children:
         child_names_str = ', '.join(f"'{name}'" for name in child_owner_names)
+        input_description_parts.append(f"the outcome(s) from previous step(s) represented conceptually by {child_names_str}")
+        # Add an explicit warning about not using their numeric values
         ownership_instruction_detail += (
-            f"This part of the story involves the entity '{owner_name}'. "
-            f"It builds upon previous outcomes represented by: {child_names_str}. " # Use 'represented by'
-            f"Narratively describe how the rule '{op_label}' is applied to the conceptual results of these previous steps "
+            f"REMEMBER: The specific numeric values resulting from {child_names_str} were determined in *earlier* scenes and are FORBIDDEN here. "
+            f"Refer to them conceptually or by name only.\n"
         )
-        if has_direct_atom_children:
-            # Mention direct atoms if they exist alongside operator children
-            try:
-                 direct_atom_words = [p_inflect.number_to_words(a) for a in sorted(direct_atom_values)]
-                 direct_values_str = ', '.join(f"{w} ({v})" for w, v in zip(direct_atom_words, sorted(direct_atom_values)))
-                 ownership_instruction_detail += (
-                     f"along with any direct quantities ({direct_values_str}) also involved in this step. " # Clarify 'quantities'
-                 )
-            except Exception as e:
-                 logger.warning(f"Inflect error generating direct atom words for parent prompt: {e}")
-                 ownership_instruction_detail += f"along with any direct numerical quantities also involved. "
 
-        ownership_instruction_detail += (
-            f"Focus on the action of applying the '{op_label}' rule to these inputs (referring to previous outcomes by name, e.g., '{child_owner_names[0]}') to determine the final state or consequence of '{owner_name}'. "
-            f"Do NOT mention the specific numerical values associated with {child_names_str} as they are forbidden." # Explicit negative constraint
-        )
-    elif has_direct_atom_children: # Only direct atoms
-         # Use the existing operand_context_str which lists direct values
-         operand_context_str = ""
-         try:
-             atom_words = [p_inflect.number_to_words(a) for a in sorted(direct_atom_values)]
-             operand_context_str = f"direct values: {', '.join(atom_words)}"
-         except Exception as e:
-             logger.warning(f"Inflect error generating operand words: {e}")
-             operand_context_str = f"direct values: {', '.join(map(str, sorted(direct_atom_values)))}"
+    # Describe inputs from direct atoms discovered in *this* step
+    if has_direct_atom_children:
+        atom_words = [num_to_words(a) for a in sorted(direct_atom_values)]
+        direct_values_str = ', '.join(f"{w} ({v})" for w, v in zip(atom_words, sorted(direct_atom_values)))
+        input_description_parts.append(f"newly discovered quantities: {direct_values_str}")
 
-         ownership_instruction_detail = (
-             f"This part of the story resolves the entity or concept known as '{owner_name}'. "
-             f"Its final state or significance is determined by applying a rule ({op_label}) to its constituent parts ({operand_context_str}). "
-             f"Describe narratively how '{owner_name}' is finalized, evaluated, or what consequences arise from its state. "
-         )
-    else: # Fallback (e.g., MIN/MAX/MED with only OpNode children)
-        ownership_instruction_detail = (
-             f"This part of the story resolves the entity or concept known as '{owner_name}'. "
-             f"Its final state or significance is determined by applying a rule ({op_label}) to previously established results (refer to them by name if applicable). "
-             f"Describe narratively how '{owner_name}' is finalized, evaluated, or what consequences arise from its state."
-        )
+    # Combine input descriptions
+    if not input_description_parts:
+        inputs_str = "inputs determined entirely by context (e.g., selecting between previous outcomes)" # Fallback for MIN/MAX/MED on OpNodes only
+    elif len(input_description_parts) == 1:
+        inputs_str = input_description_parts[0]
+    else:
+        inputs_str = " and ".join(input_description_parts)
+
+    # Construct the main instruction
+    ownership_instruction_detail += (
+        f"This scene focuses on resolving the step named '{owner_name}'. "
+        f"Narratively describe how applying the rule '{op_label}' to {inputs_str} "
+        f"determines the final state, value, or significance associated with '{owner_name}'. "
+        f"Focus on the *action* of applying the rule in this specific scene."
+    )
     # --- END IMPLEMENTATION ---
 
 
@@ -1153,7 +1168,7 @@ def _generate_narrative_recursive(
 
 
     # --- Build the final prompt ---
-    # Include existing examples
+    # (Keep existing examples)
     prompt_examples = (
          "Example 1:\n" +
          "**ULTRA-STRICT NUMBER RULE:**\n" +
@@ -1190,14 +1205,15 @@ def _generate_narrative_recursive(
          "Reasoning: The number 'three' (3) was mentioned. It was not required (20, 24), not forbidden (10), not the allowed count (2), and not the allowed number one (1). Therefore, it violates the 'NO OTHER numbers' rule.\n"
      )
 
+    # Use context.last_scene_text which was updated by the last child call
     beat_prompt = prompt_examples + BASE_BEAT_TEMPLATE.substitute(
         beat_mode=beat_mode,
         characters=json.dumps(world["characters"]),
         setting=world["setting"],
-        snippet=last_scene_text[-100:],
+        snippet=context.last_scene_text[-100:], # Use context's last scene text
         task_header=task_header,
-        task_body=task_body, # Use the dynamically constructed task body
-        ultra_strict_instruction=ultra_strict_instruction, # Use the revised number rules
+        task_body=task_body,
+        ultra_strict_instruction=ultra_strict_instruction,
     )
 
     log_prompt(
@@ -1207,24 +1223,26 @@ def _generate_narrative_recursive(
 
     # --- Token Budget Check ---
     estimated_prompt_tokens = len(encoder.encode(beat_prompt))
+    # Use context.tokens_used which includes tokens from children
     if would_exceed_budget(
-        tokens_used,
+        context.tokens_used,
         estimated_prompt_tokens + MAX_BEAT_TOKENS,
         MAX_TOTAL_TOKENS,
         SAFETY_MARGIN,
     ):
         logger.warning(f"Approaching token limit before generating operator {node.op} ({owner_name}). Stopping.")
-        return scenes, tokens_used, last_scene_text
+        return # Stop processing
 
     # --- Create Validator ---
     validate_beat_numbers = make_number_validator(
-        allowed_atoms=required_atoms_for_beat, # Use the CORRECT set of required atoms
-        forbidden_atoms=forbidden_atoms_for_prompt,
-        operand_count=operand_count # Pass operand_count separately
+        allowed_atoms=required_atoms_for_beat,
+        forbidden_atoms=truly_forbidden_for_prompt, # Use the correctly calculated forbidden set
+        operand_count=operand_count
     )
+    # Padding validator needs to forbid everything introduced so far
     validate_padding = make_number_validator(
          allowed_atoms=set(),
-         forbidden_atoms=introduced_atoms,
+         forbidden_atoms=context.introduced_atoms.union(required_atoms_for_beat), # Forbid everything seen + required for this beat
          operand_count=0
     )
 
@@ -1241,7 +1259,7 @@ def _generate_narrative_recursive(
                     {"role": "user", "content": beat_prompt},
                 ],
                 max_tokens=MAX_BEAT_TOKENS,
-                temperature=0.4, # beat gen temperature
+                temperature=0.4,
             )
             candidate_text = resp.choices[0].message.content.strip()
             log_prompt(
@@ -1251,30 +1269,25 @@ def _generate_narrative_recursive(
             if not candidate_text or candidate_text.lower().startswith(("i cannot", "i'm sorry")):
                 reason = "empty or API refusal"
             elif not validate_beat_numbers(candidate_text):
-                reason = "inflect validation failed"
-            # Optional: Add back operand presence check if needed, but validator should handle required numbers
-            # elif atoms_to_introduce_this_beat and not all(
-            #     check_operand_presence(candidate_text, op) for op in atoms_to_introduce_this_beat
-            # ):
-            #     reason = "operand presence check failed"
+                reason = "number validation failed" # Updated reason
             else:
                 beat_text = candidate_text
                 break
         except Exception as e:
             reason = f"exception: {e}"
         if attempt < config.MAX_BEAT_RETRIES:
-            logger.warning(f"Beat {beat_counter['current']}/{beat_counter['total']} retry {attempt}/{config.MAX_BEAT_RETRIES} for operator {node.op} ({owner_name}): {reason}")
+            logger.warning(f"Beat {context.beat_counter['current']}/{context.beat_counter['total']} retry {attempt}/{config.MAX_BEAT_RETRIES} for operator {node.op} ({owner_name}): {reason}")
             time.sleep(config.RETRY_INITIAL_DELAY * (2 ** (attempt - 1)))
 
     # --- Process Successful Generation or Raise Error ---
     if beat_text:
         btoks = len(encoder.encode(beat_text))
-        scenes.append(beat_text)
-        tokens_used += btoks
-        last_scene_text = beat_text
-        # Update introduced atoms with the numbers required for THIS beat
-        introduced_atoms.update(required_atoms_for_beat)
-        logger.debug(f"Beat {beat_counter['current']} successful. Introduced atoms updated: {introduced_atoms}")
+        context.scenes.append(beat_text) # Modify context
+        context.tokens_used += btoks      # Modify context
+        context.last_scene_text = beat_text # Modify context
+        # Update introduced atoms *in the context* with the numbers required for THIS beat
+        context.introduced_atoms.update(required_atoms_for_beat) # Modify context
+        logger.debug(f"Beat {context.beat_counter['current']} successful. Introduced atoms updated: {context.introduced_atoms}")
     else: # If generation failed after all retries
         logger.error(
             f"Operator {node.op} ({owner_name}) failed after {config.MAX_BEAT_RETRIES} attempts. Aborting narrative generation."
@@ -1283,19 +1296,91 @@ def _generate_narrative_recursive(
             f"Failed to generate narrative beat for operator {node.op} ({owner_name})"
         )
 
-    # --- Padding Generation Loop (existing logic) ---
+    # --- Padding Generation Loop (existing logic, uses context) ---
     pad_count = 0
-    add_padding = not is_root
-    while add_padding and tokens_used < MAX_TOTAL_TOKENS - SAFETY_MARGIN and pad_count < max_pad_paragraphs:
-        # ... (padding prompt generation using validate_padding) ...
-        # ... (LLM call for padding) ...
-        # ... (append padding if valid and within budget) ...
+    add_padding = not is_root # No padding after the final root node beat
+    while add_padding and context.tokens_used < MAX_TOTAL_TOKENS - SAFETY_MARGIN and pad_count < context.max_pad_paragraphs:
         pad_count += 1
+        logger.debug(f"Attempting padding {pad_count}/{context.max_pad_paragraphs} after beat for {node.op} ({owner_name})")
+
+        # --- Padding Prompt ---
+        padding_prompt_template = Template(
+            "You are a $beat_mode storyteller adding brief filler between narrative steps.\n"
+            "Characters: $characters\n"
+            "Setting: $setting\n"
+            'Previous Scene Snippet (End of last scene): "...$snippet"\n\n'
+            "--- Task: Add Narrative Padding ---\n"
+            "Continue the story *immediately* following the previous snippet. Write one short paragraph (3-5 sentences) "
+            "describing atmosphere, character thoughts/reactions, or a minor, non-quantitative action/transition. "
+            "DO NOT advance the main plot involving calculations or obtaining specific quantities.\n\n"
+            "**!!! CRITICAL RULE: ZERO NUMBERS !!!**\n"
+            "*   This padding text MUST NOT contain ANY numbers whatsoever (no digits, no number words like 'one', 'two', 'first', 'second', etc.).\n"
+            "*   Forbidden numbers from previous steps include: $forbidden_list_str\n\n" # Keep list for context, but main rule is ZERO numbers
+            "Output only the narrative text for this padding paragraph."
+        )
+        # ... rest of padding generation logic ...
+
+        # Update forbidden list for padding prompt display
+        current_forbidden_for_padding = context.introduced_atoms # Everything introduced so far is forbidden
+        forbidden_list_str_padding = "None"
+        if current_forbidden_for_padding:
+             forbidden_list_str_padding = ", ".join(f"{num_to_words(x)} ({x})" for x in sorted(current_forbidden_for_padding))
 
 
-    return scenes, tokens_used, last_scene_text
+        padding_prompt = padding_prompt_template.substitute(
+            beat_mode=f"{world['genre']} descriptive padding",
+            characters=json.dumps(world["characters"]),
+            setting=world["setting"],
+            snippet=context.last_scene_text[-100:], # Use context's last scene text
+            forbidden_list_str=forbidden_list_str_padding
+        )
+
+        log_prompt(f"Padding Prompt {pad_count} after {node.op} ({owner_name})", padding_prompt)
+
+        # --- Token Budget Check for Padding ---
+        estimated_pad_prompt_tokens = len(encoder.encode(padding_prompt))
+        if would_exceed_budget(
+            context.tokens_used,
+            estimated_pad_prompt_tokens + MAX_PAD_TOKENS,
+            MAX_TOTAL_TOKENS,
+            SAFETY_MARGIN,
+        ):
+            logger.warning(f"Approaching token limit before generating padding {pad_count}. Stopping padding.")
+            add_padding = False # Prevent further padding attempts
+            break # Exit padding loop
+
+        # --- Generate Padding with Retry ---
+        # Use the stricter padding validator created earlier
+        padding_text = generate_with_retry(
+            system_prompt="You are a storyteller adding descriptive filler. FOLLOW THE USER'S NUMBER RULES EXACTLY.",
+            user_prompt=padding_prompt,
+            max_tokens=MAX_PAD_TOKENS,
+            validate_fn=validate_padding, # Use the correct validator
+            retries=config.MAX_PAD_RETRIES,
+        )
+
+        if padding_text:
+            ptoks = len(encoder.encode(padding_text))
+            if context.tokens_used + ptoks <= MAX_TOTAL_TOKENS - SAFETY_MARGIN:
+                context.scenes.append(padding_text) # Modify context
+                context.tokens_used += ptoks      # Modify context
+                context.last_scene_text = padding_text # Modify context
+                logger.debug(f"Padding {pad_count} successful.")
+            else:
+                logger.warning(f"Generated padding {pad_count} would exceed token limit. Discarding.")
+                add_padding = False # Prevent further padding attempts
+                break # Exit padding loop
+        else:
+            logger.warning(f"Padding generation {pad_count} failed after retries. Stopping padding.")
+            add_padding = False # Prevent further padding attempts
+            break # Exit padding loop
+
+    # --- No explicit return needed as context is modified in place ---
+    return
 
 
+# --- generate_narrative function remains largely the same ---
+# It sets up the context and makes the initial call to the modified _generate_narrative_recursive
 
 def generate_narrative(
     ast: Node, world: dict, config: Config, encoder, p_inflect, logger
@@ -1319,6 +1404,18 @@ def generate_narrative(
     if p_inflect is None:
         raise RuntimeError("Inflect engine not initialized.")
 
+    # --- Pre-calculate node values ---
+    # Ensure all node values are computed *before* generation starts
+    # This is crucial because post-order relies on child values being ready
+    logger.debug("Pre-calculating all AST node values...")
+    try:
+        eval_node(ast) # Evaluate the whole tree to populate .value attributes
+        logger.debug("AST node values pre-calculation complete.")
+    except Exception as e:
+        logger.error(f"Error during AST pre-evaluation: {e}")
+        raise RuntimeError("Failed to pre-evaluate AST values.") from e
+
+
     all_atoms = get_atoms_in_subtree(ast)
     # Owner mapping via postorder...
     operator_nodes = [n for n in postorder(ast) if not isinstance(n, Atom)]
@@ -1327,7 +1424,8 @@ def generate_narrative(
         if operator_nodes:
             use_llm = config.USE_LLM_NAMING
             characters = world.get("characters", [])
-            for i, op_node in enumerate(operator_nodes):
+            # Iterate in post-order to ensure child names are available for parent LLM calls
+            for op_node in operator_nodes: # Already in post-order thanks to postorder() generator
                 if not isinstance(op_node, OpNode):
                     continue
                 node_id = id(op_node)
@@ -1335,17 +1433,23 @@ def generate_narrative(
                 if use_llm:
                     child_owner_names = []
                     for child in op_node.children:
+                        # Child names *should* be in the map already due to post-order iteration
                         if isinstance(child, OpNode) and id(child) in owner_map:
                             child_owner_names.append(owner_map[id(child)])
+                        elif isinstance(child, OpNode):
+                             logger.warning(f"LLM Naming: Child OpNode {child.op} of parent {op_node.op} has no owner name in map during parent naming.")
+
                     try:
                         owner_name = generate_owner_name_with_llm(
                             world, op_node, child_owner_names
                         )
                     except Exception as e:
                         logger.error(f"LLM Naming failed for OpNode {op_node.op}: {e}")
-                        owner_name = None
-                if not owner_name:
+                        owner_name = None # Fallback handled below
+
+                if not owner_name: # Fallback naming
                     primary_object = world["object"]
+                    op_index = operator_nodes.index(op_node) # Find index for fallback naming
                     if characters:
                         char_name = random.choice(characters).get("name", "Someone")
                         possessive = (
@@ -1353,58 +1457,101 @@ def generate_narrative(
                             if char_name.endswith("s")
                             else f"{char_name}'s"
                         )
-                        owner_name = f"{possessive} {primary_object}"
+                        # Make fallback slightly more descriptive
+                        owner_name = f"{possessive} {op_node.op} Result ({op_index+1})"
                     else:
-                        owner_name = f"the {primary_object} ({op_node.op} #{i+1})"
+                        owner_name = f"the {primary_object} ({op_node.op} #{op_index+1})"
                 owner_map[node_id] = owner_name
+                logger.debug(f"Mapped owner name for node {op_node.op}: '{owner_name}'")
+
     # Intro scene generation...
     scenes = []
     tokens_used = 0
-    intro_prompt = "...ZERO NUMBERS ALLOWED..."
-    intro_text = generate_with_retry(
-        "You are a storyteller. Do not mention any numbers.",
-        "Write a short introductory scene for the story's world, setting, and characters. ZERO NUMBERS ALLOWED.",
-        250,
-        lambda txt: len(extract_numbers_from_text(txt)) == 0,
-        retries=2,
+    intro_prompt = (
+        "You are a creative storyteller setting a scene.\n"
+        f"World Info: Genre={world.get('genre', 'Unknown')}, Setting={world.get('setting', 'Unknown')}.\n"
+        f"Characters: {json.dumps(world.get('characters', []))}\n"
+        "Task: Write a short introductory scene (2-4 sentences) establishing the setting and introducing the main characters or their initial situation. "
+        "**ULTRA-STRICT NUMBER RULE:** This introduction MUST NOT contain ANY numbers (digits or words like 'one', 'two', etc.)."
     )
-    if intro_text and tokens_used + len(encoder.encode(intro_text)) <= MAX_TOTAL_TOKENS:
+    intro_text = generate_with_retry(
+        system_prompt="You are a storyteller. FOLLOW THE USER'S NUMBER RULES EXACTLY.",
+        user_prompt=intro_prompt,
+        max_tokens=250,
+        # Validator ensures no numbers are present
+        validate_fn=make_number_validator(allowed_atoms=set(), forbidden_atoms=all_atoms.union({0,1}), operand_count=0),
+        retries=3, # Increase retries slightly for this specific task
+    )
+
+    if intro_text and len(encoder.encode(intro_text)) <= MAX_TOTAL_TOKENS:
         scenes.append(intro_text)
         tokens_used += len(encoder.encode(intro_text))
+        logger.info("Generated introductory scene.")
+    else:
+        logger.warning("Failed to generate valid introductory scene or it was too long. Starting narrative without intro.")
+        intro_text = None # Ensure it's None if failed
+
     last_scene_text = intro_text if intro_text else "The story begins..."
     introduced_atoms_during_generation = set()
     total_beats = len(operator_nodes)
     beat_counter = {"current": 0, "total": total_beats}
+
+    # --- Create GenerationContext instance for sharing state ---
+    context = GenerationContext(
+        world=world,
+        config=config,
+        encoder=encoder,
+        p_inflect=p_inflect,
+        logger=logger,
+        owner_map=owner_map,
+        all_atoms=all_atoms,
+        introduced_atoms=introduced_atoms_during_generation, # Starts empty
+        scenes=scenes, # Starts with potential intro
+        tokens_used=tokens_used, # Starts with potential intro tokens
+        last_scene_text=last_scene_text, # Starts with potential intro text
+        beat_counter=beat_counter,
+        max_pad_paragraphs=2, # Or get from config
+    )
+
+    # --- Start the POST-ORDER recursive generation ---
     try:
-        scenes, tokens_used, last_scene_text = _generate_narrative_recursive(
+        # Initial call to the recursive function for the root node
+        _generate_narrative_recursive(
             ast,
-            world,
-            config,
-            encoder,
-            p_inflect,
-            logger,
-            owner_map,
-            all_atoms,
-            introduced_atoms_during_generation,
-            scenes,
-            tokens_used,
-            last_scene_text,
-            beat_counter,
+            context, # Pass the mutable context
             is_root=True,
-            max_pad_paragraphs=2,
         )
     except BeatGenerationError as e:
-        logger.error(f"Narrative generation aborted: {e}")
+        logger.error(f"Narrative generation aborted due to beat failure: {e}")
+        return None # Indicate failure
+    except Exception as e:
+        logger.error(f"Unexpected error during recursive narrative generation: {e}", exc_info=True)
+        return None # Indicate failure
+
+    # --- Final Assembly (using the modified context) ---
+    if not context.scenes: # Check if any scenes were generated (intro might have failed too)
+        logger.error("Narrative generation resulted in no scenes.")
         return None
-    if not scenes:
-        return None
-    narrative_body = "\n\n".join(scenes).strip()
-    primary_object = world.get("object", "items") # Get the object name from world info
+
+    narrative_body = "\n\n".join(context.scenes).strip()
+    primary_object = world.get("object", "items")
     question = FINAL_QUESTION_TEMPLATE.substitute(primary_object=primary_object)
-    judge_instructions = JUDGE_INSTRUCTIONS # Use the constant defined above
+    judge_instructions = JUDGE_INSTRUCTIONS
     final_prompt = narrative_body + question + judge_instructions
-    logger.info(f"Successfully generated and validated narrative prompt. Total tokens used (estimated): {tokens_used}")
+
+    # Final validation check (optional but recommended)
+    final_token_count = len(encoder.encode(final_prompt))
+    if final_token_count > MAX_TOTAL_TOKENS:
+         logger.warning(f"Final generated prompt ({final_token_count} tokens) exceeds MAX_TOTAL_TOKENS ({MAX_TOTAL_TOKENS}). Truncation might occur.")
+         # Depending on requirements, you might return None or the truncated prompt
+
+    logger.info(f"Successfully generated narrative prompt using POST-ORDER traversal. Final estimated tokens: {context.tokens_used} (body), {final_token_count} (full prompt)")
     return final_prompt.strip()
+
+# --- Other functions (AST generation, evaluation, world gen, main loop, etc.) remain unchanged ---
+# Make sure to update the `validation_mode` string in `generate_single_sample`'s metadata
+# if you want to track that this version uses post-order. E.g.:
+# "validation_mode": "postorder_llm_ownership_v1_strict_validate" -> "postorder_llm_ownership_v2_strict_validate" (or similar)
 
 
 def ast_to_prefix(node: Node) -> str:

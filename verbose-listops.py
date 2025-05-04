@@ -57,6 +57,80 @@ NUM_SAMPLES_TO_GENERATE = 2  # How many samples to generate in one run
 OUTPUT_FILENAME = "gpt4.5-verbose_listops_dataset_ultra_strict_v4.jsonl"  # Output file for the dataset
 DEFAULT_MAX_WORKERS = 8  # Default number of parallel threads for batch generation
 
+# --- COMPREHENSIVE FEW-SHOT EXAMPLES ---
+# Each tuple: (example_rules_string, good_output, bad_output, failure_reason)
+# Assumes a strict validator (like original or Option A allowing 0-10 unless forbidden)
+FEW_SHOT_EXAMPLES_STRICT = [
+    (
+        # Example 1 Context: Basic MIN/MAX Success
+        (
+            "**ULTRA-STRICT NUMBER RULES (Apply ONLY to THIS Scene):**\n"
+            "*   **MUST INCLUDE:** ... mention ... numbers (use digits): thirty-nine (39), ninety (90), and ninety-three (93).\n"
+            "*   **MUST AVOID (FORBIDDEN):** Do NOT mention ...: five (5).\n"
+            "*   You MAY use the number 3 ('three', the count of direct items...) and the number 1 ('one').\n"
+            "*   **ABSOLUTELY NO OTHER NUMBERS:** Do not introduce any other numerical values...\n"
+            "**Adhere strictly to these rules for this scene only.**"
+        ),
+        # GOOD Narrative Output (Follows Rules)
+        "Felix examined the three newly opened caches. \"Right then,\" he declared, pointing, \"this one holds 93 relics, that one 90 relics, and the last contains 39 relics.\" Liora consulted the Cipher Wheel's concept. \"We need the smallest. That means the cache of 39.\"",
+        # BAD Narrative Output (Failure Example: Includes disallowed extra '12')
+        "Felix examined the three newly opened caches. \"Right then,\" he declared, pointing, \"this one holds 93 relics, that one 90 relics, and the last contains 39 relics.\" Liora consulted the Cipher Wheel's concept. \"We need the smallest. That means the cache of 39. It took them 12 minutes to decide.\"",
+        # REASONING FOR FAILURE
+        "The BAD output failed because it included the number 12. Rule Analysis: 12 was not in MUST INCLUDE {39, 90, 93}, not in MUST AVOID {5}, not the allowed operand count (3), and not an implicitly allowed small number (0-10). It violates the 'ABSOLUTELY NO OTHER NUMBERS' rule."
+    ),
+    (
+        # Example 2 Context: SUM/AVG/SM Success (Result NOT required in text)
+        (
+            "**ULTRA-STRICT NUMBER RULES (Apply ONLY to THIS Scene):**\n"
+            "*   **MUST INCLUDE:** ... mention ... numbers (use digits): twenty-eight (28), fifty-five (55), and ninety-four (94).\n"
+            "*   **MUST AVOID (FORBIDDEN):** Do NOT mention ...: seven (7).\n"
+            "*   You MAY use the number 3 ('three', the count of direct items...) and the number 1 ('one').\n"
+            "*   **ABSOLUTELY NO OTHER NUMBERS:** Do not introduce any other numerical values...\n"
+            "**Adhere strictly to these rules for this scene only.**"
+        ),
+        # GOOD Narrative Output (Follows Rules)
+        "Fizzwick gathered the caches. \"Okay, we have 28 gears, 55 gears, and 94 gears.\" Kelvin nodded. \"The Ninth Gear Dial works on their combined essence, using only the final digit. Let's activate it.\"",
+        # BAD Narrative Output (Failure Example: Missing required '55')
+        "Fizzwick gathered the caches. \"Okay, we have 28 gears and 94 gears.\" Kelvin nodded. \"The Ninth Gear Dial works on their combined essence, using only the final digit. Let's activate it.\"",
+        # REASONING FOR FAILURE
+        "The BAD output failed because it omitted a required number. Rule Analysis: It failed to include 55 from the MUST INCLUDE set {28, 55, 94}."
+    ),
+    (
+        # Example 3 Context: Failure by Including Forbidden
+        (
+            "**ULTRA-STRICT NUMBER RULES (Apply ONLY to THIS Scene):**\n"
+            "*   **MUST INCLUDE:** ... mention ... numbers (use digits): thirty-nine (39), ninety (90), and ninety-three (93).\n"
+            "*   **MUST AVOID (FORBIDDEN):** Do NOT mention ...: five (5).\n"
+            "*   You MAY use the number 3 ('three', the count of direct items...) and the number 1 ('one').\n"
+            "*   **ABSOLUTELY NO OTHER NUMBERS:** Do not introduce any other numerical values...\n"
+            "**Adhere strictly to these rules for this scene only.**"
+        ),
+        # GOOD Narrative Output (Same as Example 1 Good)
+        "Felix examined the three newly opened caches. \"Right then,\" he declared, pointing, \"this one holds 93 relics, that one 90 relics, and the last contains 39 relics.\" Liora consulted the Cipher Wheel's concept. \"We need the smallest. That means the cache of 39.\"",
+        # BAD Narrative Output (Failure Example: Includes forbidden '5')
+        "Felix examined the three newly opened caches. \"Right then,\" he declared, pointing, \"this one holds 93 relics, that one 90 relics, and the last contains 39 relics.\" Liora consulted the Cipher Wheel's concept. \"We need the smallest, like the 5 relics from before. That means the cache of 39.\"",
+        # REASONING FOR FAILURE
+        "The BAD output failed because it included a forbidden number. Rule Analysis: It included 5, which is explicitly listed in the MUST AVOID (FORBIDDEN) set {5}."
+    ),
+     (
+        # Example 4 Context: Failure by Including Disallowed Small Number (that was forbidden)
+        (
+            "**ULTRA-STRICT NUMBER RULES (Apply ONLY to THIS Scene):**\n"
+            "*   **MUST INCLUDE:** ... mention ... numbers (use digits): forty-eight (48), twenty-seven (27), eighty (80).\n"
+            "*   **MUST AVOID (FORBIDDEN):** Do NOT mention ...: five (5), ninety (90).\n" # Example where 5 is forbidden
+            "*   You MAY use the number 3 ('three', the count of direct items...) and the number 1 ('one').\n"
+            "*   **ABSOLUTELY NO OTHER NUMBERS:** Do not introduce any other numerical values...\n"
+            "**Adhere strictly to these rules for this scene only.**"
+        ),
+        # GOOD Narrative Output
+        "Kelvin pointed to the three pressure valves. \"Readings are 48, 27, and 80.\" Rynna checked her notes. \"The mechanism requires the middle reading, which is 48.\"",
+        # BAD Narrative Output (Failure Example: Includes forbidden '5', even though it's small)
+         "Kelvin pointed to the three pressure valves. \"Readings are 48, 27, and 80.\" Rynna checked her notes. \"The mechanism requires the middle reading, which is 48. We only need 5 more units.\"",
+        # REASONING FOR FAILURE
+        "The BAD output failed because it included a forbidden number. Rule Analysis: It included 5. Although 5 is normally an allowed small number (0-10), it was explicitly listed in the MUST AVOID (FORBIDDEN) set {5, 90} for this specific beat, making it disallowed."
+    ),
+]
+
 # --- Base configurations ---
 # Directory for all log output within the project
 LOG_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "logs")
@@ -684,12 +758,16 @@ def extract_numbers_from_text(text: str) -> Set[int]:
 def make_number_validator(
     allowed_atoms: Set[int],
     forbidden_atoms: Set[int],
-    operand_count: int # <-- ADD THIS ARGUMENT
+    operand_count: int
 ) -> Callable[[str], bool]:
     """
     Return a validator function based on new rules, including operand count.
+    Using STRICT validation (e.g., original or Option A allowing 0-10 unless forbidden).
     """
-    logger.debug(f"Creating validator with: Allowed={allowed_atoms}, Forbidden={forbidden_atoms}, OperandCount={operand_count}")
+    logger.debug(f"Creating validator (STRICT for Few-Shot) with: Allowed={allowed_atoms}, Forbidden={forbidden_atoms}, OperandCount={operand_count}")
+
+    # Define the set of implicitly allowed small numbers (IF USING OPTION A VALIDATOR)
+    IMPLICITLY_ALLOWED_SMALL_NUMBERS = set(range(0, 11)) # Allow 0 through 10
 
     def validate(text: str) -> bool:
         found_numbers = extract_numbers_from_text(text)
@@ -701,47 +779,50 @@ def make_number_validator(
         if missing_expected:
             logger.debug(f"Validation FAIL (Rule 1): Missing required numbers: {missing_expected}")
             return False
-        
+
         # Rule 2: Check if any forbidden atoms are present
-        found_forbidden = (found_numbers & forbidden_atoms) - allowed_atoms # Subtract allowed atoms from the intersection
+        found_forbidden = found_numbers & forbidden_atoms
         if found_forbidden:
-            logger.debug(f"Validation FAIL (Rule 2): Found forbidden numbers (that are not required this beat): {found_forbidden}")
-            return False
+            truly_forbidden_found = found_forbidden - allowed_atoms
+            if truly_forbidden_found:
+                 logger.debug(f"Validation FAIL (Rule 2): Found forbidden numbers: {truly_forbidden_found}")
+                 return False
+            else:
+                 logger.debug(f"Validator INFO: Found number(s) {found_forbidden} that were technically forbidden but also required. Allowing.")
 
-        # Identify numbers found that were NOT explicitly required
+        # Identify numbers found that were NOT explicitly required for this beat
         unexpected_found = found_numbers - allowed_atoms
-        logger.debug(f"Validator Unexpected Found (Before Rule 3/4): {unexpected_found}")
+        logger.debug(f"Validator Unexpected Found (Before Rule 3/4/5): {unexpected_found}")
 
-        # Check unexpected numbers against conditional allowances (Rules 3 & 4)
+        # Check unexpected numbers against conditional allowances
         truly_disallowed_extras = set()
         for extra_num in unexpected_found:
-            # Rule 4 Check: Is it the number 1?
             is_allowed_one = (extra_num == 1)
-
-            # Rule 3 Check: Is it the operand count?
-            # Ensure operand_count itself isn't forbidden (Rule 2 already checked this, but good practice)
             is_allowed_count = (extra_num == operand_count and extra_num not in forbidden_atoms)
+            # --- OPTION A Check (Include if using Option A validator) ---
+            is_allowed_small = (extra_num in IMPLICITLY_ALLOWED_SMALL_NUMBERS and extra_num not in forbidden_atoms)
+            # --- END OPTION A Check ---
 
-            # If it's NOT allowed by Rule 3 or 4, add to disallowed set
-            if not (is_allowed_one or is_allowed_count):
-                 # Double-check it wasn't forbidden (Rule 2 check is primary, this is belt-and-suspenders)
+            # Adjust the condition based on whether you include is_allowed_small
+            # If using Option A validator:
+            if not (is_allowed_one or is_allowed_count or is_allowed_small):
+            # If using original strict validator (no implicit small numbers):
+            # if not (is_allowed_one or is_allowed_count):
                  if extra_num not in forbidden_atoms:
                      truly_disallowed_extras.add(extra_num)
-                 # If it was forbidden, Rule 2 already caught it, no need to add here.
 
-        # Rule 5: If any truly disallowed extras remain, fail
+        # Final check for disallowed extras
         if truly_disallowed_extras:
-            logger.debug(f"Validation FAIL (Rule 5): Found unexpected/disallowed numbers: {truly_disallowed_extras}")
+            logger.debug(f"Validation FAIL (Strict Rule): Found unexpected/disallowed numbers: {truly_disallowed_extras}")
             logger.debug(f"--> Context: Allowed={allowed_atoms}, Forbidden={forbidden_atoms}, OperandCount={operand_count}, Found={found_numbers}")
             return False
 
         # If all checks pass
-        logger.debug(f"Validation PASS")
+        logger.debug(f"Validation PASS (Strict)")
         logger.debug(f"--> Context: Allowed={allowed_atoms}, Forbidden={forbidden_atoms}, OperandCount={operand_count}, Found={found_numbers}")
         return True
 
     return validate
-
 
 def check_operand_presence(text: str, operand_val: int) -> bool:
     """Checks if an operand is present as a digit or word (using inflect)."""
@@ -857,7 +938,6 @@ def generate_owner_name_with_llm(
         f"- Keep it concise (ideally 2-4 words).\n"
         f"- Output ONLY the generated name itself, with no quotes, labels, explanations, or introductory phrases."
     )
-    # --- END REVISED IMPLEMENTATION ---
 
     prompt_log_header = f"--- LLM Owner Naming Prompt (Op: {op_node.op}, Attempting Call - Revised for Narrative Use) ---"
     prompt_content_for_log = f"System: {system_prompt}\nUser: {user_prompt}"
@@ -1014,41 +1094,81 @@ def _generate_narrative_recursive(
     direct_atom_values = {a.n for a in direct_atom_children}
 
     # Define the set of STRICTLY REQUIRED atoms for this beat
+def _generate_narrative_recursive(
+    node: Node,
+    context: "GenerationContext",
+    is_root: bool,
+):
+    """
+    Recursive helper for POST-ORDER strict narrative generation using FEW-SHOT examples.
+    Processes children first, then the current node.
+    Modifies the context object directly.
+    """
+    # --- Unpack shared context (...) ---
+    world = context.world
+    config = context.config
+    encoder = context.encoder
+    p_inflect = context.p_inflect
+    logger = context.logger
+    owner_map = context.owner_map
+    all_atoms = context.all_atoms
+
+    node_id = id(node)
+    owner_name = owner_map.get(node_id, f"the_unnamed_{node.op}_entity" if isinstance(node, OpNode) else "atom")
+    logger.debug(f"_generate_narrative_recursive (POST-ORDER): processing node {getattr(node, 'op', 'Atom')} with owner '{owner_name}'")
+
+    # --- Base case: Atom ---
+    if isinstance(node, Atom):
+        logger.debug(f"Node is Atom ({node.n}), returning.")
+        return
+
+    # --- Recursive Step: Process Children First (Post-Order) ---
+    child_owner_names = []
+    for child in node.children:
+        _generate_narrative_recursive(
+            child,
+            context,
+            is_root=False,
+        )
+        if isinstance(child, OpNode) and id(child) in owner_map:
+             child_owner_names.append(owner_map[id(child)])
+        elif isinstance(child, OpNode):
+             logger.warning(f"OpNode child {child.op} of parent {node.op} has no owner name in map.")
+        if context.tokens_used >= MAX_TOTAL_TOKENS - SAFETY_MARGIN:
+            logger.warning(f"Token limit reached after processing child of operator {getattr(node, 'op', 'Atom')}. Stopping further generation for this branch.")
+            return
+
+    # --- Process Current Operator Node (After All Children Have Been Processed) ---
+    logger.debug(f"Finished processing children for operator {getattr(node, 'op', 'Atom')} ({owner_name}). Now processing node itself.")
+    if is_root:
+        logger.info(f"ROOT NODE ({node.op}): Starting beat generation. Current tokens: {context.tokens_used}/{MAX_TOTAL_TOKENS}")
+
+    context.beat_counter["current"] += 1
+    logger.info(f"Generating beat {context.beat_counter['current']}/{context.beat_counter['total']} for operator {node.op} ({owner_name})")
+    op_label = OP_LABELS.get(node.op, node.op)
+
+    # --- Calculations for required/forbidden atoms, prompt building ---
+    direct_atom_children = [c for c in node.children if isinstance(c, Atom)]
+    operand_count = len(direct_atom_children)
+    direct_atom_values = {a.n for a in direct_atom_children}
+
+    # Required atoms (ONLY direct atoms, per previous fix)
     required_atoms_for_beat = set(direct_atom_values)
-    result_val = None
-    # Ensure value is calculated if needed (should be pre-calculated by eval_node, but belt-and-suspenders)
-    if node.value is None:
-        logger.warning(f"Node {node.op} value was None, recalculating.")
-        eval_node(node) # Ensure value is present
-    if node.op in ("SUM", "AVG", "SM"):
-        result_val = node.value
-        required_atoms_for_beat.add(result_val)
-        logger.debug(f"Verification (Op: {node.op}): Result {result_val} ADDED to required_atoms_for_beat: {required_atoms_for_beat}")
+    logger.debug(f"Required atoms for beat {node.op} ({owner_name}): {required_atoms_for_beat}")
 
-    # Determine forbidden atoms (atoms introduced by *previous* beats, accessed via context)
-    # In post-order, 'introduced_atoms' contains everything from the children processed *before* this node.
-    forbidden_atoms_for_prompt = context.introduced_atoms.copy() # Use a copy to avoid modification issues if needed later
+    # Forbidden atoms
+    forbidden_atoms_for_prompt = context.introduced_atoms.copy()
+    truly_forbidden_for_prompt = forbidden_atoms_for_prompt - required_atoms_for_beat
 
-    # --- Semantic Layer: primary object concept ---
-    primary_object = world["object"]
-
-    # --- Build strings for prompt instructions ---
-    # MUST INCLUDE list (direct atoms + result if applicable)
+    # Build strings for prompt instructions (MUST INCLUDE, MUST AVOID, MAY USE)
+    # ... (Keep the logic from the previous fix where only direct atoms are in must_include_combined_str) ...
     must_include_list = []
-    if direct_atom_values:
-        items = [f"{num_to_words(x)} ({x})" for x in sorted(direct_atom_values)]
+    if required_atoms_for_beat:
+        items = [f"{num_to_words(x)} ({x})" for x in sorted(required_atoms_for_beat)]
         must_include_list.extend(items)
 
-    operation_result_list_str = ""
-    if result_val is not None:
-        result_word = num_to_words(result_val)
-        result_desc = f"{result_word} ({result_val})"
-        must_include_list.append(result_desc)
-        operation_result_list_str = f", which is the number of {primary_object} they end up with."
-
     if not must_include_list:
-         must_include_combined_str = "None applicable for this step"
-         logger.debug(f"No direct atoms or result value to MUST INCLUDE for {node.op} ({owner_name}).")
+         must_include_combined_str = "None applicable for this step (only uses results from previous steps)"
     elif len(must_include_list) == 1:
         must_include_combined_str = must_include_list[0]
     elif len(must_include_list) == 2:
@@ -1056,41 +1176,32 @@ def _generate_narrative_recursive(
     else:
         must_include_combined_str = ", ".join(must_include_list[:-1]) + ", and " + must_include_list[-1]
 
-    # MUST AVOID list
-    # We need to be careful here. Forbidden should be atoms introduced *before* this beat,
-    # BUT *not* the atoms required for *this* beat.
-    truly_forbidden_for_prompt = forbidden_atoms_for_prompt - required_atoms_for_beat
     if truly_forbidden_for_prompt:
         must_avoid_str = ", ".join(f"{num_to_words(x)} ({x})" for x in sorted(truly_forbidden_for_prompt))
     else:
         must_avoid_str = "None"
 
-    # MAY USE clause (checking against *truly* forbidden)
     may_use_parts = []
-    # Allow operand count only if > 0 and not forbidden
     if operand_count > 0 and operand_count not in truly_forbidden_for_prompt:
         operand_count_word = num_to_words(operand_count)
         may_use_parts.append(f"the number {operand_count} ('{operand_count_word}', the count of direct items being considered)")
-    # Allow 'one' if not forbidden
     if 1 not in truly_forbidden_for_prompt:
         may_use_parts.append("the number 1 ('one')")
-
     if may_use_parts:
         may_use_clause = f"*   You MAY use { ' and '.join(may_use_parts) } for natural narrative flow.\n"
     else:
         may_use_clause = ""
 
-    # --- REFINED: Ultra Strict Instruction for Post-Order ---
-    # Final number rule instruction string
+    # Build the ultra_strict_instruction string (keep it strict for few-shot)
     ultra_strict_instruction = (
         "**ULTRA-STRICT NUMBER RULES (Apply ONLY to THIS Scene):**\n"
-        f"*   **MUST INCLUDE:** The narrative for *this specific scene* must explicitly mention the following numbers (use digits): {must_include_combined_str}{operation_result_list_str}. These represent the direct inputs and/or the calculated result *for this step only*.\n"
+        f"*   **MUST INCLUDE:** The narrative for *this specific scene* must explicitly mention the following numbers (use digits): {must_include_combined_str}. These represent the direct inputs discovered or used *in this step only*.\n"
         f"*   **MUST AVOID (FORBIDDEN):** Do NOT mention any numbers from this list: {must_avoid_str}. These numbers belong to *other, previously completed* steps or unrelated parts of the story.\n"
-        f"{may_use_clause}" # This clause already checks against the forbidden list
+        f"{may_use_clause}"
         "*   **ABSOLUTELY NO OTHER NUMBERS:** Do not introduce any other numerical values, intermediate calculations, counts (unless explicitly allowed in MAY USE), or unrelated figures into this scene's text.\n"
         "**Adhere strictly to these rules for this scene only.**"
     )
-    # --- END REFINED IMPLEMENTATION ---
+
     # --- Build the scene preamble (explicit quantities) ---
     # (This logic remains the same, depends only on direct_atom_values)
     object_list_str_for_preamble = ""
@@ -1282,15 +1393,16 @@ def _generate_narrative_recursive(
     # --- Create Validator ---
     validate_beat_numbers = make_number_validator(
         allowed_atoms=required_atoms_for_beat,
-        forbidden_atoms=truly_forbidden_for_prompt, # Use the correctly calculated forbidden set
+        forbidden_atoms=truly_forbidden_for_prompt,
         operand_count=operand_count
     )
     # Padding validator needs to forbid everything introduced so far
     validate_padding = make_number_validator(
          allowed_atoms=set(),
-         forbidden_atoms=context.introduced_atoms.union(required_atoms_for_beat), # Forbid everything seen + required for this beat
+         forbidden_atoms=context.introduced_atoms.union(required_atoms_for_beat),
          operand_count=0
     )
+
 
     # --- LLM Call and Validation Loop ---
     system_prompt = "You are a storyteller focused on narrative flow. FOLLOW THE USER'S NUMBER RULES EXACTLY. Use numbers rather than word forms."
@@ -1331,11 +1443,11 @@ def _generate_narrative_recursive(
     # --- Process Successful Generation or Raise Error ---
     if beat_text:
         btoks = len(encoder.encode(beat_text))
-        context.scenes.append(beat_text) # Modify context
-        context.tokens_used += btoks      # Modify context
-        context.last_scene_text = beat_text # Modify context
+        context.scenes.append(beat_text)
+        context.tokens_used += btoks
+        context.last_scene_text = beat_text
         # Update introduced atoms *in the context* with the numbers required for THIS beat
-        context.introduced_atoms.update(required_atoms_for_beat) # Modify context
+        context.introduced_atoms.update(required_atoms_for_beat)
         logger.debug(f"Beat {context.beat_counter['current']} successful. Introduced atoms updated: {context.introduced_atoms}")
     else: # If generation failed after all retries
         logger.error(

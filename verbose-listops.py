@@ -53,16 +53,17 @@ BASE_BEAT_TEMPLATE = Template(
 #  Configuration Constants 
 
 # --- Batch Generation & Output ---
-NUM_SAMPLES_TO_GENERATE = 2  # How many samples to generate in one run
+NUM_SAMPLES_TO_GENERATE = 8 # How many samples to generate in one run
 OUTPUT_FILENAME = "gpt4.5-verbose_listops_dataset_ultra_strict_v4.jsonl"  # Output file for the dataset
 DEFAULT_MAX_WORKERS = 8  # Default number of parallel threads for batch generation
 
-# --- COMPREHENSIVE FEW-SHOT EXAMPLES ---
+# --- COMPREHENSIVE FEW-SHOT EXAMPLES (Illustrating Success & Failure) ---
 # Each tuple: (example_rules_string, good_output, bad_output, failure_reason)
-# Assumes a strict validator (like original or Option A allowing 0-10 unless forbidden)
+# Assumes "Option A" validator logic (0-10 allowed unless forbidden/required)
+
 FEW_SHOT_EXAMPLES_STRICT = [
     (
-        # Example 1 Context: Basic MIN/MAX Success
+        # --- Example 1: Basic Success vs. Extraneous Number (>10) ---
         (
             "**ULTRA-STRICT NUMBER RULES (Apply ONLY to THIS Scene):**\n"
             "*   **MUST INCLUDE:** ... mention ... numbers (use digits): thirty-nine (39), ninety (90), and ninety-three (93).\n"
@@ -73,13 +74,13 @@ FEW_SHOT_EXAMPLES_STRICT = [
         ),
         # GOOD Narrative Output (Follows Rules)
         "Felix examined the three newly opened caches. \"Right then,\" he declared, pointing, \"this one holds 93 relics, that one 90 relics, and the last contains 39 relics.\" Liora consulted the Cipher Wheel's concept. \"We need the smallest. That means the cache of 39.\"",
-        # BAD Narrative Output (Failure Example: Includes disallowed extra '12')
+        # BAD Narrative Output (Failure: Includes disallowed extra '12')
         "Felix examined the three newly opened caches. \"Right then,\" he declared, pointing, \"this one holds 93 relics, that one 90 relics, and the last contains 39 relics.\" Liora consulted the Cipher Wheel's concept. \"We need the smallest. That means the cache of 39. It took them 12 minutes to decide.\"",
         # REASONING FOR FAILURE
         "The BAD output failed because it included the number 12. Rule Analysis: 12 was not in MUST INCLUDE {39, 90, 93}, not in MUST AVOID {5}, not the allowed operand count (3), and not an implicitly allowed small number (0-10). It violates the 'ABSOLUTELY NO OTHER NUMBERS' rule."
     ),
     (
-        # Example 2 Context: SUM/AVG/SM Success (Result NOT required in text)
+        # --- Example 2: Success vs. Missing Required Number ---
         (
             "**ULTRA-STRICT NUMBER RULES (Apply ONLY to THIS Scene):**\n"
             "*   **MUST INCLUDE:** ... mention ... numbers (use digits): twenty-eight (28), fifty-five (55), and ninety-four (94).\n"
@@ -90,45 +91,66 @@ FEW_SHOT_EXAMPLES_STRICT = [
         ),
         # GOOD Narrative Output (Follows Rules)
         "Fizzwick gathered the caches. \"Okay, we have 28 gears, 55 gears, and 94 gears.\" Kelvin nodded. \"The Ninth Gear Dial works on their combined essence, using only the final digit. Let's activate it.\"",
-        # BAD Narrative Output (Failure Example: Missing required '55')
+        # BAD Narrative Output (Failure: Missing required '55')
         "Fizzwick gathered the caches. \"Okay, we have 28 gears and 94 gears.\" Kelvin nodded. \"The Ninth Gear Dial works on their combined essence, using only the final digit. Let's activate it.\"",
         # REASONING FOR FAILURE
         "The BAD output failed because it omitted a required number. Rule Analysis: It failed to include 55 from the MUST INCLUDE set {28, 55, 94}."
     ),
     (
-        # Example 3 Context: Failure by Including Forbidden
+        # --- Example 3: Success vs. Including Forbidden Number ---
         (
             "**ULTRA-STRICT NUMBER RULES (Apply ONLY to THIS Scene):**\n"
             "*   **MUST INCLUDE:** ... mention ... numbers (use digits): thirty-nine (39), ninety (90), and ninety-three (93).\n"
-            "*   **MUST AVOID (FORBIDDEN):** Do NOT mention ...: five (5).\n"
+            "*   **MUST AVOID (FORBIDDEN):** Do NOT mention ...: five (5), twenty-eight (28).\n" # Added another forbidden
             "*   You MAY use the number 3 ('three', the count of direct items...) and the number 1 ('one').\n"
             "*   **ABSOLUTELY NO OTHER NUMBERS:** Do not introduce any other numerical values...\n"
             "**Adhere strictly to these rules for this scene only.**"
         ),
-        # GOOD Narrative Output (Same as Example 1 Good)
+        # GOOD Narrative Output (Follows Rules)
         "Felix examined the three newly opened caches. \"Right then,\" he declared, pointing, \"this one holds 93 relics, that one 90 relics, and the last contains 39 relics.\" Liora consulted the Cipher Wheel's concept. \"We need the smallest. That means the cache of 39.\"",
-        # BAD Narrative Output (Failure Example: Includes forbidden '5')
-        "Felix examined the three newly opened caches. \"Right then,\" he declared, pointing, \"this one holds 93 relics, that one 90 relics, and the last contains 39 relics.\" Liora consulted the Cipher Wheel's concept. \"We need the smallest, like the 5 relics from before. That means the cache of 39.\"",
+        # BAD Narrative Output (Failure: Includes forbidden '28')
+        "Felix examined the three newly opened caches. \"Right then,\" he declared, pointing, \"this one holds 93 relics, that one 90 relics, and the last contains 39 relics.\" Liora consulted the Cipher Wheel's concept. \"We need the smallest, unlike the 28 relics before. That means the cache of 39.\"",
         # REASONING FOR FAILURE
-        "The BAD output failed because it included a forbidden number. Rule Analysis: It included 5, which is explicitly listed in the MUST AVOID (FORBIDDEN) set {5}."
+        "The BAD output failed because it included a forbidden number. Rule Analysis: It included 28, which is explicitly listed in the MUST AVOID (FORBIDDEN) set {5, 28}."
     ),
      (
-        # Example 4 Context: Failure by Including Disallowed Small Number (that was forbidden)
+        # --- Example 4: Success vs. Including Disallowed Small Number (that was forbidden) ---
         (
             "**ULTRA-STRICT NUMBER RULES (Apply ONLY to THIS Scene):**\n"
             "*   **MUST INCLUDE:** ... mention ... numbers (use digits): forty-eight (48), twenty-seven (27), eighty (80).\n"
-            "*   **MUST AVOID (FORBIDDEN):** Do NOT mention ...: five (5), ninety (90).\n" # Example where 5 is forbidden
+            "*   **MUST AVOID (FORBIDDEN):** Do NOT mention ...: five (5), ninety (90).\n" # 5 is forbidden
             "*   You MAY use the number 3 ('three', the count of direct items...) and the number 1 ('one').\n"
             "*   **ABSOLUTELY NO OTHER NUMBERS:** Do not introduce any other numerical values...\n"
             "**Adhere strictly to these rules for this scene only.**"
         ),
         # GOOD Narrative Output
         "Kelvin pointed to the three pressure valves. \"Readings are 48, 27, and 80.\" Rynna checked her notes. \"The mechanism requires the middle reading, which is 48.\"",
-        # BAD Narrative Output (Failure Example: Includes forbidden '5', even though it's small)
+        # BAD Narrative Output (Failure: Includes forbidden '5', even though it's small)
          "Kelvin pointed to the three pressure valves. \"Readings are 48, 27, and 80.\" Rynna checked her notes. \"The mechanism requires the middle reading, which is 48. We only need 5 more units.\"",
         # REASONING FOR FAILURE
         "The BAD output failed because it included a forbidden number. Rule Analysis: It included 5. Although 5 is normally an allowed small number (0-10), it was explicitly listed in the MUST AVOID (FORBIDDEN) set {5, 90} for this specific beat, making it disallowed."
     ),
+    (
+        # --- Example 5: Success vs. Including Extraneous Small Number (0-10) ---
+        # This shows failure when an *unnecessary* small number is added alongside other numbers.
+        # Note: If *only* an allowed small number was added (and no other errors), the Option A validator would pass it.
+        # This example demonstrates failure when *other* numbers outside the allowed set are present.
+        (
+            "**ULTRA-STRICT NUMBER RULES (Apply ONLY to THIS Scene):**\n"
+            "*   **MUST INCLUDE:** ... mention ... numbers (use digits): forty (40), sixty-one (61).\n"
+            "*   **MUST AVOID (FORBIDDEN):** Do NOT mention ...: ninety-nine (99).\n"
+            "*   You MAY use the number 2 ('two', the count of direct items...) and the number 1 ('one').\n"
+            "*   **ABSOLUTELY NO OTHER NUMBERS:** Do not introduce any other numerical values...\n"
+            "**Adhere strictly to these rules for this scene only.**"
+        ),
+        # GOOD Narrative Output
+        "They found two chests. The first held 40 gears, the second contained 61 gears. They took both.",
+        # BAD Narrative Output (Failure: Includes extraneous '7' and '15')
+        "They found two chests. The first held 40 gears, the second contained 61 gears. It took 7 minutes to open them. They took both, leaving 15 behind.",
+        # REASONING FOR FAILURE
+        "The BAD output failed because it included numbers 7 and 15. Rule Analysis: 7 is an allowed small number (0-10) and not forbidden, BUT 15 is not in MUST INCLUDE {40, 61}, not in MUST AVOID {99}, not the allowed operand count (2), and not an allowed small number. Because 15 violates the 'ABSOLUTELY NO OTHER NUMBERS' rule, the entire output fails validation (even though 7 might have been okay on its own)."
+    ),
+
 ]
 
 # --- Base configurations ---
@@ -182,20 +204,13 @@ LOG_MAX_BYTES = 5 * 1024 * 1024  # Maximum log file size (5MB)
 LOG_BACKUP_COUNT = 3  # Number of backup log files to keep
 CLEAR_LOGS_ON_START = True  # If True, delete existing logs in LOG_DIR on startup
 
-FINAL_QUESTION_TEMPLATE = Template(
-    "\n\n---\n\nBased *solely* on the sequence of events and operations described *throughout the entire narrative above*, " # Added emphasis
-    "what is the single, final numerical result or quantity of $primary_object obtained, calculated, "
-    "or determined at the very end of the story?"
+FINAL_QUESTION_TEMPLATE = Template( # Note: $primary_object is no longer used in this version
+    "\n\n---\n\n**Final Question:** Carefully follow the main sequence of calculations described throughout the *entire narrative* above, focusing on the primary objective the characters are pursuing. Identify the single, concluding calculation performed as the **final step of that primary objective**. What is the **single integer** value that results *exclusively* from this final, top-level calculation related to the main task? Ignore any unrelated side-calculations or estimations mentioned incidentally, especially if they occur late in the narrative but are not part of the core sequence."
 )
 
-JUDGE_INSTRUCTIONS = (
-    "\n\nThink step-by-step through the narrative from beginning to end, identifying each operation "
-    "(like finding the smallest, summing values, taking an average, etc.) "
-    "and the numbers involved *at the specific stage they are introduced or calculated* in the story. " # Added emphasis on stage
-    "Perform the calculations sequentially as they occur. "
-    "Output only the single, final integer answer derived from the root operation described last in the narrative." # Clarified root operation
-)
-# --- Dataclasses ---
+JUDGE_INSTRUCTIONS = ( # Renamed constant for clarity
+    "\n\n**Instructions for Answering:**\n1. Read the entire narrative carefully from beginning to end.\n2. Identify the **primary objective** or main sequence of operations the characters are performing throughout the story.\n3. Trace this main sequence step-by-step, noting the numbers involved and performing calculations *only for this primary sequence*.\n4. **Crucially, disregard any incidental calculations, estimations, or quantitative details mentioned that are clearly separate from the main operational sequence (e.g., calculating fuel, counting unrelated items mentioned in passing).**\n5. Identify the *final operation* within the **main sequence** that concludes the primary objective.\n6. Determine the single integer result produced *only* by that concluding operation, based on its inputs as established by the preceding steps *within the main sequence*.\n7. Output **only** that single, final integer answer. No other text."
+)# --- Dataclasses ---
 @dataclass
 class Config:
     NUM_SAMPLES_TO_GENERATE: int = NUM_SAMPLES_TO_GENERATE
@@ -1159,6 +1174,63 @@ def _generate_narrative_recursive(
     # Forbidden atoms
     forbidden_atoms_for_prompt = context.introduced_atoms.copy()
     truly_forbidden_for_prompt = forbidden_atoms_for_prompt - required_atoms_for_beat
+    # --- Semantic Layer: primary object concept ---
+    primary_object = world["object"]
+
+    # --- Build the scene preamble (explicit quantities) ---
+    # Use object_list_str which contains "word (digit)" format for direct atoms
+    object_list_str_for_preamble = ""
+    if direct_atom_values:
+        items = [f"{num_to_words(x)} ({x})" for x in sorted(direct_atom_values)]
+        if len(items) == 1:
+            object_list_str_for_preamble = items[0]
+        elif len(items) == 2:
+            object_list_str_for_preamble = " and ".join(items)
+        else:
+            object_list_str_for_preamble = ", ".join(items[:-1]) + ", and " + items[-1]
+
+    scene_preamble = "" # Default empty
+    # Only generate preambles if there are direct atoms to describe
+    if direct_atom_values:
+        if node.op == "SUM":
+            scene_preamble = (
+                f"In this stage, the characters discover separate caches or groups containing "
+                f"{object_list_str_for_preamble} {primary_object} respectively. "
+                f"They collect all of these {primary_object}, combining their haul."
+            )
+        elif node.op == "MED":
+             scene_preamble = (
+                 f"In this stage, the characters discover separate caches or groups containing "
+                 f"{object_list_str_for_preamble} {primary_object} respectively. "
+                 f"But for a reason you concoct, they can only collect the cache containing the middle quantity (median) of {primary_object}s."
+             )
+        elif node.op == "MIN":
+             scene_preamble = (
+                 f"In this stage, the characters discover separate caches or storage areas containing "
+                 f"{object_list_str_for_preamble} {primary_object} respectively. "
+                 f"But for a reason you concoct, they can only access or retrieve from the area containing the smallest quantity (MIN) of {primary_object}."
+             )
+        elif node.op == "MAX":
+             scene_preamble = (
+                 f"In this stage, the characters discover separate caches or storage areas containing "
+                 f"{object_list_str_for_preamble} {primary_object} respectively. "
+                 f"But for a reason you concoct, they can only access or retrieve from the area containing the largest quantity (MAX) of {primary_object}."
+             )
+        elif node.op == "AVG":
+             scene_preamble = (
+                 f"In this stage, the characters discover separate caches or groups containing "
+                 f"{object_list_str_for_preamble} {primary_object} respectively. "
+                 f"They collect all these {primary_object}, but for some reason you concoct, they are forced to give away their haul so that they are left only with a quantity equal to the average of the initial amounts (e.g., they find groups of 3, 4, and 5 {primary_object}, but can only walk away with 4 {primary_object})."
+             )
+        elif node.op == "SM":
+             scene_preamble = (
+                 f"In this stage, the characters discover separate caches or groups containing "
+                 f"{object_list_str_for_preamble} {primary_object} respectively. "
+                 f"They collect all these {primary_object}, combining their haul. However, for a reason you concoct, "
+                 f"they are forced to give away most of their collection, leaving them only with a quantity equal to the final digit of the total number gathered (e.g., they collect a total of 27 {primary_object}, and can only walk away with 7 {primary_object})."
+             )
+
+    # --- REFINED: Dynamic Ownership Instruction Detail for Post-Order ---
 
     # Build strings for prompt instructions (MUST INCLUDE, MUST AVOID, MAY USE)
     # ... (Keep the logic from the previous fix where only direct atoms are in must_include_combined_str) ...
@@ -1264,19 +1336,17 @@ def _generate_narrative_recursive(
     # Describe inputs from previous steps (child operations)
     if has_operator_children:
         child_names_str = ', '.join(f"'{name}'" for name in child_owner_names)
-        input_description_parts.append(f"the outcome(s) from previous step(s) represented conceptually by {child_names_str}")
-        # Add an explicit warning about not using their numeric values
+        input_description_parts.append(f"the outcome(s) from previous step(s) represented conceptually by {child_names_str}") # Now works
         ownership_instruction_detail += (
-            f"REMEMBER: The specific numeric values resulting from {child_names_str} were determined in *earlier* scenes and are FORBIDDEN here. "
+            f"REMEMBER: The specific numeric values resulting from {child_names_str} were determined in *earlier* scenes and are FORBIDDEN here. " # Line 1325 (Now works)
             f"Refer to them conceptually or by name only.\n"
         )
 
     # Describe inputs from direct atoms discovered in *this* step
     if has_direct_atom_children:
-        atom_words = [num_to_words(a) for a in sorted(direct_atom_values)]
-        direct_values_str = ', '.join(f"{w} ({v})" for w, v in zip(atom_words, sorted(direct_atom_values)))
+        direct_atom_words = [num_to_words(a) for a in sorted(direct_atom_values)]
+        direct_values_str = ', '.join(f"{w} ({v})" for w, v in zip(direct_atom_words, sorted(direct_atom_values)))
         input_description_parts.append(f"newly discovered quantities: {direct_values_str}")
-
     # Combine input descriptions
     if not input_description_parts:
         inputs_str = "inputs determined entirely by context (e.g., selecting between previous outcomes)" # Fallback for MIN/MAX/MED on OpNodes only
@@ -1286,29 +1356,40 @@ def _generate_narrative_recursive(
         inputs_str = " and ".join(input_description_parts)
 
     # Construct the main instruction
-    ownership_instruction_detail += (
+    ownership_instruction_detail = ( # Use '=' to initialize the string for this beat
         f"This scene focuses on resolving the step named '{owner_name}'. "
-        f"Narratively describe how applying the rule '{op_label}' to {inputs_str} "
-        f"determines the final state, value, or significance associated with '{owner_name}'. "
-        f"Focus on the action of applying the rule in this specific scene."
     )
 
-    if node.op in ("MED", "MIN", "MAX") and has_operator_children and has_direct_atom_children:
-        ownership_instruction_detail += (
-            f"Specifically, you need to describe the comparison between the conceptual outcome(s) (like '{child_owner_names[0]}') "
-            f"and the new numerical value(s) ({direct_values_str}). "
-            f"Focus on the *process* of selecting the correct one based on the '{op_label}' rule, "
-            f"ensuring only the required numbers ({direct_values_str}) are mentioned numerically. "
-            f"Do NOT state the numerical value of '{child_owner_names[0]}' or the final numerical result of this step."
-        )
+    # STEP 2: Append specific instruction based on condition using if/else
+    if node.op in ("SUM", "AVG", "SM") and has_operator_children and has_direct_atom_children:
+         ownership_instruction_detail += ( # Use '+=' to append to the string
+             f"Narratively describe the action of **combining** {inputs_str} "
+             f"and then applying the specific rule '{op_label}' to that combined set "
+             f"to determine the final state, value, or significance associated with '{owner_name}'. "
+             f"Make it clear that both the previous outcome ('{child_owner_names[0]}') and the new quantities ({direct_values_str}) are part of the input for the '{op_label}' rule."
+         )
     else:
-        ownership_instruction_detail += (
-            f"Focus on the *action* of applying the rule in this specific scene."
+        # Default instruction for other ops or single input types
+        ownership_instruction_detail += ( # Use '+=' to append
+             f"Narratively describe how applying the rule '{op_label}' to {inputs_str} "
+             f"determines the final state, value, or significance associated with '{owner_name}'. "
+             f"Focus on the *action* of applying the rule in this specific scene."
         )
 
+    # STEP 3: Append the reminder about forbidden values (now correctly placed after the if/else)
+    if has_operator_children:
+        child_names_str = ', '.join(f"'{name}'" for name in child_owner_names)
+        ownership_instruction_detail += ( # Use '+=' to append
+            f"\nREMEMBER: The specific numeric values resulting from {child_names_str} were determined in *earlier* scenes and are FORBIDDEN here. "
+            f"Refer to them conceptually or by name only when describing the combination."
+        )
 
-    # --- END IMPLEMENTATION ---
-
+    # Decide header and mode
+    task_header = "Final Discovery" if is_root else "Discovery Step"
+    beat_mode = (
+        f"{world['genre']}, {'concluding' if is_root else 'continuous'} scene about "
+        f"{primary_object}"
+    )
 
     # Decide header and mode
     task_header = "Final Discovery" if is_root else "Discovery Step"
@@ -1324,55 +1405,43 @@ def _generate_narrative_recursive(
     task_body_parts.append(ownership_instruction_detail)
     task_body = "\n\n".join(task_body_parts)
 
+    # --- Prepend Comprehensive Few-Shot Examples ---
+    formatted_examples = "--- Examples of How to Follow (and Fail) the Number Rules ---\n\n"
+    # Select N examples (e.g., 1 or 2 to save tokens)
+    num_examples_to_use = min(len(FEW_SHOT_EXAMPLES_STRICT), 3) # Use up to 3 examples now
+    selected_examples = random.sample(FEW_SHOT_EXAMPLES_STRICT, num_examples_to_use) # Use the new list name
+
+    for i, (rules, good_output, bad_output, reason) in enumerate(selected_examples): # Unpack all four parts
+        formatted_examples += f"--- Example {i+1} ---\n"
+        formatted_examples += f"Hypothetical Rules Provided:\n{rules}\n\n"
+        formatted_examples += f"GOOD Narrative Output (Follows Rules):\n{good_output}\n\n"
+        formatted_examples += f"BAD Narrative Output (Violates Rules):\n{bad_output}\n\n" # Include the bad output
+        formatted_examples += f"REASONING FOR BAD Output FAILURE:\n{reason}\n" # Include the reasoning
+        formatted_examples += f"--- End Example {i+1} ---\n\n"
 
     # --- Build the final prompt ---
-    # (Keep existing examples)
-    prompt_examples = (
-         "Example 1:\n" +
-         "**ULTRA-STRICT NUMBER RULE:**\n" +
-         "*   MUST ONLY INCLUDE: Only narratively include the following numbers: [eight (8), two (2)].\n" +
-         "Valid Example:\n"
-         "\"In the moonlit chamber, a warrior discovered a tablet etched with eight symbols and another with two and claimed it.\"\n"
-         "Invalid Example:\n"
-         "\"In the moonlit chamber, two warriors discovered a tablet etched with eight symbols and another with two and claimed it.\"\n"
-
-         "Example 2:\n" +
-         "**ULTRA-STRICT NUMBER RULE:**\n" +
-         "*   This padding text MUST contain ZERO numbers. Output only the narrative text for this padding, without titles or headings..\n" +
-         "Valid Example:\n"
-         "\"The grand archive lay dormant in silence, no carvings marked its ancient doors.\"\n"
-         "Invalid Example:\n"
-         "\"The grand archive lay dormant, its doors sealed by nine enigmatic glyphs.\"\n"
-
-         "Example 3:\n" +
-         "**ULTRA-STRICT NUMBER RULE:**\n" +
-         "*   MUST ONLY INCLUDE: Only narratively include the following numbers: [fifteen (15), twenty-five (25), thirty-five (35)].\n" +
-         "Valid Example:\n"
-         "\"At dawn, fifteen torches blazed along the ramparts, followed by twenty-five banners and thirty-five drums heralding the city’s awakening.\"\n"
-         "Invalid Example:\n"
-         "\"At dawn, fifteen torches blazed along the ramparts, followed by twenty-five banners, thirty-five drums, and three carrots heralding the city’s awakening.\"\n"
-
-         "Example 4 (Failure Case):\n" +
-         "**REVISED STRICT NUMBER RULE:**\n" +
-         "*   MUST ONLY INCLUDE: [twenty (20), twenty-four (24)].\n" +
-         "*   FORBIDDEN: [ten (10)].\n" +
-         "*   MAY USE: 2 ('two', item count), 1 ('one').\n" +
-         "*   NO OTHER numbers allowed.\n" +
-         "Invalid Example Text:\n" +
-         "\"They found the cache of 20 crystals and the other with 24. Kaelen took three steps back.\" <-- FAIL\n" +
-         "Reasoning: The number 'three' (3) was mentioned. It was not required (20, 24), not forbidden (10), not the allowed count (2), and not the allowed number one (1). Therefore, it violates the 'NO OTHER numbers' rule.\n"
-     )
-
-    # Use context.last_scene_text which was updated by the last child call
-    beat_prompt = prompt_examples + BASE_BEAT_TEMPLATE.substitute(
-        beat_mode=beat_mode,
-        characters=json.dumps(world["characters"]),
-        setting=world["setting"],
-        snippet=context.last_scene_text[-100:], # Use context's last scene text
-        task_header=task_header,
-        task_body=task_body,
-        ultra_strict_instruction=ultra_strict_instruction,
+    follow_example_instruction = (
+        "YOUR TASK:\n"
+        "Generate the *next* narrative scene based on the 'Previous Scene Snippet' and the 'Discovery Step' / 'Final Discovery' instructions below.\n"
+        "**CRITICAL:** You MUST follow the specific **ULTRA-STRICT NUMBER RULES** provided below for THIS scene *exactly* like the GOOD Narrative Output examples above. Avoid making the mistakes shown in the BAD Narrative Output examples. Ensure ALL required numbers are present, NO forbidden numbers are present, and ABSOLUTELY NO OTHER numbers are included unless explicitly allowed by the 'MAY use' clause or are small numbers (0-10) that are NOT forbidden.\n\n" # Strengthened instruction
+        "--- Your Current Task Starts Below ---\n\n"
     )
+
+    # Assemble the final prompt (remains the same structure)
+    beat_prompt = (
+        formatted_examples # Add the examples first
+        + follow_example_instruction # Add the instruction to follow them
+        + BASE_BEAT_TEMPLATE.substitute( # Then add the main template for the *current* task
+            beat_mode=beat_mode, # <<< ADD THIS LINE BACK
+            characters=json.dumps(world["characters"]),
+            setting=world["setting"],
+            snippet=context.last_scene_text[-100:],
+            task_header=task_header,
+            task_body=task_body,
+            ultra_strict_instruction=ultra_strict_instruction, # The rules for the *current* beat
+        )
+    )
+
 
     log_prompt(
         f"{'=== FINAL' if is_root else '=== Intermediate'} Operator Beat Prompt (Op: {node.op}, Owner: {owner_name})",
@@ -1391,10 +1460,13 @@ def _generate_narrative_recursive(
         return # <--- If this happens for the root node, its scene is never generated
 
     # --- Create Validator ---
+    # IMPORTANT: Use the strict validator you want the LLM to learn (e.g., Option A or original)
     validate_beat_numbers = make_number_validator(
-        allowed_atoms=required_atoms_for_beat,
-        forbidden_atoms=truly_forbidden_for_prompt,
-        operand_count=operand_count
+         allowed_atoms=required_atoms_for_beat,
+         forbidden_atoms=truly_forbidden_for_prompt,
+         operand_count=operand_count
+         # Make sure this validator implements the rules you want enforced,
+         # ideally the one corresponding to the examples (e.g., Option A)
     )
     # Padding validator needs to forbid everything introduced so far
     validate_padding = make_number_validator(

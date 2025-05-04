@@ -126,9 +126,9 @@ JUDGE_INSTRUCTIONS = (
 class Config:
     NUM_SAMPLES_TO_GENERATE: int = NUM_SAMPLES_TO_GENERATE
     DEFAULT_MAX_WORKERS: int = DEFAULT_MAX_WORKERS
-    DEFAULT_MAX_TOTAL_TOKENS: int = 5000
-    DEFAULT_MAX_BEAT_TOKENS: int = 500
-    DEFAULT_MAX_PAD_TOKENS: int = 500
+    DEFAULT_MAX_TOTAL_TOKENS: int = 8000
+    DEFAULT_MAX_BEAT_TOKENS: int = 450
+    DEFAULT_MAX_PAD_TOKENS: int = 450
     MAX_TOKENS_BUFFER: int = 500
     PROMPT_SHOT_COUNT: int = 3
     RETRY_MAX_ATTEMPTS: int = 5
@@ -971,6 +971,8 @@ def _generate_narrative_recursive(
 
     # --- Process Current Operator Node (After All Children Have Been Processed) ---
     logger.debug(f"Finished processing children for operator {getattr(node, 'op', 'Atom')} ({owner_name}). Now processing node itself.")
+    if is_root:
+        logger.info(f"ROOT NODE ({node.op}): Starting beat generation. Current tokens: {context.tokens_used}/{MAX_TOTAL_TOKENS}")
     context.beat_counter["current"] += 1
     logger.info(f"Generating beat {context.beat_counter['current']}/{context.beat_counter['total']} for operator {node.op} ({owner_name})")
     op_label = OP_LABELS.get(node.op, node.op)
@@ -1147,8 +1149,24 @@ def _generate_narrative_recursive(
         f"This scene focuses on resolving the step named '{owner_name}'. "
         f"Narratively describe how applying the rule '{op_label}' to {inputs_str} "
         f"determines the final state, value, or significance associated with '{owner_name}'. "
-        f"Focus on the *action* of applying the rule in this specific scene."
+        f"Focus on the action of applying the rule in this specific scene."
     )
+
+    if node.op in ("MED", "MIN", "MAX") and has_operator_children and has_direct_atom_children:
+    ownership_instruction_detail += (
+        f"Specifically, you need to describe the comparison between the conceptual outcome(s) (like '{child_owner_names[0]}') "
+        f"and the new numerical value(s) ({direct_values_str}). "
+        f"Focus on the *process* of selecting the correct one based on the '{op_label}' rule, "
+        f"ensuring only the required numbers ({direct_values_str}) are mentioned numerically. "
+        f"Do NOT state the numerical value of '{child_owner_names[0]}' or the final numerical result of this step."
+    )
+    else:
+        ownership_instruction_detail += (
+         f"Focus on the *action* of applying the rule in this specific scene."
+     )
+
+
+
     # --- END IMPLEMENTATION ---
 
 
@@ -1223,15 +1241,14 @@ def _generate_narrative_recursive(
 
     # --- Token Budget Check ---
     estimated_prompt_tokens = len(encoder.encode(beat_prompt))
-    # Use context.tokens_used which includes tokens from children
     if would_exceed_budget(
-        context.tokens_used,
+        context.tokens_used, # This includes tokens from ALL children/padding
         estimated_prompt_tokens + MAX_BEAT_TOKENS,
         MAX_TOTAL_TOKENS,
         SAFETY_MARGIN,
     ):
-        logger.warning(f"Approaching token limit before generating operator {node.op} ({owner_name}). Stopping.")
-        return # Stop processing
+        logger.warning(f"Approaching token limit before generating operator {node.op} ({owner_name}). Stopping. {'(ROOT NODE)' if is_root else ''}")
+        return # <--- If this happens for the root node, its scene is never generated
 
     # --- Create Validator ---
     validate_beat_numbers = make_number_validator(
@@ -1278,6 +1295,9 @@ def _generate_narrative_recursive(
         if attempt < config.MAX_BEAT_RETRIES:
             logger.warning(f"Beat {context.beat_counter['current']}/{context.beat_counter['total']} retry {attempt}/{config.MAX_BEAT_RETRIES} for operator {node.op} ({owner_name}): {reason}")
             time.sleep(config.RETRY_INITIAL_DELAY * (2 ** (attempt - 1)))
+        if not validate_beat_numbers(candidate_text):
+             reason = "number validation failed" # <--- Could fail repeatedly for root
+
 
     # --- Process Successful Generation or Raise Error ---
     if beat_text:
@@ -1290,7 +1310,7 @@ def _generate_narrative_recursive(
         logger.debug(f"Beat {context.beat_counter['current']} successful. Introduced atoms updated: {context.introduced_atoms}")
     else: # If generation failed after all retries
         logger.error(
-            f"Operator {node.op} ({owner_name}) failed after {config.MAX_BEAT_RETRIES} attempts. Aborting narrative generation."
+            f"Operator {node.op} ({owner_name}) failed after {config.MAX_BEAT_RETRIES} attempts. Aborting narrative generation. {'(ROOT NODE)' if is_root else ''}"
         )
         raise BeatGenerationError(
             f"Failed to generate narrative beat for operator {node.op} ({owner_name})"

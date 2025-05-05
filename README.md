@@ -1,5 +1,16 @@
 # Verbose ListOps Evaluation Benchmark
 
+Evaluating Large Language Models' (LLMs) ability to perform complex, multi-step reasoning within long, narratively structured contexts is crucial for advancing applications like extracting predictive signals from large volumes of unstructured text (e.g., qualification signals from sales transcripts), yet existing benchmarks often focus on simpler retrieval tasks or lack coherent distractors and independent controls for context length versus task complexity. 
+
+This deeper reasoning is challenging as current LLMs struggle to track hierarchical dependencies, filter semantically related but computationally irrelevant narrative details, and follow embedded computational logic over extended sequences, even when capable of the core task in isolation; the lack of benchmarks combining hierarchical computation, coherent narrative distractors, dual difficulty controls across context length and problem difficulty, and deterministic verification hinders progress.
+
+We introduce Verbose ListOps, a novel benchmark designed to address this gap. It programmatically transforms a ListOps hierarchical computation task into lengthy, coherent narratives generated via LLM-driven post-order Abstract Syntax Tree (AST) traversal, featuring strict agentic validation of numerical content at each step. This provides independent control over context length (via padding) and intrinsic task complexity (via AST structure), alongside deterministic ground truth evaluation. 
+
+Initial experiments demonstrate that current state-of-the-art LLMs (e.g., GPT-4.1) universally fail Verbose ListOps problems at modest (~10,000 token) context lengths, despite easily solving their identical standard ListOps representations, empirically verifying the benchmark's difficulty and the significant challenge posed by narrative-embedded reasoning.
+
+The benchmark's design, grounded in the deterministic ListOps task and enforced by strict agentic number validation during narrative generation, provides a verifiable measure of an LLM's ability to perform structured computation embedded within natural language. This isolates and tests core capabilities—such as identifying relevant operands, tracking conceptual results of sub-tasks, and resisting distraction—required for downstream applications like automated signal extraction from large text corpora. Code and generated data will be made publicly available.
+
+
 ## Overview
 
 Welcome to the Verbose ListOps Evaluation Benchmark repository. This project provides tools to agentically generate synthetic multi-hop QA evaluation tasks of variable difficulty for Large Language Models (LLMs). The benchmark assesses reasoning capabilities when faced with tasks embedded within extremely long, narratively structured, and potentially distracting contexts.

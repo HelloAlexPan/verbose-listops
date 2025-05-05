@@ -221,7 +221,6 @@ class Config:
     DEFAULT_MAX_BEAT_TOKENS: int = 450
     DEFAULT_MAX_PAD_TOKENS: int = 450
     MAX_TOKENS_BUFFER: int = 500
-    PROMPT_SHOT_COUNT: int = 3
     RETRY_MAX_ATTEMPTS: int = 5
     RETRY_INITIAL_DELAY: int = 0.5
     MAX_BEAT_RETRIES: int = 5
@@ -1539,15 +1538,10 @@ def _generate_narrative_recursive(
     formatted_examples = "--- Examples of How to Follow (and Fail) the Number Rules ---\n\n"
     # Select N examples (e.g., 1 or 2 to save tokens)
     num_examples_to_use = min(len(FEW_SHOT_EXAMPLES_STRICT), 3) # Use up to 3 examples now
-    selected_examples = random.sample(FEW_SHOT_EXAMPLES_STRICT, num_examples_to_use) # Use the new list name
 
-    for i, (rules, good_output, bad_output, reason) in enumerate(selected_examples): # Unpack all four parts
+    for i, (rules, good_output, bad_output, reason) in enumerate(FEW_SHOT_EXAMPLES_STRICT):
         formatted_examples += f"--- Example {i+1} ---\n"
         formatted_examples += f"Hypothetical Rules Provided:\n{rules}\n\n"
-        formatted_examples += f"GOOD Narrative Output (Follows Rules):\n{good_output}\n\n"
-        formatted_examples += f"BAD Narrative Output (Violates Rules):\n{bad_output}\n\n" # Include the bad output
-        formatted_examples += f"REASONING FOR BAD Output FAILURE:\n{reason}\n" # Include the reasoning
-        formatted_examples += f"--- End Example {i+1} ---\n\n"
 
     # --- Build the final prompt ---
     follow_example_instruction = (
@@ -1904,7 +1898,7 @@ def generate_narrative(
     narrative_body = "\n\n".join(context.scenes).strip()
     primary_object = world.get("object", "items")
     question = FINAL_QUESTION_TEMPLATE.substitute(primary_object=primary_object)
-    final_prompt = narrative_body + question + judge_instructions
+    final_prompt = narrative_body + question
 
     # Final validation check (optional but recommended)
     final_token_count = len(encoder.encode(final_prompt))
@@ -1997,7 +1991,6 @@ def generate_single_sample(sample_index: int) -> dict | None:
                 "max_branch": DEFAULT_MAX_BRANCH,
                 "atom_min_value": config.ATOM_MIN_VALUE,
                 "atom_max_value": config.ATOM_MAX_VALUE,
-                "prompt_shot_count": config.PROMPT_SHOT_COUNT,
                 "max_beat_retries": config.MAX_BEAT_RETRIES,
                 "max_pad_retries": config.MAX_PAD_RETRIES,
                 "validation_mode": (

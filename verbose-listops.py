@@ -1540,125 +1540,158 @@ def _generate_narrative_recursive(
     # --- End Preamble Generation ---
 
 
-    # --- REVISED: Build Operational Instruction Detail ---
-    has_operator_children = bool(child_owner_names)
-    has_direct_atom_children = bool(direct_atom_values)
-    operational_instruction = ""
-    input_description_parts = []
-    input_names_for_reminder = []
+# --- Build Operational Instruction Detail ---
+has_operator_children = bool(child_owner_names) # child_owner_names is populated from recursive calls above
+has_direct_atom_children = bool(direct_atom_values) # direct_atom_values is populated from node.children above
 
-    num_inputs = len(node.children)
-    correct_result = node.value
+operational_instruction = ""
+input_description_parts = []
+input_names_for_reminder = [] # Populated below
 
-    # Describe inputs conceptually
-    if has_operator_children:
-        child_names_str = ', '.join(f"'{name}'" for name in child_owner_names)
-        input_description_parts.append(f"the outcome(s) from previous step(s) known as {child_names_str}")
-        input_names_for_reminder.extend(child_owner_names) # Add names for reminder
-    if has_direct_atom_children:
-        direct_atom_words = [num_to_words(a) for a in sorted(direct_atom_values)]
-        direct_values_str = ', '.join(f"{w} ({v})" for w, v in zip(direct_atom_words, sorted(direct_atom_values)))
-        input_description_parts.append(f"newly discovered quantities ({direct_values_str})")
+num_inputs = len(node.children)
+correct_result = node.value # Pre-calculated value
 
-    if not input_description_parts:
-        inputs_str = "inputs determined entirely by context (e.g., selecting between previous outcomes)"
-    else:
-        inputs_str = " and ".join(input_description_parts)
+# --- Explicitly format strings for prompt use ---
+# Format conceptual child names
+formatted_child_names_str = "None"
+if has_operator_children:
+    formatted_child_names_list = [f"'{name}'" for name in child_owner_names]
+    formatted_child_names_str = ', '.join(formatted_child_names_list)
+    input_names_for_reminder.extend(child_owner_names) # Add names for reminder list
 
-    # Describe the required action based on the operator
-    action_description = ""
-    if node.op == "SUM":
-        action_description = (
-            f"Your narrative MUST describe the characters **combining all {num_inputs} relevant inputs** ({inputs_str}). "
-            f"The narrative action should logically lead to the total sum **({correct_result}) being the quantity now associated with '{owner_name}'**."
-        )
-    elif node.op == "AVG":
-        action_description = (
-            f"Your narrative MUST describe the characters **combining all {num_inputs} relevant inputs** ({inputs_str}) "
-            f"and then determining the **integer average (rounded down)** of those inputs. "
-            f"The narrative action (e.g., a magical reduction, distributing evenly) must clearly lead to this average value **({correct_result}) being the quantity now associated with '{owner_name}'**."
-        )
-    elif node.op == "SM":
-        action_description = (
-            f"Your narrative MUST describe the characters **combining all {num_inputs} relevant inputs** ({inputs_str}) "
-            f"and then determining the **final digit of the sum**. "
-            f"The narrative action (e.g., using a cipher, magical reduction) must clearly lead to this single digit **({correct_result}) being the quantity now associated with '{owner_name}'**."
-        )
-    elif node.op == "MAX":
-        action_description = (
-            f"Your narrative MUST describe the characters **evaluating or comparing all {num_inputs} relevant inputs** ({inputs_str}) "
-            f"and **selecting ONLY the item/quantity corresponding to the largest value ({correct_result})**. "
-            f"The narrative action must clearly show them choosing the maximum."
-        )
-    elif node.op == "MIN":
-        action_description = (
-            f"Your narrative MUST describe the characters **evaluating or comparing all {num_inputs} relevant inputs** ({inputs_str}) "
-            f"and **selecting ONLY the item/quantity corresponding to the smallest value ({correct_result})**. "
-            f"The narrative action must clearly show them choosing the minimum."
-        )
-    elif node.op == "MED":
-        action_description = (
-            f"Your narrative MUST describe the characters **evaluating all {num_inputs} relevant inputs ({inputs_str}) based purely on their NUMERICAL VALUES**. "
-            f"It must be clear they are identifying the **middle NUMBER VALUE** after conceptually **sorting all {num_inputs} input values from smallest to largest** (disregarding order of discovery/physical arrangement). "
-            f"The narrative action must clearly show them **identifying and choosing ONLY the item/quantity corresponding to this numerically middle value ({correct_result})**."
-        )
-    else:
-        action_description = (
-            f"Your narrative MUST clearly describe the characters applying the '{op_label}' rule to all {num_inputs} inputs ({inputs_str}). The outcome should correspond to {correct_result}."
-        )
+# Format direct atom values
+formatted_direct_values_str = "None"
+if has_direct_atom_children:
+    direct_atom_words = [num_to_words(a) for a in sorted(direct_atom_values)]
+    formatted_direct_values_list = [f"{w} ({v})" for w, v in zip(direct_atom_words, sorted(direct_atom_values))]
+    formatted_direct_values_str = ', '.join(formatted_direct_values_list)
+
+# Build the combined input description string
+if has_operator_children:
+    input_description_parts.append(f"the outcome(s) from previous step(s) conceptually known as {formatted_child_names_str}")
+if has_direct_atom_children:
+    input_description_parts.append(f"newly discovered quantities ({formatted_direct_values_str})")
+
+if not input_description_parts:
+    inputs_str = "inputs determined entirely by context (e.g., selecting between previous outcomes)"
+else:
+    inputs_str = " and ".join(input_description_parts)
+# --- End explicit formatting ---
 
 
-    # Add reminder about number usage
-    reminder = ""
-    if input_names_for_reminder:
-        reminder_names_str = ', '.join(f"'{name}'" for name in input_names_for_reminder)
-        reminder = (
-            f"\n**REMINDER:** Do NOT mention the actual numeric results associated with previous steps ({reminder_names_str}) in your text. Refer to them by name or conceptually only. "
-             f"However, you MUST explicitly mention the newly discovered quantities for *this* step: {must_include_combined_str}."
-        )
+# --- NEW: More Detailed Action Descriptions (Using formatted strings) ---
+action_description = ""
+if node.op == "SUM":
+    action_description = (
+        f"Your narrative MUST describe the characters **combining all {num_inputs} relevant inputs** ({inputs_str}). "
+        # Use the formatted strings here
+        f"This involves conceptually adding the values associated with any previous steps ({formatted_child_names_str}) "
+        f"together with the newly discovered quantities ({formatted_direct_values_str}). "
+        f"The narrative action (e.g., gathering items, merging energies) should logically lead to the total sum **({correct_result}) being the quantity now associated with '{owner_name}'**."
+    )
+elif node.op == "AVG":
+    action_description = (
+        f"Your narrative MUST describe an action involving all {num_inputs} relevant inputs ({inputs_str}). "
+        f"Conceptually, this step involves:\n"
+        f"1.  Imagining the sum of the underlying numerical values of all these inputs (from concepts like {formatted_child_names_str} and new values like {formatted_direct_values_str}).\n" # Clarified source
+        f"2.  Imagining dividing that sum by the total number of inputs ({num_inputs}) and taking the integer part (rounding down).\n"
+        f"Your narrative MUST describe an event (e.g., a magical balancing, fair distribution leaving a specific remainder, an averaging mechanism) "
+        f"that **results in the characters possessing ONLY the quantity equal to this calculated integer average ({correct_result})**. "
+        f"Focus on the *outcome* matching {correct_result}, making the narrative reason plausible for the {world.get('genre', 'story')} setting. The final quantity associated with '{owner_name}' is {correct_result}."
+    )
+elif node.op == "SM":
+    action_description = (
+        f"Your narrative MUST describe an action involving all {num_inputs} relevant inputs ({inputs_str}). "
+        f"Conceptually, this step involves:\n"
+        f"1.  Imagining the sum of the underlying numerical values of all these inputs (from concepts like {formatted_child_names_str} and new values like {formatted_direct_values_str}).\n" # Clarified source
+        f"2.  Imagining determining the final digit (0-9) of that sum.\n"
+        f"Your narrative MUST describe an event (e.g., using a cipher that only uses the last digit, a magical process leaving only a residue equal to the last digit) "
+        f"that **results in the characters possessing ONLY the quantity equal to this final digit ({correct_result})**. "
+        f"Focus on the *outcome* matching {correct_result}, making the narrative reason plausible. The final quantity associated with '{owner_name}' is {correct_result}."
+    )
+elif node.op == "MAX":
+    action_description = (
+        f"Your narrative MUST describe the characters **evaluating or comparing all {num_inputs} relevant inputs** ({inputs_str}). "
+        f"Conceptually, they are identifying which input (among concepts like {formatted_child_names_str} and new values like {formatted_direct_values_str}) corresponds to the **largest underlying numerical value**. " # Clarified source
+        f"Your narrative MUST clearly show them **selecting ONLY the item/quantity corresponding to this largest value ({correct_result})**. "
+        f"The reason for choosing the maximum should be plausible within the story. The final quantity associated with '{owner_name}' becomes {correct_result} because they chose the maximum."
+    )
+elif node.op == "MIN":
+    action_description = (
+        f"Your narrative MUST describe the characters **evaluating or comparing all {num_inputs} relevant inputs** ({inputs_str}). "
+        f"Conceptually, they are identifying which input (among concepts like {formatted_child_names_str} and new values like {formatted_direct_values_str}) corresponds to the **smallest underlying numerical value**. " # Clarified source
+        f"Your narrative MUST clearly show them **selecting ONLY the item/quantity corresponding to this smallest value ({correct_result})**. "
+        f"The reason for choosing the minimum should be plausible within the story. The final quantity associated with '{owner_name}' becomes {correct_result} because they chose the minimum."
+    )
+elif node.op == "MED":
+    action_description = (
+        f"Your narrative MUST describe the characters **evaluating all {num_inputs} relevant inputs ({inputs_str}) based purely on their underlying NUMERICAL VALUES**. "
+        f"Conceptually, this step involves:\n"
+        f"1.  Imagining all {num_inputs} input values (from previous steps like {formatted_child_names_str} and new ones like {formatted_direct_values_str}).\n" # Clarified source
+        f"2.  Imagining sorting these numerical values from smallest to largest.\n"
+        f"3.  Identifying the item/quantity that corresponds to the value sitting exactly in the **middle position** of this imagined sorted list.\n"
+        f"Your narrative action MUST clearly show the characters **identifying and selecting ONLY the item/quantity corresponding to this numerically middle value ({correct_result})**. "
+        f"The reason for needing the median should be plausible. The final quantity associated with '{owner_name}' becomes {correct_result} because they chose the median."
+    )
+else:
+    # Fallback (remains the same)
+    action_description = (
+        f"Your narrative MUST clearly describe the characters applying the '{op_label}' rule to all {num_inputs} inputs ({inputs_str}). The outcome should correspond to {correct_result}."
+    )
+# --- End NEW Action Descriptions ---
 
-    # Assemble the operational instruction
-    operational_instruction = (
-        f"This scene resolves the step named '{owner_name}'.\n"
-        f"{action_description}\n"
-        f"The final quantity associated with '{owner_name}' after this action is {correct_result}."
-        f"{reminder}"
+
+# Add reminder about number usage (remains the same structure, but uses formatted strings)
+reminder = ""
+if input_names_for_reminder:
+    reminder_names_str = ', '.join(f"'{name}'" for name in input_names_for_reminder)
+    # Clarify which numbers MUST be mentioned using the formatted string
+    must_mention_str = formatted_direct_values_str if has_direct_atom_children else "None for this step"
+    reminder = (
+        f"\n**REMINDER:** Do NOT mention the actual numeric results associated with previous conceptual steps ({reminder_names_str}) in your text. Refer to them by name or conceptually only. "
+        f"However, you MUST explicitly mention the newly discovered quantities for *this* step: {must_mention_str}."
     )
 
+# Assemble the operational instruction (remains the same structure)
+operational_instruction = (
+    f"This scene resolves the step named '{owner_name}'.\n"
+    f"{action_description}\n"
+    f"{reminder}"
+)
 
-    # --- Assemble Task Body ---
-    task_body_parts = []
-    if scene_preamble:
-        task_body_parts.append(f"**Item Discovery:** {scene_preamble}")
-    task_body_parts.append(f"**Action/Calculation:** {operational_instruction}")
-    task_body = "\n\n".join(task_body_parts)
+# --- Assemble Task Body ---
+task_body_parts = []
+if scene_preamble:
+    task_body_parts.append(f"**Item Discovery:** {scene_preamble}")
+task_body_parts.append(f"**Action/Calculation:** {operational_instruction}")
+task_body = "\n\n".join(task_body_parts)
 
 
-    # Decide header and mode (Keep existing logic)
-    task_header = "Final Discovery" if is_root else "Discovery Step"
-    beat_mode = (
-        f"{world['genre']}, {'concluding' if is_root else 'continuous'} scene about "
-        f"{primary_object}"
-    )
+# Decide header and mode (Keep existing logic)
+task_header = "Final Discovery" if is_root else "Discovery Step"
+beat_mode = (
+    f"{world['genre']}, {'concluding' if is_root else 'continuous'} scene about "
+    f"{primary_object}"
+)
 
-    # --- Conditionally Add Meta-Instruction and Task-Solving Few-Shots ---
-    few_shot_section = ""
-    num_shots = config.NUM_FEW_SHOT_EXAMPLES # Get from config
-    if 0 < num_shots <= len(TASK_SOLVING_FEW_SHOTS):
-        few_shot_section += META_INSTRUCTION + "\n\n---\n\n" # Add meta-instruction
-        # Select the requested number of examples
-        selected_examples = TASK_SOLVING_FEW_SHOTS[:num_shots]
-        # Format them
-        few_shot_section += "\n\n---\n\n".join(selected_examples)
-        few_shot_section += "\n\n---\n\n" # Separator after examples
-    elif num_shots > len(TASK_SOLVING_FEW_SHOTS):
-        logger.warning(f"Requested {num_shots} few-shot examples, but only {len(TASK_SOLVING_FEW_SHOTS)} are available. Using all available.")
-        few_shot_section += META_INSTRUCTION + "\n\n---\n\n" # Add meta-instruction
-        selected_examples = TASK_SOLVING_FEW_SHOTS # Use all
-        few_shot_section += "\n\n---\n\n".join(selected_examples)
-        few_shot_section += "\n\n---\n\n" # Separator after examples
-    # If num_shots is 0, few_shot_section remains empty, correctly skipping meta-instruction and examples.
-    # --- END NEW SECTION ---
+# --- Conditionally Add Meta-Instruction and Task-Solving Few-Shots ---
+few_shot_section = ""
+num_shots = config.NUM_FEW_SHOT_EXAMPLES # Get from config
+if 0 < num_shots <= len(TASK_SOLVING_FEW_SHOTS):
+    few_shot_section += META_INSTRUCTION + "\n\n---\n\n" # Add meta-instruction
+    # Select the requested number of examples
+    selected_examples = TASK_SOLVING_FEW_SHOTS[:num_shots]
+    # Format them
+    few_shot_section += "\n\n---\n\n".join(selected_examples)
+    few_shot_section += "\n\n---\n\n" # Separator after examples
+elif num_shots > len(TASK_SOLVING_FEW_SHOTS):
+    logger.warning(f"Requested {num_shots} few-shot examples, but only {len(TASK_SOLVING_FEW_SHOTS)} are available. Using all available.")
+    few_shot_section += META_INSTRUCTION + "\n\n---\n\n" # Add meta-instruction
+    selected_examples = TASK_SOLVING_FEW_SHOTS # Use all
+    few_shot_section += "\n\n---\n\n".join(selected_examples)
+    few_shot_section += "\n\n---\n\n" # Separator after examples
+# If num_shots is 0, few_shot_section remains empty, correctly skipping meta-instruction and examples.
+# --- END NEW SECTION ---
 
 
     # --- Build the final prompt ---
@@ -1706,7 +1739,7 @@ def _generate_narrative_recursive(
         SAFETY_MARGIN,
     ):
         logger.warning(f"Approaching token limit before generating operator {node.op} ({owner_name}). Stopping. {'(ROOT NODE)' if is_root else ''}")
-        return # <--- If this happens for the root node, its scene is never generated
+        return
 
     # --- Create Validator ---
     # IMPORTANT: Use the strict validator you want the LLM to learn (e.g., Option A or original)

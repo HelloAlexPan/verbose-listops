@@ -55,7 +55,7 @@ BASE_BEAT_TEMPLATE = Template(
 #  Configuration Constants 
 
 # --- Batch Generation & Output ---
-NUM_SAMPLES_TO_GENERATE = 8 # How many samples to generate in one run
+NUM_SAMPLES_TO_GENERATE = 1 # How many samples to generate in one run
 DEFAULT_MAX_WORKERS = 20  # Default number of parallel threads for batch generation
 
 # --- COMPREHENSIVE FEW-SHOT EXAMPLES (Illustrating Success & Failure) ---
@@ -856,11 +856,15 @@ def _build_expanded_number_words_dict(
 
 
 EXPANDED_NUMBER_WORDS_DICT = _build_expanded_number_words_dict()
+
+# --- NEW: Sort keys by length descending to prioritize longer matches ---
+sorted_number_words = sorted(EXPANDED_NUMBER_WORDS_DICT.keys(), key=len, reverse=True)
 NUMBER_WORDS_PATTERN = (
     r"\b(?:(minus|negative)\s+)?("
-    + "|".join(re.escape(k) for k in EXPANDED_NUMBER_WORDS_DICT.keys())
+    + "|".join(re.escape(k) for k in sorted_number_words) # Use sorted keys
     + r")\b"
 )
+# --- END NEW ---
 NUMBER_WORDS_REGEX = re.compile(NUMBER_WORDS_PATTERN, re.IGNORECASE)
 
 
@@ -972,7 +976,8 @@ def make_number_validator(
         # Rule 1: Check if all required atoms are present
         missing_expected = allowed_atoms - found_numbers
         if missing_expected:
-            logger.debug(f"Validation FAIL (Rule 1): Missing required numbers: {missing_expected}")
+            # --- MODIFIED LOG ---
+            logger.debug(f"Validation FAIL (Rule 1): Missing required numbers: {missing_expected}. Required={allowed_atoms}, Found={found_numbers}")
             return False
 
         # Rule 2: Check if any forbidden atoms are present
@@ -980,36 +985,38 @@ def make_number_validator(
         if found_forbidden:
             truly_forbidden_found = found_forbidden - allowed_atoms
             if truly_forbidden_found:
-                 logger.debug(f"Validation FAIL (Rule 2): Found forbidden numbers: {truly_forbidden_found}")
-                 return False
+                # --- MODIFIED LOG ---
+                logger.debug(f"Validation FAIL (Rule 2): Found forbidden numbers: {truly_forbidden_found}. Forbidden={forbidden_atoms}, Found={found_numbers}")
+                return False
             else:
-                 logger.debug(f"Validator INFO: Found number(s) {found_forbidden} that were technically forbidden but also required. Allowing.")
+                logger.debug(f"Validator INFO: Found number(s) {found_forbidden} that were technically forbidden but also required. Allowing.")
 
         # Identify numbers found that were NOT explicitly required for this beat
         unexpected_found = found_numbers - allowed_atoms
-        logger.debug(f"Validator Unexpected Found (Before Rule 3/4/5): {unexpected_found}")
+        # logger.debug(f"Validator Unexpected Found (Before Rule 3/4/5): {unexpected_found}") # Keep this if you want
 
         # Check unexpected numbers against conditional allowances
         truly_disallowed_extras = set()
         for extra_num in unexpected_found:
             is_allowed_one = (extra_num == 1)
             is_allowed_count = (extra_num == operand_count and extra_num not in forbidden_atoms)
-            # --- OPTION A Check (Include if using Option A validator) ---
             is_allowed_small = (extra_num in IMPLICITLY_ALLOWED_SMALL_NUMBERS and extra_num not in forbidden_atoms)
-            # --- END OPTION A Check ---
 
-            # Adjust the condition based on whether you include is_allowed_small
-            # If using Option A validator:
             if not (is_allowed_one or is_allowed_count or is_allowed_small):
-            # If using original strict validator (no implicit small numbers):
-            # if not (is_allowed_one or is_allowed_count):
-                 if extra_num not in forbidden_atoms:
-                     truly_disallowed_extras.add(extra_num)
+                if extra_num not in forbidden_atoms:
+                    truly_disallowed_extras.add(extra_num)
+                # --- ADD LOGGING HERE TO SEE WHY AN EXTRA IS DISALLOWED ---
+                else:
+                    logger.debug(f"Validator DEBUG: Extra number {extra_num} was in unexpected_found but also in forbidden_atoms, so not added to truly_disallowed_extras here.")
+            # --- ADD LOGGING HERE TO SEE WHY AN EXTRA IS ALLOWED ---
+            # else:
+            #      logger.debug(f"Validator DEBUG: Extra number {extra_num} was allowed. is_allowed_one={is_allowed_one}, is_allowed_count={is_allowed_count}, is_allowed_small={is_allowed_small}")
+
 
         # Final check for disallowed extras
         if truly_disallowed_extras:
-            logger.debug(f"Validation FAIL (Strict Rule): Found unexpected/disallowed numbers: {truly_disallowed_extras}")
-            logger.debug(f"--> Context: Allowed={allowed_atoms}, Forbidden={forbidden_atoms}, OperandCount={operand_count}, Found={found_numbers}")
+            # --- MODIFIED LOG ---
+            logger.debug(f"Validation FAIL (Strict Rule): Found unexpected/disallowed numbers: {truly_disallowed_extras}. AllowedSet={allowed_atoms}, ForbiddenSet={forbidden_atoms}, OperandCount={operand_count}, Found={found_numbers}, UnexpectedRaw={unexpected_found}")
             return False
 
         # If all checks pass
@@ -1621,10 +1628,16 @@ def _generate_narrative_recursive(
     # --- Build the final prompt ---
     follow_example_instruction = (
         "YOUR TASK:\n"
-        "Generate the *next* narrative scene based on the 'Previous Scene Snippet' and the 'Discovery Step' / 'Final Discovery' instructions below.\n"
-        "**CRITICAL:** You MUST follow the specific **ULTRA-STRICT NUMBER RULES** provided below for THIS scene *exactly* like the GOOD Narrative Output examples above. Avoid making the mistakes shown in the BAD Narrative Output examples. Ensure ALL required numbers are present, NO forbidden numbers are present, and ABSOLUTELY NO OTHER numbers are included unless explicitly allowed by the 'MAY use' clause or are small numbers (0-10) that are NOT forbidden.\n\n" # Strengthened instruction
+        "Generate the *next* narrative scene based on the 'Previous Scene Snippet' and the 'Discovery Step' / 'Final Discovery' instructions provided below.\n"
+        "**CRITICAL:** You MUST follow the specific **ULTRA-STRICT NUMBER RULES** (provided below under 'Your Current Task Starts Below') for THIS scene *exactly*. \n"
+        "*   Ensure ALL required numbers (from the 'MUST INCLUDE' list) are present in your generated text.\n"
+        "*   Ensure NO forbidden numbers (from the 'MUST AVOID' list) are present.\n"
+        "*   Ensure ABSOLUTELY NO OTHER numbers are included unless explicitly allowed by the 'MAY use' clause or are small numbers (0-10) that are NOT forbidden.\n"
+        "Failure to follow these number rules precisely will result in an invalid output.\n\n"
         "--- Your Current Task Starts Below ---\n\n"
     )
+
+# Assemble the final prompt (remains the same structure)
 
     # Assemble the final prompt (remains the same structure)
     beat_prompt = (

@@ -209,12 +209,10 @@ LOG_BACKUP_COUNT = 3  # Number of backup log files to keep
 CLEAR_LOGS_ON_START = True  # If True, delete existing logs in LOG_DIR on startup
 
 FINAL_QUESTION_TEMPLATE = Template( # Note: $primary_object is no longer used in this version
-    "\n\n---\n\n**Final Question:** Carefully follow the main sequence of calculations described throughout the *entire narrative* above, focusing on the primary objective the characters are pursuing. Identify the single, concluding calculation performed as the **final step of that primary objective**. What is the **single integer** value that results *exclusively* from this final, top-level calculation related to the main task? Ignore any unrelated side-calculations or estimations mentioned incidentally, especially if they occur late in the narrative but are not part of the core sequence."
+    "\n\n---\n\n**Question:** Following the entire sequence of events described in the story, exactly how many $primary_object did the characters end up with? Provide only the final integer count."
 )
 
-JUDGE_INSTRUCTIONS = ( # Renamed constant for clarity
-    "\n\n**Instructions for Answering:**\n1. Read the entire narrative carefully from beginning to end.\n2. Identify the **primary objective** or main sequence of operations the characters are performing throughout the story.\n3. Trace this main sequence step-by-step, noting the numbers involved and performing calculations *only for this primary sequence*.\n4. **Crucially, disregard any incidental calculations, estimations, or quantitative details mentioned that are clearly separate from the main operational sequence (e.g., calculating fuel, counting unrelated items mentioned in passing).**\n5. Identify the *final operation* within the **main sequence** that concludes the primary objective.\n6. Determine the single integer result produced *only* by that concluding operation, based on its inputs as established by the preceding steps *within the main sequence*.\n7. Output **only** that single, final integer answer. No other text."
-)# --- Dataclasses ---
+# --- Dataclasses ---
 @dataclass
 class Config:
     NUM_SAMPLES_TO_GENERATE: int = NUM_SAMPLES_TO_GENERATE
@@ -1906,7 +1904,6 @@ def generate_narrative(
     narrative_body = "\n\n".join(context.scenes).strip()
     primary_object = world.get("object", "items")
     question = FINAL_QUESTION_TEMPLATE.substitute(primary_object=primary_object)
-    judge_instructions = JUDGE_INSTRUCTIONS
     final_prompt = narrative_body + question + judge_instructions
 
     # Final validation check (optional but recommended)

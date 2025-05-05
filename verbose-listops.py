@@ -473,7 +473,7 @@ def generate_with_retry(
             raw_content = None
             # Safely access the content
             if resp and resp.choices and len(resp.choices) > 0 and resp.choices[0].message:
-                 raw_content = resp.choices[0].message.content
+                raw_content = resp.choices[0].message.content
 
             if raw_content is not None:
                 candidate = raw_content.strip() # Strip only if content is not None
@@ -490,7 +490,7 @@ def generate_with_retry(
             )
 
             if candidate is None: # Check if candidate is None after potential stripping or if raw_content was None
-                 logger.warning(f"generate_with_retry attempt {attempt} resulted in None candidate.")
+                logger.warning(f"generate_with_retry attempt {attempt} resulted in None candidate.")
             elif not candidate or candidate.lower().startswith(
                 ("i cannot", "i'm sorry", "i am unable")
             ):
@@ -650,8 +650,8 @@ def _chat_completion_call(*args, **kwargs):
 
     # Add check for client initialization
     if client is None:
-         logger.error("OpenAI client (for Google) not initialized. Cannot make API call.")
-         raise RuntimeError("API client not initialized.")
+        logger.error("OpenAI client (for Google) not initialized. Cannot make API call.")
+        raise RuntimeError("API client not initialized.")
 
     # Filter kwargs to pass only standard OpenAI parameters
     # (Adjust list if needed based on OpenAI library version/spec)
@@ -660,7 +660,7 @@ def _chat_completion_call(*args, **kwargs):
 
     # Map max_completion_tokens if used by calling code
     if "max_completion_tokens" in kwargs and "max_tokens" not in standard_kwargs:
-         standard_kwargs["max_tokens"] = kwargs["max_completion_tokens"]
+        standard_kwargs["max_tokens"] = kwargs["max_completion_tokens"]
 
     logger.debug(f"DEBUG: Final args for client.chat.completions.create: {standard_kwargs}")
     logger.debug(f"Calling client.chat.completions.create with args: {standard_kwargs}")
@@ -668,9 +668,9 @@ def _chat_completion_call(*args, **kwargs):
         # Use the client instance and filtered arguments
         return client.chat.completions.create(**standard_kwargs)
     except Exception as e:
-         logger.error(f"Error during client.chat.completions.create: {e}")
-         logger.error(f"Args that failed: {standard_kwargs}")
-         raise # Re-raise the exception
+        logger.error(f"Error during client.chat.completions.create: {e}")
+        logger.error(f"Args that failed: {standard_kwargs}")
+        raise # Re-raise the exception
 
     # --- END TEMPORARY ---
 
@@ -1167,7 +1167,7 @@ def generate_owner_name_with_llm(
         if resp and resp.choices and resp.choices[0] and resp.choices[0].message:
             raw_candidate = resp.choices[0].message.content # Assign only if structure is valid
             if raw_candidate is None:
-                  logger.warning(f"LLM Naming: Received None content. Full response object: {resp}") 
+                logger.warning(f"LLM Naming: Received None content. Full response object: {resp}") 
         else:
             logger.warning(f"LLM Naming: Received unexpected response structure: {resp}")
             # Decide how to handle - maybe return None or raise specific error
@@ -1208,8 +1208,8 @@ def generate_owner_name_with_llm(
         # Add a check for overly generic terms that might slip through
         generic_terms_lower = {"result", "value", "calculation", "step", "process", "assembly", "equilibrium", "median", "average", "modulo", "outcome", "determination"}
         if any(term in candidate.lower().split() for term in generic_terms_lower):
-             logger.warning(f"LLM Naming: Generated name '{candidate}' contains a generic term. Rejecting.")
-             return None # Reject overly generic names
+            logger.warning(f"LLM Naming: Generated name '{candidate}' contains a generic term. Rejecting.")
+            return None # Reject overly generic names
 
         if len(candidate.split()) > 5: # Stricter word count check
             logger.warning(
@@ -1402,36 +1402,41 @@ def _generate_narrative_recursive(
                 f"They collect all of these {primary_object}, combining their haul."
             )
         elif node.op == "MED":
-             scene_preamble = (
-                 f"In this stage, the characters discover separate caches or groups containing "
-                 f"{object_list_str_for_preamble} {primary_object} respectively. "
-                 f"But for a reason you concoct, they can only collect the cache containing the middle quantity (median) of {primary_object}s."
-             )
+            correct_result = node.value # Get the pre-calculated correct result
+            num_inputs = len(node.children) # Total number of inputs (atoms + child ops)
+            action_description = (
+                f"Your narrative MUST describe the characters **evaluating all relevant inputs ({inputs_str}) based purely on their NUMERICAL VALUES**. "
+                f"It must be clear they are identifying the **middle value** after conceptually **sorting all {num_inputs} input values from smallest to largest**. "
+                f"The narrative action must clearly show them selecting the item or quantity corresponding to this numerically middle value, disregarding the order of discovery or physical arrangement. "
+                f"The correct median value they should identify and select is {correct_result}." 
+            )
         elif node.op == "MIN":
-             scene_preamble = (
-                 f"In this stage, the characters discover separate caches or storage areas containing "
-                 f"{object_list_str_for_preamble} {primary_object} respectively. "
-                 f"But for a reason you concoct, they can only access or retrieve from the area containing the smallest quantity (MIN) of {primary_object}."
-             )
+            scene_preamble = (
+                f"In this stage, the characters discover separate caches or storage areas containing "
+                f"{object_list_str_for_preamble} {primary_object} respectively. "
+                f"But for a reason you concoct, they can only access or retrieve from the area containing the smallest quantity (MIN) of {primary_object}."
+            )
         elif node.op == "MAX":
-             scene_preamble = (
-                 f"In this stage, the characters discover separate caches or storage areas containing "
-                 f"{object_list_str_for_preamble} {primary_object} respectively. "
-                 f"But for a reason you concoct, they can only access or retrieve from the area containing the largest quantity (MAX) of {primary_object}."
-             )
+            scene_preamble = (
+                f"In this stage, the characters discover separate caches or storage areas containing "
+                f"{object_list_str_for_preamble} {primary_object} respectively. "
+                f"But for a reason you concoct, they can only access or retrieve from the area containing the largest quantity (MAX) of {primary_object}."
+            )
         elif node.op == "AVG":
-             scene_preamble = (
-                 f"In this stage, the characters discover separate caches or groups containing "
-                 f"{object_list_str_for_preamble} {primary_object} respectively. "
-                 f"They collect all these {primary_object}, but for some reason you concoct, they are forced to give away their haul so that they are left only with a quantity equal to the average of the initial amounts (e.g., they find groups of 3, 4, and 5 {primary_object}, but can only walk away with 4 {primary_object})."
-             )
+            scene_preamble = (
+                f"In this stage, the characters discover separate caches or groups containing "
+                f"{object_list_str_for_preamble} {primary_object} respectively. "
+                # REVISED REASON CONSTRAINT:
+                f"They collect all these {primary_object}, but for a reason you concoct **that mathematically results in the integer average (floored)**, they are forced to give away their haul so that they are left only with a quantity equal to the average of the initial amounts."
+            )
         elif node.op == "SM":
-             scene_preamble = (
-                 f"In this stage, the characters discover separate caches or groups containing "
-                 f"{object_list_str_for_preamble} {primary_object} respectively. "
-                 f"They collect all these {primary_object}, combining their haul. However, for a reason you concoct, "
-                 f"they are forced to give away most of their collection, leaving them only with a quantity equal to the final digit of the total number gathered (e.g., they collect a total of 27 {primary_object}, and can only walk away with 7 {primary_object})."
-             )
+            scene_preamble = (
+                f"In this stage, the characters discover separate caches or groups containing "
+                f"{object_list_str_for_preamble} {primary_object} respectively. "
+                # REVISED REASON CONSTRAINT:
+                f"They collect all these {primary_object}, combining their haul. However, for a reason you concoct **that mathematically results in keeping only the final digit of the total**, "
+                f"they are forced to give away most of their collection, leaving them only with a quantity equal to the final digit of the total number gathered."
+            )
 
     # Build strings for prompt instructions (MUST INCLUDE, MUST AVOID, MAY USE)
     # ... (Keep the logic from the previous fix where only direct atoms are in must_include_combined_str) ...
@@ -1441,7 +1446,7 @@ def _generate_narrative_recursive(
         must_include_list.extend(items)
 
     if not must_include_list:
-         must_include_combined_str = "None applicable for this step (only uses results from previous steps)"
+        must_include_combined_str = "None applicable for this step (only uses results from previous steps)"
     elif len(must_include_list) == 1:
         must_include_combined_str = must_include_list[0]
     elif len(must_include_list) == 2:
@@ -1485,125 +1490,161 @@ def _generate_narrative_recursive(
         elif len(items) == 2:
             object_list_str_for_preamble = " and ".join(items)
         else:
+            object_list_str_for_preamble = ""
+    if direct_atom_values:
+        items = [f"{num_to_words(x)} ({x})" for x in sorted(direct_atom_values)]
+        if len(items) == 1:
+            object_list_str_for_preamble = items[0]
+        elif len(items) == 2:
+            object_list_str_for_preamble = " and ".join(items)
+        else:
             object_list_str_for_preamble = ", ".join(items[:-1]) + ", and " + items[-1]
 
     scene_preamble = "" # Default empty
+    # Only generate preambles if there are direct atoms to describe
     if direct_atom_values:
-        # (Keep the existing if/elif block for SUM, MED, MIN, MAX, AVG, SM based on node.op)
+        # --- Keep the existing if/elif block for SUM, MED, MIN, MAX, AVG, SM ---
+        # (This block describes the *discovery* of new items)
         if node.op == "SUM":
             scene_preamble = (
                 f"In this stage, the characters discover separate caches or groups containing "
                 f"{object_list_str_for_preamble} {primary_object} respectively. "
-                f"They collect all of these {primary_object}, combining their haul."
+                # Removed the second sentence to focus preamble on discovery only
             )
         elif node.op == "MED":
-             scene_preamble = (
-                 f"In this stage, the characters discover separate caches or groups containing "
-                 f"{object_list_str_for_preamble} {primary_object} respectively. "
-                 f"But for a reason you concoct, they can only collect the cache containing the middle quantity (median) of {primary_object}s."
-             )
+            scene_preamble = (
+                f"In this stage, the characters discover separate caches or groups containing "
+                f"{object_list_str_for_preamble} {primary_object} respectively. "
+                # Removed the second sentence
+            )
         elif node.op == "MIN":
-             scene_preamble = (
-                 f"In this stage, the characters discover separate caches or storage areas containing "
-                 f"{object_list_str_for_preamble} {primary_object} respectively. "
-                 f"But for a reason you concoct, they can only access or retrieve from the area containing the smallest quantity (MIN) of {primary_object}."
-             )
+            scene_preamble = (
+                f"In this stage, the characters discover separate caches or storage areas containing "
+                f"{object_list_str_for_preamble} {primary_object} respectively. "
+                # Removed the second sentence
+            )
         elif node.op == "MAX":
-             scene_preamble = (
-                 f"In this stage, the characters discover separate caches or storage areas containing "
-                 f"{object_list_str_for_preamble} {primary_object} respectively. "
-                 f"But for a reason you concoct, they can only access or retrieve from the area containing the largest quantity (MAX) of {primary_object}."
-             )
+            scene_preamble = (
+                f"In this stage, the characters discover separate caches or storage areas containing "
+                f"{object_list_str_for_preamble} {primary_object} respectively. "
+                # Removed the second sentence
+            )
         elif node.op == "AVG":
-             scene_preamble = (
-                 f"In this stage, the characters discover separate caches or groups containing "
-                 f"{object_list_str_for_preamble} {primary_object} respectively. "
-                 f"They collect all these {primary_object}, but for some reason you concoct, they are forced to give away their haul so that they are left only with a quantity equal to the average of the initial amounts (e.g., they find groups of 3, 4, and 5 {primary_object}, but can only walk away with 4 {primary_object})."
-             )
+            scene_preamble = (
+                f"In this stage, the characters discover separate caches or groups containing "
+                f"{object_list_str_for_preamble} {primary_object} respectively. "
+                # Removed the second sentence
+            )
         elif node.op == "SM":
-             scene_preamble = (
-                 f"In this stage, the characters discover separate caches or groups containing "
-                 f"{object_list_str_for_preamble} {primary_object} respectively. "
-                 f"They collect all these {primary_object}, combining their haul. However, for a reason you concoct, "
-                 f"they are forced to give away most of their collection, leaving them only with a quantity equal to the final digit of the total number gathered (e.g., they collect a total of 27 {primary_object}, and can only walk away with 7 {primary_object})."
-             )
+            scene_preamble = (
+                f"In this stage, the characters discover separate caches or groups containing "
+                f"{object_list_str_for_preamble} {primary_object} respectively. "
+                # Removed the second sentence
+            )
+    # --- End Preamble Generation ---
 
-    # (This logic remains the same, depends on child_owner_names collected earlier and direct_atom_values)
+
+    # --- REVISED: Build Operational Instruction Detail ---
     has_operator_children = bool(child_owner_names)
     has_direct_atom_children = bool(direct_atom_values)
-    ownership_instruction_detail = ""
-    input_description_parts = [] # Describe the inputs for this step
+    operational_instruction = ""
+    input_description_parts = []
+    input_names_for_reminder = []
 
-    # Describe inputs from previous steps (child operations)
+    num_inputs = len(node.children)
+    correct_result = node.value
+
+    # Describe inputs conceptually
     if has_operator_children:
         child_names_str = ', '.join(f"'{name}'" for name in child_owner_names)
-        input_description_parts.append(f"the outcome(s) from previous step(s) represented conceptually by {child_names_str}") # Now works
-        ownership_instruction_detail += (
-            f"REMEMBER: The specific numeric values resulting from {child_names_str} were determined in *earlier* scenes and are FORBIDDEN here. " # Line 1325 (Now works)
-            f"Refer to them conceptually or by name only.\n"
-        )
-
-    # Describe inputs from direct atoms discovered in *this* step
+        input_description_parts.append(f"the outcome(s) from previous step(s) known as {child_names_str}")
+        input_names_for_reminder.extend(child_owner_names) # Add names for reminder
     if has_direct_atom_children:
         direct_atom_words = [num_to_words(a) for a in sorted(direct_atom_values)]
         direct_values_str = ', '.join(f"{w} ({v})" for w, v in zip(direct_atom_words, sorted(direct_atom_values)))
-        input_description_parts.append(f"newly discovered quantities: {direct_values_str}")
-    # Combine input descriptions
+        input_description_parts.append(f"newly discovered quantities ({direct_values_str})")
+
     if not input_description_parts:
-        inputs_str = "inputs determined entirely by context (e.g., selecting between previous outcomes)" # Fallback for MIN/MAX/MED on OpNodes only
-    elif len(input_description_parts) == 1:
-        inputs_str = input_description_parts[0]
+        inputs_str = "inputs determined entirely by context (e.g., selecting between previous outcomes)"
     else:
         inputs_str = " and ".join(input_description_parts)
 
-    # Construct the main instruction
-    ownership_instruction_detail = ( # Use '=' to initialize the string for this beat
-        f"This scene focuses on resolving the step named '{owner_name}'. "
-    )
-
-    # STEP 2: Append specific instruction based on condition using if/else
-    if node.op in ("SUM", "AVG", "SM") and has_operator_children and has_direct_atom_children:
-         ownership_instruction_detail += ( # Use '+=' to append to the string
-             f"Narratively describe the action of **combining** {inputs_str} "
-             f"and then applying the specific rule '{op_label}' to that combined set "
-             f"to determine the final state, value, or significance associated with '{owner_name}'. "
-             f"Make it clear that both the previous outcome ('{child_owner_names[0]}') and the new quantities ({direct_values_str}) are part of the input for the '{op_label}' rule."
-         )
+    # Describe the required action based on the operator
+    action_description = ""
+    if node.op == "SUM":
+        action_description = (
+            f"Your narrative MUST describe the characters **combining all {num_inputs} relevant inputs** ({inputs_str}). "
+            f"The narrative action should logically lead to the total sum **({correct_result}) being the quantity now associated with '{owner_name}'**."
+        )
+    elif node.op == "AVG":
+        action_description = (
+            f"Your narrative MUST describe the characters **combining all {num_inputs} relevant inputs** ({inputs_str}) "
+            f"and then determining the **integer average (rounded down)** of those inputs. "
+            f"The narrative action (e.g., a magical reduction, distributing evenly) must clearly lead to this average value **({correct_result}) being the quantity now associated with '{owner_name}'**."
+        )
+    elif node.op == "SM":
+        action_description = (
+            f"Your narrative MUST describe the characters **combining all {num_inputs} relevant inputs** ({inputs_str}) "
+            f"and then determining the **final digit of the sum**. "
+            f"The narrative action (e.g., using a cipher, magical reduction) must clearly lead to this single digit **({correct_result}) being the quantity now associated with '{owner_name}'**."
+        )
+    elif node.op == "MAX":
+        action_description = (
+            f"Your narrative MUST describe the characters **evaluating or comparing all {num_inputs} relevant inputs** ({inputs_str}) "
+            f"and **selecting ONLY the item/quantity corresponding to the largest value ({correct_result})**. "
+            f"The narrative action must clearly show them choosing the maximum."
+        )
+    elif node.op == "MIN":
+        action_description = (
+            f"Your narrative MUST describe the characters **evaluating or comparing all {num_inputs} relevant inputs** ({inputs_str}) "
+            f"and **selecting ONLY the item/quantity corresponding to the smallest value ({correct_result})**. "
+            f"The narrative action must clearly show them choosing the minimum."
+        )
+    elif node.op == "MED":
+        action_description = (
+            f"Your narrative MUST describe the characters **evaluating all {num_inputs} relevant inputs ({inputs_str}) based purely on their NUMERICAL VALUES**. "
+            f"It must be clear they are identifying the **middle NUMBER VALUE** after conceptually **sorting all {num_inputs} input values from smallest to largest** (disregarding order of discovery/physical arrangement). "
+            f"The narrative action must clearly show them **identifying and choosing ONLY the item/quantity corresponding to this numerically middle value ({correct_result})**."
+        )
     else:
-        # Default instruction for other ops or single input types
-        ownership_instruction_detail += ( # Use '+=' to append
-             f"Narratively describe how applying the rule '{op_label}' to {inputs_str} "
-             f"determines the final state, value, or significance associated with '{owner_name}'. "
-             f"Focus on the *action* of applying the rule in this specific scene."
+        action_description = (
+            f"Your narrative MUST clearly describe the characters applying the '{op_label}' rule to all {num_inputs} inputs ({inputs_str}). The outcome should correspond to {correct_result}."
         )
 
-    # STEP 3: Append the reminder about forbidden values (now correctly placed after the if/else)
-    if has_operator_children:
-        child_names_str = ', '.join(f"'{name}'" for name in child_owner_names)
-        ownership_instruction_detail += ( # Use '+=' to append
-            f"\nREMEMBER: The specific numeric values resulting from {child_names_str} were determined in *earlier* scenes and are FORBIDDEN here. "
-            f"Refer to them conceptually or by name only when describing the combination."
+
+    # Add reminder about number usage
+    reminder = ""
+    if input_names_for_reminder:
+        reminder_names_str = ', '.join(f"'{name}'" for name in input_names_for_reminder)
+        reminder = (
+            f"\n**REMINDER:** Do NOT mention the actual numeric results associated with previous steps ({reminder_names_str}) in your text. Refer to them by name or conceptually only. "
+             f"However, you MUST explicitly mention the newly discovered quantities for *this* step: {must_include_combined_str}."
         )
 
-    # Decide header and mode
-    task_header = "Final Discovery" if is_root else "Discovery Step"
-    beat_mode = (
-        f"{world['genre']}, {'concluding' if is_root else 'continuous'} scene about "
-        f"{primary_object}"
-    )
+    # Assemble the operational instruction
+    operational_instruction = (
+        f"This scene resolves the step named '{owner_name}'.\n"
+        f"{action_description}\n"
+        f"The final quantity associated with '{owner_name}' after this action is {correct_result}."
+        f"{reminder}"
 
-    # Decide header and mode
-    task_header = "Final Discovery" if is_root else "Discovery Step"
-    beat_mode = (
-        f"{world['genre']}, {'concluding' if is_root else 'continuous'} scene about "
-        f"{primary_object}"
-    )
+    # --- END REVISED Operational Instruction Detail ---
 
+
+    # --- Assemble Task Body ---
     task_body_parts = []
     if scene_preamble:
-        task_body_parts.append(scene_preamble)
-    task_body_parts.append(ownership_instruction_detail)
+        task_body_parts.append(f"**Item Discovery:** {scene_preamble}")
+    task_body_parts.append(f"**Action/Calculation:** {operational_instruction}")
     task_body = "\n\n".join(task_body_parts)
+
+
+    # Decide header and mode (Keep existing logic)
+    task_header = "Final Discovery" if is_root else "Discovery Step"
+    beat_mode = (
+        f"{world['genre']}, {'concluding' if is_root else 'continuous'} scene about "
+        f"{primary_object}"
+    )
 
     # --- Conditionally Add Meta-Instruction and Task-Solving Few-Shots ---
     few_shot_section = ""
@@ -1616,11 +1657,11 @@ def _generate_narrative_recursive(
         few_shot_section += "\n\n---\n\n".join(selected_examples)
         few_shot_section += "\n\n---\n\n" # Separator after examples
     elif num_shots > len(TASK_SOLVING_FEW_SHOTS):
-         logger.warning(f"Requested {num_shots} few-shot examples, but only {len(TASK_SOLVING_FEW_SHOTS)} are available. Using all available.")
-         few_shot_section += META_INSTRUCTION + "\n\n---\n\n" # Add meta-instruction
-         selected_examples = TASK_SOLVING_FEW_SHOTS # Use all
-         few_shot_section += "\n\n---\n\n".join(selected_examples)
-         few_shot_section += "\n\n---\n\n" # Separator after examples
+        logger.warning(f"Requested {num_shots} few-shot examples, but only {len(TASK_SOLVING_FEW_SHOTS)} are available. Using all available.")
+        few_shot_section += META_INSTRUCTION + "\n\n---\n\n" # Add meta-instruction
+        selected_examples = TASK_SOLVING_FEW_SHOTS # Use all
+        few_shot_section += "\n\n---\n\n".join(selected_examples)
+        few_shot_section += "\n\n---\n\n" # Separator after examples
     # If num_shots is 0, few_shot_section remains empty, correctly skipping meta-instruction and examples.
     # --- END NEW SECTION ---
 
@@ -1675,17 +1716,17 @@ def _generate_narrative_recursive(
     # --- Create Validator ---
     # IMPORTANT: Use the strict validator you want the LLM to learn (e.g., Option A or original)
     validate_beat_numbers = make_number_validator(
-         allowed_atoms=required_atoms_for_beat,
-         forbidden_atoms=truly_forbidden_for_prompt,
-         operand_count=operand_count
-         # Make sure this validator implements the rules you want enforced,
-         # ideally the one corresponding to the examples (e.g., Option A)
+        allowed_atoms=required_atoms_for_beat,
+        forbidden_atoms=truly_forbidden_for_prompt,
+        operand_count=operand_count
+        # Make sure this validator implements the rules you want enforced,
+        # ideally the one corresponding to the examples (e.g., Option A)
     )
     # Padding validator needs to forbid everything introduced so far
     validate_padding = make_number_validator(
-         allowed_atoms=set(),
-         forbidden_atoms=context.introduced_atoms.union(required_atoms_for_beat),
-         operand_count=0
+        allowed_atoms=set(),
+        forbidden_atoms=context.introduced_atoms.union(required_atoms_for_beat),
+        operand_count=0
     )
 
 
@@ -1724,7 +1765,7 @@ def _generate_narrative_recursive(
             logger.warning(f"Beat {context.beat_counter['current']}/{context.beat_counter['total']} retry {attempt}/{config.MAX_BEAT_RETRIES} for operator {node.op} ({owner_name}): {reason}")
             time.sleep(config.RETRY_INITIAL_DELAY * (2 ** (attempt - 1)))
         if not validate_beat_numbers(candidate_text):
-             reason = "number validation failed" # <--- Could fail repeatedly for root
+            reason = "number validation failed" # <--- Could fail repeatedly for root
 
 
     # --- Process Successful Generation or Raise Error ---
@@ -1772,7 +1813,7 @@ def _generate_narrative_recursive(
         current_forbidden_for_padding = context.introduced_atoms # Everything introduced so far is forbidden
         forbidden_list_str_padding = "None"
         if current_forbidden_for_padding:
-             forbidden_list_str_padding = ", ".join(f"{num_to_words(x)} ({x})" for x in sorted(current_forbidden_for_padding))
+            forbidden_list_str_padding = ", ".join(f"{num_to_words(x)} ({x})" for x in sorted(current_forbidden_for_padding))
 
 
         padding_prompt = padding_prompt_template.substitute(
@@ -1887,7 +1928,7 @@ def generate_narrative(
                         if isinstance(child, OpNode) and id(child) in owner_map:
                             child_owner_names.append(owner_map[id(child)])
                         elif isinstance(child, OpNode):
-                             logger.warning(f"LLM Naming: Child OpNode {child.op} of parent {op_node.op} has no owner name in map during parent naming.")
+                            logger.warning(f"LLM Naming: Child OpNode {child.op} of parent {op_node.op} has no owner name in map during parent naming.")
 
                     try:
                         owner_name = generate_owner_name_with_llm(
@@ -1991,8 +2032,8 @@ def generate_narrative(
     # Final validation check (optional but recommended)
     final_token_count = len(encoder.encode(final_prompt))
     if final_token_count > config.DEFAULT_MAX_TOTAL_TOKENS:
-         logger.warning(f"Final generated prompt ({final_token_count} tokens) exceeds MAX_TOTAL_TOKENS ({config.DEFAULT_MAX_TOTAL_TOKENS}). Truncation might occur.")
-         # Depending on requirements, you might return None or the truncated prompt
+        logger.warning(f"Final generated prompt ({final_token_count} tokens) exceeds MAX_TOTAL_TOKENS ({config.DEFAULT_MAX_TOTAL_TOKENS}). Truncation might occur.")
+        # Depending on requirements, you might return None or the truncated prompt
 
     logger.info(f"Successfully generated narrative prompt. Final estimated tokens: {context.tokens_used} (body), {final_token_count} (full prompt)")
     return final_prompt.strip()

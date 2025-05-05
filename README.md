@@ -1,5 +1,13 @@
 # Verbose ListOps Evaluation Benchmark
 
+Evaluating LLMs' multi-step reasoning within long, narrative contexts is vital for applications like signal extraction from large text corpora (e.g., qualification signals from sales transcripts); yet existing benchmarks simplify this challenge, lacking semantically relevant distractors or dual controls for both context length and underlying task complexity. LLMs struggle to track hierarchical dependencies, filter semantically related narrative details, and follow embedded logic over extended sequences, even when succeeding at the core task in isolation; this bottleneck hinders progress.
+
+To fill this gap, we introduce Verbose ListOps, a novel benchmark that agentically transforms ListOps computations into lengthy, coherent narratives using LLM-driven post-order Abstract Syntax Tree (AST) traversal and strict validation of numerical content per step. This enables independent control over context length and task complexity, alongside deterministic ground truth evaluation.
+
+Initial experiments show today's SOTA LLMs (GPT 4.1, Claude Sonnet 3.7, Gemini 1.5 Pro) fail Verbose ListOps at modest (~10k token) lengths while easily solving equivalent ListOps problems, empirically demonstrating the difficulty of narrative-embedded reasoning. The benchmark's design isolates and verifiably measures core capabilities—identifying operands, tracking conceptual sub-task results, resisting distraction—essential for complex downstream applications.
+
+Code and data to replicate this experiment are in this public repo.
+
 ## Overview
 
 Welcome to the Verbose ListOps Evaluation Benchmark repository. This project provides tools to agentically generate synthetic multi-hop QA evaluation tasks of variable difficulty for Large Language Models (LLMs). The benchmark assesses reasoning capabilities when faced with tasks embedded within extremely long, narratively structured, and potentially distracting contexts.

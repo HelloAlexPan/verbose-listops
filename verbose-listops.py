@@ -154,6 +154,70 @@ FEW_SHOT_EXAMPLES_STRICT = [
 
 ]
 
+# --- Meta-Instruction + Task-Solving Few-Shot Examples ---
+META_INSTRUCTION = (
+    "Here are examples demonstrating how to solve narrative math problems. For each problem: "
+    "Read the entire story. Identify the quantity being tracked (e.g., coins, artifacts, energy units). "
+    "Follow the narrative step-by-step, performing the calculation implied by the actions in each scene "
+    "(e.g., finding items, combining, selecting the largest/smallest, averaging, reducing, resetting). "
+    "Keep track of the current quantity as it changes. Finally, answer the question by providing only "
+    "the single integer representing the final quantity based on the last relevant action described."
+)
+
+TASK_SOLVING_FEW_SHOTS = [
+    # Example 1 (Soulstone Story - Summarized Narrative + Detailed Trace)
+    """
+*   **Narrative Summary & Calculation Trace:**
+    *   **Scene 1 (Initial Find & Sum):** Characters find three caches of Soulstones: 24, 92, and 96. Narrative cue: "The Unified Measure requires the sum of all." They combine them.
+        *   *Calculation:* SUM [24, 92, 96] = 212
+        *   *Current Soulstones:* 212
+    *   **Scene 2 (New Finds & Average):** They find four more patches: 1, 27, 54, and 88. Narrative cue: "combining it with the Soulstones representing The Unified Measure" (the 212). Then, collection "reduced, leaving them with only... the average, rounded down".
+        *   *Calculation:* Values for average are [212, 1, 27, 54, 88]. Total = 382. Count = 5. FLOOR(AVERAGE(382 / 5)) = 76.
+        *   *Current Soulstones:* 76
+    *   **Scene 3 (More Finds & Average):** They find 68 and 76 more. Narrative cue: "adding them to the Soulstones representing Balanced Convergence" (the 76). Combined amount then shrinks, leaving the "integer average".
+        *   *Calculation:* Values for average are [76, 68, 76]. Total = 220. Count = 3. FLOOR(AVERAGE(220 / 3)) = 73.
+        *   *Current Soulstones:* 73
+    *   **Scene 4 (Final Finds & Sum):** They find 15 and 20 more. Narrative cue: Anya "combined these two newfound sets with the Soulstones linked to the Convergence Sigil" (the 73), stating "their sum we must bind!"
+        *   *Calculation:* SUM [73, 15, 20] = 108.
+        *   *Current Soulstones:* 108
+    *   **Scene 5 (Final Choice - Max):** Presented with portals showing 1 and 69 Soulstones. Narrative cue: "The Apex Lode requires the greatest bounty." They choose the larger cache. This action *determines* the final amount.
+        *   *Calculation:* Choose MAX [1, 69] = 69. This selection *replaces* the previous total.
+        *   *Final Soulstones:* 69
+
+*   **Question:** Following the entire sequence of events described in the story, exactly how many Soulstones did the characters end up with? Provide only the final integer count.
+*   **Answer:** 69
+    """,
+    # Example 2 (Dwarf Story - MIN Operation, Irrelevant Number, Step Format Trace)
+    """
+*   **Narrative:**
+    The dwarven prospectors, Borin and Grung, started their expedition into the Crystal Caves with 40 Glow-Shards for light. Deep inside, after 5 hours of careful searching, they found three veins. The first yielded 28 Shards, the second a meager 9 Shards, and the third held 35 Shards. Borin consulted the ancient map, "The Echoing Lock requires the *smallest* yield to attune its frequency. We can only take that amount forward." They carefully chipped out the required Shards and left the rest. Later, they found a small pouch containing another 15 Shards, which they added to their collection.
+
+*   **Calculation Trace:**
+    *   **Step 1:** Start with 40 Glow-Shards.
+    *   **Step 2:** Find veins yielding [28, 9, 35]. Narrative requires MIN ("smallest yield") for the lock. MIN [28, 9, 35] = 9. They *take only this amount*, replacing the initial 40. Current Shards: 9. (Note: "5 hours" is irrelevant to Shard count).
+    *   **Step 3:** Find pouch with 15 Shards. Narrative: "added them to their collection". SUM [9, 15] = 24. Current Shards: 24.
+
+*   **Question:** Following the entire sequence of events described in the story, exactly how many Glow-Shards did the prospectors end up with? Provide only the final integer count.
+*   **Answer:** 24
+    """,
+    # Example 3 (Professor Story - Reset/Replacement, Highlighting Format Trace)
+    """
+*   **Narrative:**
+    Professor Armitage began his artifact hunt with high hopes. **He first discovered a cache of 18 Relic Fragments.** Encouraged, **he located another site yielding 32 Fragments**, carefully adding them to his satchel. As he navigated a narrow passage, **a sudden tremor caused him to stumble, his satchel tearing open and spilling its entire contents into a bottomless chasm.** Dejected but determined, he pressed on for another hour. Just as he was about to give up, **he found a small, intact pedestal explicitly marked 'Contains exactly 7 Fragments'.** He took these precious few items.
+
+*   **Calculation Trace (Linked to Highlights):**
+    *   Initial Find: **"...cache of 18 Relic Fragments."** -> Current: 18
+    *   Second Find: **"...another site yielding 32 Fragments..."** -> Action: Add to current. Calculation: 18 + 32 = 50. Current: 50.
+    *   Accident: **"...spilling its entire contents..."** -> Action: Reset based on narrative. Current: 0.
+    *   Final Find: **"...pedestal explicitly marked 'Contains exactly 7 Fragments'."** -> Action: Take this specific amount. Current: 7. (Note: "another hour" is irrelevant).
+
+*   **Question:** Following the entire sequence of events described in the story, exactly how many Relic Fragments did Professor Armitage end up with? Provide only the final integer count.
+*   **Answer:** 7
+    """
+]
+# --- END NEW FEW-SHOT SECTION ---
+
+
 # --- Base configurations ---
 # Directory for all log output within the project
 LOG_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "logs")
@@ -231,6 +295,7 @@ class Config:
     USE_LLM_NAMING: bool = (
         True  # If True, use LLM for owner names; else use thematic fallback
     )
+    NUM_FEW_SHOT_EXAMPLES: int = 2 # 0-3 allowed
 
 
 config = Config()
@@ -1527,21 +1592,31 @@ def _generate_narrative_recursive(
         f"{primary_object}"
     )
 
-    # Build task_body using the potentially empty scene_preamble and the dynamic ownership detail
     task_body_parts = []
     if scene_preamble:
         task_body_parts.append(scene_preamble)
     task_body_parts.append(ownership_instruction_detail)
     task_body = "\n\n".join(task_body_parts)
 
-    # --- Prepend Comprehensive Few-Shot Examples ---
-    formatted_examples = "--- Examples of How to Follow (and Fail) the Number Rules ---\n\n"
-    # Select N examples (e.g., 1 or 2 to save tokens)
-    num_examples_to_use = min(len(FEW_SHOT_EXAMPLES_STRICT), 3) # Use up to 3 examples now
+    # --- Conditionally Add Meta-Instruction and Task-Solving Few-Shots ---
+    few_shot_section = ""
+    num_shots = config.NUM_FEW_SHOT_EXAMPLES # Get from config
+    if 0 < num_shots <= len(TASK_SOLVING_FEW_SHOTS):
+        few_shot_section += META_INSTRUCTION + "\n\n---\n\n" # Add meta-instruction
+        # Select the requested number of examples
+        selected_examples = TASK_SOLVING_FEW_SHOTS[:num_shots]
+        # Format them
+        few_shot_section += "\n\n---\n\n".join(selected_examples)
+        few_shot_section += "\n\n---\n\n" # Separator after examples
+    elif num_shots > len(TASK_SOLVING_FEW_SHOTS):
+         logger.warning(f"Requested {num_shots} few-shot examples, but only {len(TASK_SOLVING_FEW_SHOTS)} are available. Using all available.")
+         few_shot_section += META_INSTRUCTION + "\n\n---\n\n" # Add meta-instruction
+         selected_examples = TASK_SOLVING_FEW_SHOTS # Use all
+         few_shot_section += "\n\n---\n\n".join(selected_examples)
+         few_shot_section += "\n\n---\n\n" # Separator after examples
+    # If num_shots is 0, few_shot_section remains empty, correctly skipping meta-instruction and examples.
+    # --- END NEW SECTION ---
 
-    for i, (rules, good_output, bad_output, reason) in enumerate(FEW_SHOT_EXAMPLES_STRICT):
-        formatted_examples += f"--- Example {i+1} ---\n"
-        formatted_examples += f"Hypothetical Rules Provided:\n{rules}\n\n"
 
     # --- Build the final prompt ---
     follow_example_instruction = (
@@ -1553,10 +1628,10 @@ def _generate_narrative_recursive(
 
     # Assemble the final prompt (remains the same structure)
     beat_prompt = (
-        formatted_examples # Add the examples first
-        + follow_example_instruction # Add the instruction to follow them
-        + BASE_BEAT_TEMPLATE.substitute( # Then add the main template for the *current* task
-            beat_mode=beat_mode, # <<< ADD THIS LINE BACK
+        few_shot_section
+        + follow_example_instruction 
+        + BASE_BEAT_TEMPLATE.substitute(
+            beat_mode=beat_mode,
             characters=json.dumps(world["characters"]),
             setting=world["setting"],
             snippet=context.last_scene_text[-100:],
@@ -2025,20 +2100,21 @@ def generate_single_sample(sample_index: int) -> dict | None:
 
 
 def main(
+    config: Config,
     num_samples: int = config.NUM_SAMPLES_TO_GENERATE,
-    # The output_file parameter has been removed from here
-    max_workers: int = config.DEFAULT_MAX_WORKERS,
+    max_workers: int = config.DEFAULT_MAX_WORKERS
 ):
     """Generate samples with strict validation."""
     # --- Dynamic Filename Generation ---
     sanitized_model_name = MODEL.replace("/", "_").replace(":", "-")
     output_file = (
         f"DATASET_"
-        f"{sanitized_model_name}_"
+        f"{config.NUM_FEW_SHOT_EXAMPLES}shot_"
         f"{config.DEFAULT_MAX_TOTAL_TOKENS}-tok_"
         f"{DEFAULT_MAX_OPS}-mxops_"
         f"{MIN_ARITY}-arity_"
         f"{DEFAULT_MAX_BRANCH}-mxbrch"
+        f"{sanitized_model_name}_"
         f".jsonl"
     )
     logger.info(f"Output filename (dynamic): {output_file}")
@@ -2110,6 +2186,7 @@ def main(
 
 if __name__ == "__main__":
     main(
+        config,
         num_samples=config.NUM_SAMPLES_TO_GENERATE,
         max_workers=config.DEFAULT_MAX_WORKERS
     )

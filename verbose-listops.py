@@ -56,7 +56,6 @@ BASE_BEAT_TEMPLATE = Template(
 
 # --- Batch Generation & Output ---
 NUM_SAMPLES_TO_GENERATE = 8 # How many samples to generate in one run
-OUTPUT_FILENAME = "gemini-2.5-pro-verbose_listops_dataset_ultra_strict_v4.jsonl"  # Output file for the dataset
 DEFAULT_MAX_WORKERS = 20  # Default number of parallel threads for batch generation
 
 # --- COMPREHENSIVE FEW-SHOT EXAMPLES (Illustrating Success & Failure) ---
@@ -191,14 +190,17 @@ DEFAULT_MAX_BRANCH = 5  # Max operations / numbers in an operation
 def log_prompt(
     header: str,
     prompt: str,
+    sample_index: int | None = None, # <-- Add optional sample_index argument
     path: str = os.path.join(LOG_DIR, "llm_turns.log"),
 ):
     """Append a timestamped prompt header and text to the prompts log."""
     timestamp = datetime.datetime.now().isoformat()
+    # Prepend sample info to header if available
+    log_header = f"[Sample {sample_index + 1}] {header}" if sample_index is not None else header
     with open(path, "a", encoding="utf-8") as f:
         f.write(f"--- Log Time: {timestamp} ---\n")
-        f.write(f"{header}\n{prompt}\n\n---\n\n")
-
+        # Use the modified log_header
+        f.write(f"{log_header}\n{prompt}\n\n---\n\n")
 
 # --- API retry + logging config ---
 
@@ -260,8 +262,8 @@ class GenerationContext:
     tokens_used: int
     last_scene_text: str
     beat_counter: dict
+    sample_index: int
     max_pad_paragraphs: int = 2
-
 
 MODEL = "gemini-1.5-pro-latest"
 SAFETY_MARGIN = config.MAX_TOKENS_BUFFER
@@ -387,11 +389,14 @@ def generate_with_retry(
     max_tokens: int,
     validate_fn: Callable[[str], bool],
     retries: int = config.MAX_BEAT_RETRIES,
+    sample_index: int | None = None, # <-- Add optional sample_index argument
 ):
     """
     Helper to call the OpenAI ChatCompletion API with retries and apply a validation function.
     Returns the first candidate text that passes validate_fn, or None if all attempts fail.
+    Passes sample_index to log_prompt if provided.
     """
+    candidate = None # Initialize candidate outside the loop
     for attempt in range(1, retries + 1):
         try:
             resp = _chat_completion_call(
@@ -413,22 +418,35 @@ def generate_with_retry(
             else:
                 # Log that content was None, even if structure was okay
                 logger.warning(f"API call in generate_with_retry attempt {attempt} returned None content. Response object: {resp}")
-                # No valid candidate generated this attempt, loop will continue/retry
-            # Log this LLM turn: prompt and generation
+                candidate = None # Ensure candidate is None
+
+            # Log this LLM turn: prompt and generation, passing sample_index
             log_prompt(
                 f"LLM Turn Attempt {attempt}",
-                f"System: {system_prompt}\nUser: {user_prompt}\n\nGeneration:\n{candidate}"
+                f"System: {system_prompt}\nUser: {user_prompt}\n\nGeneration:\n{candidate}",
+                sample_index=sample_index # <-- Pass sample_index here
             )
-            if not candidate or candidate.lower().startswith(
+
+            if candidate is None: # Check if candidate is None after potential stripping or if raw_content was None
+                 logger.warning(f"generate_with_retry attempt {attempt} resulted in None candidate.")
+            elif not candidate or candidate.lower().startswith(
                 ("i cannot", "i'm sorry", "i am unable")
             ):
                 logger.warning(f"API refusal on generate_with_retry attempt {attempt}.")
             elif validate_fn(candidate):
-                return candidate
+                return candidate # Return valid candidate
+            # else: validation failed, loop continues
+
         except Exception as e:
             logger.warning(f"Error on generate_with_retry attempt {attempt}: {e}")
-        time.sleep(config.RETRY_INITIAL_DELAY * (2 ** (attempt - 1)))
-    return None
+
+        # Only sleep if not the last attempt and validation failed or error occurred
+        if attempt < retries:
+             time.sleep(config.RETRY_INITIAL_DELAY * (2 ** (attempt - 1)))
+
+    # If loop finishes without returning, it means all attempts failed
+    logger.warning(f"generate_with_retry failed after {retries} attempts.")
+    return None # Return None explicitly if all retries fail
 
 
 OP_LABELS = {
@@ -1559,7 +1577,8 @@ def _generate_narrative_recursive(
 
     log_prompt(
         f"{'=== FINAL' if is_root else '=== Intermediate'} Operator Beat Prompt (Op: {node.op}, Owner: {owner_name})",
-        beat_prompt
+        beat_prompt,
+        sample_index=context.sample_index # <-- ADD THIS ARGUMENT
     )
 
     # --- Token Budget Check ---
@@ -1608,8 +1627,10 @@ def _generate_narrative_recursive(
             candidate_text = resp.choices[0].message.content.strip()
             log_prompt(
                 f"LLM Beat Generation Attempt {attempt} for operator {node.op} ({owner_name})",
-                f"System: {system_prompt}\nUser: {beat_prompt}\n\nGeneration:\n{candidate_text}"
+                f"System: {system_prompt}\nUser: {beat_prompt}\n\nGeneration:\n{candidate_text}",
+                sample_index=context.sample_index # <-- ADD THIS ARGUMENT
             )
+
             if not candidate_text or candidate_text.lower().startswith(("i cannot", "i'm sorry")):
                 reason = "empty or API refusal"
             elif not validate_beat_numbers(candidate_text):
@@ -1682,7 +1703,7 @@ def _generate_narrative_recursive(
             forbidden_list_str=forbidden_list_str_padding
         )
 
-        log_prompt(f"Padding Prompt {pad_count} after {node.op} ({owner_name})", padding_prompt)
+        log_prompt(f"Padding Prompt {pad_count} after {node.op} ({owner_name})", padding_prompt, sample_index=context.sample_index)
 
         # --- Token Budget Check for Padding ---
         estimated_pad_prompt_tokens = len(encoder.encode(padding_prompt))
@@ -1704,7 +1725,9 @@ def _generate_narrative_recursive(
             max_tokens=MAX_PAD_TOKENS,
             validate_fn=validate_padding, # Use the correct validator
             retries=config.MAX_PAD_RETRIES,
+            sample_index=context.sample_index # <-- ADD THIS ARGUMENT
         )
+
 
         if padding_text:
             ptoks = len(encoder.encode(padding_text))
@@ -1730,7 +1753,7 @@ def _generate_narrative_recursive(
 # It sets up the context and makes the initial call to the modified _generate_narrative_recursive
 
 def generate_narrative(
-    ast: Node, world: dict, config: Config, encoder, p_inflect, logger
+    ast: Node, world: dict, config: Config, encoder, p_inflect, logger, sample_index: int # <-- ADDED sample_index
 ) -> str | None:
     """
     Post-Order Strict Validation: Generate a narrative for a ListOps AST, ensuring
@@ -1843,7 +1866,7 @@ def generate_narrative(
     total_beats = len(operator_nodes)
     beat_counter = {"current": 0, "total": total_beats}
 
-    # --- Create GenerationContext instance for sharing state ---
+# --- Create GenerationContext instance for sharing state ---
     context = GenerationContext(
         world=world,
         config=config,
@@ -1857,9 +1880,9 @@ def generate_narrative(
         tokens_used=tokens_used, # Starts with potential intro tokens
         last_scene_text=last_scene_text, # Starts with potential intro text
         beat_counter=beat_counter,
+        sample_index=sample_index,
         max_pad_paragraphs=2, # Or get from config
     )
-
     # --- Start the POST-ORDER recursive generation ---
     try:
         # Initial call to the recursive function for the root node
@@ -1944,7 +1967,7 @@ def generate_single_sample(sample_index: int) -> dict | None:
             f"[Sample {sample_index + 1}] Starting narrative rendering with pre-order strict validation (v5c)..."
         )
         narrative_prompt = generate_narrative(
-            ast, world_info, config, encoder, p_inflect, logger
+            ast, world_info, config, encoder, p_inflect, logger, sample_index # <-- PASS sample_index here
         )
         if narrative_prompt is None:
             logger.error(
@@ -2013,13 +2036,26 @@ def generate_single_sample(sample_index: int) -> dict | None:
 
 def main(
     num_samples: int = config.NUM_SAMPLES_TO_GENERATE,
-    output_file: str = OUTPUT_FILENAME,
+    # The output_file parameter has been removed from here
     max_workers: int = config.DEFAULT_MAX_WORKERS,
 ):
     """Generate samples with strict validation."""
-    logger.info(
-        f"Script started. Generating {num_samples} samples using up to {max_workers} workers with Pre-Order Strict Validation (v5g - Stricter Validator)."
+    # --- Dynamic Filename Generation ---
+    sanitized_model_name = MODEL.replace("/", "_").replace(":", "-")
+    output_file = (
+        f"DATASET_"
+        f"{sanitized_model_name}_"
+        f"{config.DEFAULT_MAX_TOTAL_TOKENS}-tok_"
+        f"{DEFAULT_MAX_OPS}-mxops_"
+        f"{MIN_ARITY}-arity_"
+        f"{DEFAULT_MAX_BRANCH}-mxbrch"
+        f".jsonl"
     )
+    logger.info(f"Output filename (dynamic): {output_file}")
+    logger.info(
+        f"Script started. Generating {num_samples} samples using up to {max_workers} workers."
+    )
+
     samples_generated_successfully = 0
     samples_failed = 0
     output_dir = os.path.dirname(output_file)
@@ -2084,7 +2120,6 @@ def main(
 
 if __name__ == "__main__":
     main(
-        num_samples=config.NUM_SAMPLES_TO_GENERATE, # Pass config explicitly if desired
-        output_file=OUTPUT_FILENAME,               # Or rely on defaults in main() signature
+        num_samples=config.NUM_SAMPLES_TO_GENERATE,
         max_workers=config.DEFAULT_MAX_WORKERS
     )

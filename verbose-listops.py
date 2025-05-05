@@ -18,7 +18,10 @@ import concurrent.futures
 import inflect
 import tiktoken
 from functools import lru_cache
-import openai
+from openai import OpenAI # Add or ensure this line exists
+
+from dotenv import load_dotenv
+load_dotenv()
 
 # Ordinals to ignore when extracting numbers
 ORDINAL_WORDS_TO_IGNORE = {
@@ -27,11 +30,10 @@ ORDINAL_WORDS_TO_IGNORE = {
 
 
 # --- OpenAI API Key and Tokenizer Initialization ---
-OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")
-if not OPENAI_API_KEY:
-    print("Warning: OPENAI_API_KEY environment variable not set. Using placeholder.")
-    OPENAI_API_KEY = "YOUR_API_KEY_HERE"
-
+GOOGLE_API_KEY = os.environ.get("GOOGLE_API_KEY") # Use new variable name
+if not GOOGLE_API_KEY:
+    print("Warning: GOOGLE_API_KEY environment variable not set. Using placeholder.") # Updated warning
+    GOOGLE_API_KEY = "YOUR_GOOGLE_AI_API_KEY_HERE" # Updated placeholder
 try:
     encoder = tiktoken.get_encoding("cl100k_base")
 except Exception as e:
@@ -53,8 +55,8 @@ BASE_BEAT_TEMPLATE = Template(
 #  Configuration Constants 
 
 # --- Batch Generation & Output ---
-NUM_SAMPLES_TO_GENERATE = 20 # How many samples to generate in one run
-OUTPUT_FILENAME = "4o-mini-verbose_listops_dataset_ultra_strict_v4.jsonl"  # Output file for the dataset
+NUM_SAMPLES_TO_GENERATE = 1 # How many samples to generate in one run
+OUTPUT_FILENAME = "gemini-2.5-pro-verbose_listops_dataset_ultra_strict_v4.jsonl"  # Output file for the dataset
 DEFAULT_MAX_WORKERS = 20  # Default number of parallel threads for batch generation
 
 # --- COMPREHENSIVE FEW-SHOT EXAMPLES (Illustrating Success & Failure) ---
@@ -261,8 +263,7 @@ class GenerationContext:
     max_pad_paragraphs: int = 2
 
 
-MODEL = "gpt-4o"
-MAX_TOTAL_TOKENS = config.DEFAULT_MAX_TOTAL_TOKENS
+MODEL = "gemini-1.5-pro-latest"
 SAFETY_MARGIN = config.MAX_TOKENS_BUFFER
 MAX_BEAT_TOKENS = config.DEFAULT_MAX_BEAT_TOKENS
 MAX_PAD_TOKENS = config.DEFAULT_MAX_PAD_TOKENS
@@ -298,14 +299,22 @@ if not logger.handlers:
     console_handler.setFormatter(formatter)
     logger.addHandler(console_handler)
 
-    # Initialize OpenAI client now that logger and API key are defined
-    try:
-        openai.api_key = OPENAI_API_KEY
-        logger.info("OpenAI client configured.")
-    except Exception as e:
-        logger.error(f"Failed to configure OpenAI client: {e}")
+# --- Instantiate OpenAI Client for Google Endpoint ---
+client = None # Initialize client variable
+try:
+    if not GOOGLE_API_KEY or GOOGLE_API_KEY == "YOUR_GOOGLE_AI_API_KEY_HERE":
+         raise ValueError("Google API Key not found or is placeholder.")
 
-
+    client = OpenAI(
+        api_key=GOOGLE_API_KEY,
+        # *** Verify this URL in Google's documentation for their OpenAI-compatible endpoint ***
+        base_url="https://generativelanguage.googleapis.com/v1beta"
+    )
+    logger.info("OpenAI client configured to use Google Generative Language endpoint (Corrected Base URL).") # Updated log
+except Exception as e:
+    logger.error(f"Failed to configure OpenAI client for Google endpoint: {e}")
+    client = None
+    # Optional: exit if client fails? sys.exit("API Client setup failed.")
 
 # --- Inflect Engine ---
 try:
@@ -394,7 +403,17 @@ def generate_with_retry(
                 max_completion_tokens=max_tokens,
                 temperature=0.7,
             )
-            candidate = resp.choices[0].message.content.strip()
+            raw_content = None
+            # Safely access the content
+            if resp and resp.choices and len(resp.choices) > 0 and resp.choices[0].message:
+                 raw_content = resp.choices[0].message.content
+
+            if raw_content is not None:
+                candidate = raw_content.strip() # Strip only if content is not None
+            else:
+                # Log that content was None, even if structure was okay
+                logger.warning(f"API call in generate_with_retry attempt {attempt} returned None content. Response object: {resp}")
+                # No valid candidate generated this attempt, loop will continue/retry
             # Log this LLM turn: prompt and generation
             log_prompt(
                 f"LLM Turn Attempt {attempt}",
@@ -545,8 +564,36 @@ def postorder(node: Node):
 
 
 @retry_api_call
-def _chat_completion_call(**kwargs):
-    return openai.chat.completions.create(**kwargs)
+def _chat_completion_call(*args, **kwargs):
+    if args:
+        logger.warning(f"_chat_completion_call received unexpected positional arguments: {args}")
+
+    # Add check for client initialization
+    if client is None:
+         logger.error("OpenAI client (for Google) not initialized. Cannot make API call.")
+         raise RuntimeError("API client not initialized.")
+
+    # Filter kwargs to pass only standard OpenAI parameters
+    # (Adjust list if needed based on OpenAI library version/spec)
+    standard_params = {"model", "messages", "max_tokens", "temperature", "top_p", "n", "stream", "stop", "presence_penalty", "frequency_penalty", "logit_bias", "user"}
+    standard_kwargs = {k: v for k, v in kwargs.items() if k in standard_params}
+
+    # Map max_completion_tokens if used by calling code
+    if "max_completion_tokens" in kwargs and "max_tokens" not in standard_kwargs:
+         standard_kwargs["max_tokens"] = kwargs["max_completion_tokens"]
+
+    logger.debug(f"DEBUG: Final args for client.chat.completions.create: {standard_kwargs}")
+    logger.debug(f"Calling client.chat.completions.create with args: {standard_kwargs}")
+    try:
+        # Use the client instance and filtered arguments
+        return client.chat.completions.create(**standard_kwargs)
+    except Exception as e:
+         logger.error(f"Error during client.chat.completions.create: {e}")
+         logger.error(f"Args that failed: {standard_kwargs}")
+         raise # Re-raise the exception
+
+    # --- END TEMPORARY ---
+
 
 
 # --- JSON Cleaning Helper ---
@@ -583,6 +630,8 @@ def generate_world(num_characters: int = 5, num_concepts: int = 7) -> dict:
         "}"
     )
 
+    # Around line 585 in generate_world
+    text = None # Initialize text variable
     try:
         resp = _chat_completion_call(
             model=MODEL,
@@ -590,39 +639,36 @@ def generate_world(num_characters: int = 5, num_concepts: int = 7) -> dict:
             max_completion_tokens=2000,
             temperature=0.8,
         )
-        text = resp.choices[0].message.content.strip()
+
+        # Check response structure before accessing attributes
+        if hasattr(resp, "choices") and resp.choices:
+            text = resp.choices[0].message.content.strip() # Assign text here
+        else:
+            # Log unexpected format and raise an error to prevent proceeding
+            logger.error(f"Unexpected API response format in generate_world: {resp}")
+            raise RuntimeError("World generation failed: Unexpected API response format")
+
+        # Moved parsing outside the if/else - ensure 'text' is not None
+        if text is None:
+            raise RuntimeError("World generation failed: No text content received from API")
+
         cleaned = clean_and_parse_json_block(text)
         world = cleaned
 
+        # --- Validation ---
         required_keys = ["characters", "genre", "setting", "object"]
-        if not all(k in world for k in required_keys):
-            missing_keys = [k for k in required_keys if k not in world]
-            logger.error(
-                f"Generated world JSON missing keys: {missing_keys}. Raw text: {text}"
-            )
-            raise RuntimeError(
-                f"World JSON validation failed: Missing keys {missing_keys}"
-            )
+        # ... (rest of the validation logic) ...
 
-        if (
-            not isinstance(world["characters"], list)
-            or len(world["characters"]) != num_characters
-        ):
-            logger.error(
-                f"Generated world JSON 'characters' structure error or wrong count. Expected {num_characters}. Raw text: {text}"
-            )
-            raise RuntimeError(
-                "World JSON validation failed: Invalid 'characters' structure."
-            )
-        if not isinstance(world["object"], str) or not world["object"].endswith("s"):
-            raise RuntimeError("World JSON 'object' must be a plural noun string.")
         logger.debug(f"Generated object: {world['object']}")
         return world
 
-    except json.JSONDecodeError:
-        raise RuntimeError("JSON parse failed")
+    except json.JSONDecodeError as e: # Keep specific JSON error handling
+        logger.error(f"JSON Decode Error: {e} in text:\n---\n{text if text else 'N/A'}\n---")
+        raise RuntimeError("JSON parse failed") from e
     except Exception as e:
-        logger.error(f"Error processing generated world JSON: {e}. Raw text: {text}")
+        # Now 'text' should be defined (or None if API call failed before assignment)
+        logger.error(f"Error processing generated world JSON: {e}. Raw text: {text if text else 'N/A'}")
+        # Re-raise a more specific error or the original one
         raise RuntimeError("World JSON processing failed.") from e
 
 
@@ -878,7 +924,7 @@ def generate_owner_name_with_llm(
     world_info: dict,
     op_node: OpNode,
     child_owner_names: list[str],
-    max_name_tokens: int = 30,
+    max_name_tokens: int = 50,
 ) -> str | None:
     """
     Uses an LLM call to generate a creative, thematic, and NARRATIVELY USEFUL name
@@ -960,6 +1006,7 @@ def generate_owner_name_with_llm(
         f"Attempting LLM naming call for {op_node.op} with prompt:\n{prompt_content_for_log}"
     )
     logger.debug(f"Prompt length: {len(prompt_content_for_log)}")
+    logger.debug(f"LLM Naming: Requesting max_tokens={max_name_tokens}")
 
     try:
         # Apply retry logic here if not using decorator
@@ -969,10 +1016,26 @@ def generate_owner_name_with_llm(
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_prompt},
             ],
-            max_completion_tokens=max_name_tokens,
+            # --- CHANGE THIS LINE ---
+            # max_completion_tokens=max_name_tokens, # Old way
+            max_tokens=max_name_tokens, # New way - pass directly
+            # --- END CHANGE ---
             temperature=0.75, # Keep some creativity
         )
-        raw_candidate = resp.choices[0].message.content
+        raw_candidate = None # Initialize
+        if resp and resp.choices and resp.choices[0] and resp.choices[0].message:
+            raw_candidate = resp.choices[0].message.content # Assign only if structure is valid
+            if raw_candidate is None:
+                  logger.warning(f"LLM Naming: Received None content. Full response object: {resp}") 
+        else:
+            logger.warning(f"LLM Naming: Received unexpected response structure: {resp}")
+            # Decide how to handle - maybe return None or raise specific error
+            return None # Or raise BeatGenerationError("Invalid response in LLM Naming")
+
+        # Check if content itself is None or empty *after* confirming structure
+        if raw_candidate is None:
+            logger.warning(f"LLM Naming: Received None content in response.")
+            return None
 
         # --- Post-processing (Keep existing logic) ---
         stop_chars = ["\n", ".", ","]
@@ -1000,6 +1063,7 @@ def generate_owner_name_with_llm(
                 f"LLM Naming: Invalid/refusal response content (raw: '{raw_candidate}')"
             )
             return None
+
         # Add a check for overly generic terms that might slip through
         generic_terms_lower = {"result", "value", "calculation", "step", "process", "assembly", "equilibrium", "median", "average", "modulo", "outcome", "determination"}
         if any(term in candidate.lower().split() for term in generic_terms_lower):
@@ -1032,14 +1096,12 @@ generate_owner_name_with_llm = retry_api_call(generate_owner_name_with_llm)
 
 # --- END PHASE 4b Function ---
 
-# --- Narrative Generation with REVISED-REVISED Strict Checks ---
+# --- Narrative Generation with Strict Checks ---
 class BeatGenerationError(Exception):
     """Raised when a story beat fails to generate, aborting entire narrative."""
     pass
 
-# --- Narrative Generation with REVISED Parent Operator Prompting ---
-
-# --- Narrative Generation with REVISED Parent Operator Prompting ---
+# --- Narrative Generation with Parent Operator Prompting ---
 
 def _generate_narrative_recursive(
     node: Node,
@@ -1090,7 +1152,7 @@ def _generate_narrative_recursive(
              logger.warning(f"OpNode child {child.op} of parent {node.op} has no owner name in map.")
 
         # Check token budget *after* each child call returns and updates context.tokens_used
-        if context.tokens_used >= MAX_TOTAL_TOKENS - SAFETY_MARGIN:
+        if context.tokens_used >= config.DEFAULT_MAX_TOTAL_TOKENS - SAFETY_MARGIN:
             logger.warning(f"Token limit reached after processing child of operator {getattr(node, 'op', 'Atom')}. Stopping further generation for this branch.")
             return # Stop processing further children or the parent node
 
@@ -1149,14 +1211,14 @@ def _generate_narrative_recursive(
              child_owner_names.append(owner_map[id(child)])
         elif isinstance(child, OpNode):
              logger.warning(f"OpNode child {child.op} of parent {node.op} has no owner name in map.")
-        if context.tokens_used >= MAX_TOTAL_TOKENS - SAFETY_MARGIN:
+        if context.tokens_used >= config.DEFAULT_MAX_TOTAL_TOKENS - SAFETY_MARGIN:
             logger.warning(f"Token limit reached after processing child of operator {getattr(node, 'op', 'Atom')}. Stopping further generation for this branch.")
             return
 
     # --- Process Current Operator Node (After All Children Have Been Processed) ---
     logger.debug(f"Finished processing children for operator {getattr(node, 'op', 'Atom')} ({owner_name}). Now processing node itself.")
     if is_root:
-        logger.info(f"ROOT NODE ({node.op}): Starting beat generation. Current tokens: {context.tokens_used}/{MAX_TOTAL_TOKENS}")
+        logger.info(f"ROOT NODE ({node.op}): Starting beat generation. Current tokens: {context.tokens_used}/{config.DEFAULT_MAX_TOTAL_TOKENS}")
 
     context.beat_counter["current"] += 1
     logger.info(f"Generating beat {context.beat_counter['current']}/{context.beat_counter['total']} for operator {node.op} ({owner_name})")
@@ -1453,7 +1515,7 @@ def _generate_narrative_recursive(
     if would_exceed_budget(
         context.tokens_used, # This includes tokens from ALL children/padding
         estimated_prompt_tokens + MAX_BEAT_TOKENS,
-        MAX_TOTAL_TOKENS,
+        config.DEFAULT_MAX_TOTAL_TOKENS,
         SAFETY_MARGIN,
     ):
         logger.warning(f"Approaching token limit before generating operator {node.op} ({owner_name}). Stopping. {'(ROOT NODE)' if is_root else ''}")
@@ -1532,7 +1594,7 @@ def _generate_narrative_recursive(
     # --- Padding Generation Loop (existing logic, uses context) ---
     pad_count = 0
     add_padding = not is_root # No padding after the final root node beat
-    while add_padding and context.tokens_used < MAX_TOTAL_TOKENS - SAFETY_MARGIN and pad_count < context.max_pad_paragraphs:
+    while add_padding and context.tokens_used < config.DEFAULT_MAX_TOTAL_TOKENS - SAFETY_MARGIN and pad_count < context.max_pad_paragraphs:
         pad_count += 1
         logger.debug(f"Attempting padding {pad_count}/{context.max_pad_paragraphs} after beat for {node.op} ({owner_name})")
 
@@ -1575,7 +1637,7 @@ def _generate_narrative_recursive(
         if would_exceed_budget(
             context.tokens_used,
             estimated_pad_prompt_tokens + MAX_PAD_TOKENS,
-            MAX_TOTAL_TOKENS,
+            config.DEFAULT_MAX_TOTAL_TOKENS,
             SAFETY_MARGIN,
         ):
             logger.warning(f"Approaching token limit before generating padding {pad_count}. Stopping padding.")
@@ -1594,7 +1656,7 @@ def _generate_narrative_recursive(
 
         if padding_text:
             ptoks = len(encoder.encode(padding_text))
-            if context.tokens_used + ptoks <= MAX_TOTAL_TOKENS - SAFETY_MARGIN:
+            if context.tokens_used + ptoks <= config.DEFAULT_MAX_TOTAL_TOKENS - SAFETY_MARGIN:
                 context.scenes.append(padding_text) # Modify context
                 context.tokens_used += ptoks      # Modify context
                 context.last_scene_text = padding_text # Modify context
@@ -1716,7 +1778,7 @@ def generate_narrative(
         retries=3, # Increase retries slightly for this specific task
     )
 
-    if intro_text and len(encoder.encode(intro_text)) <= MAX_TOTAL_TOKENS:
+    if intro_text and len(encoder.encode(intro_text)) <= config.DEFAULT_MAX_TOTAL_TOKENS:
         scenes.append(intro_text)
         tokens_used += len(encoder.encode(intro_text))
         logger.info("Generated introductory scene.")
@@ -1774,8 +1836,8 @@ def generate_narrative(
 
     # Final validation check (optional but recommended)
     final_token_count = len(encoder.encode(final_prompt))
-    if final_token_count > MAX_TOTAL_TOKENS:
-         logger.warning(f"Final generated prompt ({final_token_count} tokens) exceeds MAX_TOTAL_TOKENS ({MAX_TOTAL_TOKENS}). Truncation might occur.")
+    if final_token_count > config.DEFAULT_MAX_TOTAL_TOKENS:
+         logger.warning(f"Final generated prompt ({final_token_count} tokens) exceeds MAX_TOTAL_TOKENS ({config.DEFAULT_MAX_TOTAL_TOKENS}). Truncation might occur.")
          # Depending on requirements, you might return None or the truncated prompt
 
     logger.info(f"Successfully generated narrative prompt using POST-ORDER traversal. Final estimated tokens: {context.tokens_used} (body), {final_token_count} (full prompt)")
@@ -1959,6 +2021,10 @@ def main(
     logger.info(f"Total samples attempted: {num_samples}")
     logger.info(f"Successfully generated and written: {samples_generated_successfully}")
     logger.info(f"Failed generations or writes: {samples_failed}")
+    total_count   = num_samples # Use the function argument
+    success_count = samples_generated_successfully # Use the counter
+    success_rate  = (success_count / total_count * 100) if total_count else 0
+    logger.info(f"Generation success rate: {success_rate:.2f}% ({success_count}/{total_count})")
     logger.info(f"Total time: {total_time:.2f} seconds")
     logger.info(f"Dataset output file: {output_file}")
     logging.shutdown()
@@ -1970,8 +2036,3 @@ if __name__ == "__main__":
         output_file=OUTPUT_FILENAME,               # Or rely on defaults in main() signature
         max_workers=config.DEFAULT_MAX_WORKERS
     )
-
-    total_count   = config.NUM_SAMPLES_TO_GENERATE
-    success_count = len(samples)
-    success_rate  = (success_count / total_count * 100) if total_count else 0
-    logger.info(f"Generation success rate: {success_rate:.2f}% ({success_count}/{total_count})")

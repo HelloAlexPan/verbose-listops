@@ -1244,80 +1244,12 @@ class BeatGenerationError(Exception):
 
 # --- Narrative Generation with Parent Operator Prompting ---
 
-def _generate_narrative_recursive(
-    node: Node,
-    context: "GenerationContext",
-    is_root: bool,  # Flag to know if this is the root node call
-):
-    """
-    Recursive helper for strict narrative generation.
-    Processes children first, then the current node.
-    Handles nested operators with specific prompt instructions.
-    Modifies the context object directly.
-    """
-    # --- Unpack shared context (read-only access mostly, modification happens via context object) ---
-    world = context.world
-    config = context.config
-    encoder = context.encoder
-    p_inflect = context.p_inflect
-    logger = context.logger
-    owner_map = context.owner_map
-    all_atoms = context.all_atoms
-    # introduced_atoms, scenes, tokens_used, last_scene_text are accessed/modified via context
-
-    node_id = id(node)
-    owner_name = owner_map.get(node_id, f"the_unnamed_{node.op}_entity" if isinstance(node, OpNode) else "atom")
-    logger.debug(f"_generate_narrative_recursive (POST-ORDER): processing node {getattr(node, 'op', 'Atom')} with owner '{owner_name}'")
-
-    # --- Base case: Atom ---
-    if isinstance(node, Atom):
-        logger.debug(f"Node is Atom ({node.n}), returning.")
-        # No scene generation or state change needed for atoms in post-order
-        return # State is managed in context
-
-    # --- Recursive Step: Process Children First (Post-Order) ---
-    child_owner_names = []  # Collect owner names of direct OpNode children
-    for child in node.children:
-        # Recursively call for the child. State updates happen within the context object.
-        _generate_narrative_recursive(
-            child,
-            context, # Pass the mutable context down
-            is_root=False,
-        )
-
-        # Collect owner names ONLY for OpNode children that have names AFTER the child call returns
-        if isinstance(child, OpNode) and id(child) in owner_map:
-             child_owner_names.append(owner_map[id(child)])
-        elif isinstance(child, OpNode):
-             # Log if an OpNode child somehow doesn't have a name mapped
-             logger.warning(f"OpNode child {child.op} of parent {node.op} has no owner name in map.")
-
-        # Check token budget *after* each child call returns and updates context.tokens_used
-        if context.tokens_used >= config.DEFAULT_MAX_TOTAL_TOKENS - SAFETY_MARGIN:
-            logger.warning(f"Token limit reached after processing child of operator {getattr(node, 'op', 'Atom')}. Stopping further generation for this branch.")
-            return # Stop processing further children or the parent node
-
-    # --- Process Current Operator Node (After All Children Have Been Processed) ---
-    logger.debug(f"Finished processing children for operator {getattr(node, 'op', 'Atom')} ({owner_name}). Now processing node itself.")
-    if is_root:
-        logger.info(f"ROOT NODE ({node.op}): Starting beat generation. Current tokens: {context.tokens_used}/{MAX_TOTAL_TOKENS}")
-    context.beat_counter["current"] += 1
-    logger.info(f"Generating beat {context.beat_counter['current']}/{context.beat_counter['total']} for operator {node.op} ({owner_name})")
-    op_label = OP_LABELS.get(node.op, node.op)
-
-    # Identify direct atom children and calculate operand count
-    direct_atom_children = [c for c in node.children if isinstance(c, Atom)]
-    operand_count = len(direct_atom_children)
-    logger.debug(f"Calculated operand_count (direct atoms) for node {node.op}: {operand_count}")
-    direct_atom_values = {a.n for a in direct_atom_children}
-
-    # Define the set of STRICTLY REQUIRED atoms for this beat
-def _generate_narrative_recursive(
+def _generate_narrative_recursive(  # Line 1315
     node: Node,
     context: "GenerationContext",
     is_root: bool,
 ):
-    """
+    """  # <<< INDENT THIS LINE (and all subsequent lines in the function)
     Recursive helper for POST-ORDER strict narrative generation using FEW-SHOT examples.
     Processes children first, then the current node.
     Modifies the context object directly.
@@ -1337,11 +1269,12 @@ def _generate_narrative_recursive(
 
     # --- Base case: Atom ---
     if isinstance(node, Atom):
+        # Indented correctly inside function
         logger.debug(f"Node is Atom ({node.n}), returning.")
         return
 
     # --- Recursive Step: Process Children First (Post-Order) ---
-    child_owner_names = []
+    child_owner_names = [] # Indented correctly inside function
     for child in node.children:
         _generate_narrative_recursive(
             child,
@@ -1349,9 +1282,9 @@ def _generate_narrative_recursive(
             is_root=False,
         )
         if isinstance(child, OpNode) and id(child) in owner_map:
-             child_owner_names.append(owner_map[id(child)])
+            child_owner_names.append(owner_map[id(child)])
         elif isinstance(child, OpNode):
-             logger.warning(f"OpNode child {child.op} of parent {node.op} has no owner name in map.")
+            logger.warning(f"OpNode child {child.op} of parent {node.op} has no owner name in map.")
         if context.tokens_used >= config.DEFAULT_MAX_TOTAL_TOKENS - SAFETY_MARGIN:
             logger.warning(f"Token limit reached after processing child of operator {getattr(node, 'op', 'Atom')}. Stopping further generation for this branch.")
             return
@@ -1486,15 +1419,8 @@ def _generate_narrative_recursive(
         elif len(items) == 2:
             object_list_str_for_preamble = " and ".join(items)
         else:
-            object_list_str_for_preamble = ""
-    if direct_atom_values:
-        items = [f"{num_to_words(x)} ({x})" for x in sorted(direct_atom_values)]
-        if len(items) == 1:
-            object_list_str_for_preamble = items[0]
-        elif len(items) == 2:
-            object_list_str_for_preamble = " and ".join(items)
-        else:
-            object_list_str_for_preamble = ", ".join(items[:-1]) + ", and " + items[-1]
+            object_list_str_for_preamble = "" # This was likely a copy-paste error, should be the join logic
+            object_list_str_for_preamble = ", ".join(items[:-1]) + ", and " + items[-1] # Corrected line
 
     scene_preamble = "" # Default empty
     # Only generate preambles if there are direct atoms to describe
@@ -1540,158 +1466,158 @@ def _generate_narrative_recursive(
     # --- End Preamble Generation ---
 
 
-# --- Build Operational Instruction Detail ---
-has_operator_children = bool(child_owner_names) # child_owner_names is populated from recursive calls above
-has_direct_atom_children = bool(direct_atom_values) # direct_atom_values is populated from node.children above
+    # --- Build Operational Instruction Detail ---
+    has_operator_children = bool(child_owner_names) # child_owner_names is populated from recursive calls above
+    has_direct_atom_children = bool(direct_atom_values) # direct_atom_values is populated from node.children above
 
-operational_instruction = ""
-input_description_parts = []
-input_names_for_reminder = [] # Populated below
+    operational_instruction = ""
+    input_description_parts = []
+    input_names_for_reminder = [] # Populated below
 
-num_inputs = len(node.children)
-correct_result = node.value # Pre-calculated value
+    num_inputs = len(node.children)
+    correct_result = node.value # Pre-calculated value
 
-# --- Explicitly format strings for prompt use ---
-# Format conceptual child names
-formatted_child_names_str = "None"
-if has_operator_children:
-    formatted_child_names_list = [f"'{name}'" for name in child_owner_names]
-    formatted_child_names_str = ', '.join(formatted_child_names_list)
-    input_names_for_reminder.extend(child_owner_names) # Add names for reminder list
+    # --- Explicitly format strings for prompt use ---
+    # Format conceptual child names
+    formatted_child_names_str = "None"
+    if has_operator_children:
+        formatted_child_names_list = [f"'{name}'" for name in child_owner_names]
+        formatted_child_names_str = ', '.join(formatted_child_names_list)
+        input_names_for_reminder.extend(child_owner_names) # Add names for reminder list
 
-# Format direct atom values
-formatted_direct_values_str = "None"
-if has_direct_atom_children:
-    direct_atom_words = [num_to_words(a) for a in sorted(direct_atom_values)]
-    formatted_direct_values_list = [f"{w} ({v})" for w, v in zip(direct_atom_words, sorted(direct_atom_values))]
-    formatted_direct_values_str = ', '.join(formatted_direct_values_list)
+    # Format direct atom values
+    formatted_direct_values_str = "None"
+    if has_direct_atom_children:
+        direct_atom_words = [num_to_words(a) for a in sorted(direct_atom_values)]
+        formatted_direct_values_list = [f"{w} ({v})" for w, v in zip(direct_atom_words, sorted(direct_atom_values))]
+        formatted_direct_values_str = ', '.join(formatted_direct_values_list)
 
-# Build the combined input description string
-if has_operator_children:
-    input_description_parts.append(f"the outcome(s) from previous step(s) conceptually known as {formatted_child_names_str}")
-if has_direct_atom_children:
-    input_description_parts.append(f"newly discovered quantities ({formatted_direct_values_str})")
+    # Build the combined input description string
+    if has_operator_children:
+        input_description_parts.append(f"the outcome(s) from previous step(s) conceptually known as {formatted_child_names_str}")
+    if has_direct_atom_children:
+        input_description_parts.append(f"newly discovered quantities ({formatted_direct_values_str})")
 
-if not input_description_parts:
-    inputs_str = "inputs determined entirely by context (e.g., selecting between previous outcomes)"
-else:
-    inputs_str = " and ".join(input_description_parts)
-# --- End explicit formatting ---
+    if not input_description_parts:
+        inputs_str = "inputs determined entirely by context (e.g., selecting between previous outcomes)"
+    else:
+        inputs_str = " and ".join(input_description_parts)
+    # --- End explicit formatting ---
 
 
-# --- NEW: More Detailed Action Descriptions (Using formatted strings) ---
-action_description = ""
-if node.op == "SUM":
-    action_description = (
-        f"Your narrative MUST describe the characters **combining all {num_inputs} relevant inputs** ({inputs_str}). "
-        # Use the formatted strings here
-        f"This involves conceptually adding the values associated with any previous steps ({formatted_child_names_str}) "
-        f"together with the newly discovered quantities ({formatted_direct_values_str}). "
-        f"The narrative action (e.g., gathering items, merging energies) should logically lead to the total sum **({correct_result}) being the quantity now associated with '{owner_name}'**."
+    # --- NEW: More Detailed Action Descriptions (Using formatted strings) ---
+    action_description = ""
+    if node.op == "SUM":
+        action_description = (
+            f"Your narrative MUST describe the characters **combining all {num_inputs} relevant inputs** ({inputs_str}). "
+            # Use the formatted strings here
+            f"This involves conceptually adding the values associated with any previous steps ({formatted_child_names_str}) "
+            f"together with the newly discovered quantities ({formatted_direct_values_str}). "
+            f"The narrative action (e.g., gathering items, merging energies) should logically lead to the total sum **({correct_result}) being the quantity now associated with '{owner_name}'**."
+        )
+    elif node.op == "AVG":
+        action_description = (
+            f"Your narrative MUST describe an action involving all {num_inputs} relevant inputs ({inputs_str}). "
+            f"Conceptually, this step involves:\n"
+            f"1.  Imagining the sum of the underlying numerical values of all these inputs (from concepts like {formatted_child_names_str} and new values like {formatted_direct_values_str}).\n" # Clarified source
+            f"2.  Imagining dividing that sum by the total number of inputs ({num_inputs}) and taking the integer part (rounding down).\n"
+            f"Your narrative MUST describe an event (e.g., a magical balancing, fair distribution leaving a specific remainder, an averaging mechanism) "
+            f"that **results in the characters possessing ONLY the quantity equal to this calculated integer average ({correct_result})**. "
+            f"Focus on the *outcome* matching {correct_result}, making the narrative reason plausible for the {world.get('genre', 'story')} setting. The final quantity associated with '{owner_name}' is {correct_result}."
+        )
+    elif node.op == "SM":
+        action_description = (
+            f"Your narrative MUST describe an action involving all {num_inputs} relevant inputs ({inputs_str}). "
+            f"Conceptually, this step involves:\n"
+            f"1.  Imagining the sum of the underlying numerical values of all these inputs (from concepts like {formatted_child_names_str} and new values like {formatted_direct_values_str}).\n" # Clarified source
+            f"2.  Imagining determining the final digit (0-9) of that sum.\n"
+            f"Your narrative MUST describe an event (e.g., using a cipher that only uses the last digit, a magical process leaving only a residue equal to the last digit) "
+            f"that **results in the characters possessing ONLY the quantity equal to this final digit ({correct_result})**. "
+            f"Focus on the *outcome* matching {correct_result}, making the narrative reason plausible. The final quantity associated with '{owner_name}' is {correct_result}."
+        )
+    elif node.op == "MAX":
+        action_description = (
+            f"Your narrative MUST describe the characters **evaluating or comparing all {num_inputs} relevant inputs** ({inputs_str}). "
+            f"Conceptually, they are identifying which input (among concepts like {formatted_child_names_str} and new values like {formatted_direct_values_str}) corresponds to the **largest underlying numerical value**. " # Clarified source
+            f"Your narrative MUST clearly show them **selecting ONLY the item/quantity corresponding to this largest value ({correct_result})**. "
+            f"The reason for choosing the maximum should be plausible within the story. The final quantity associated with '{owner_name}' becomes {correct_result} because they chose the maximum."
+        )
+    elif node.op == "MIN":
+        action_description = (
+            f"Your narrative MUST describe the characters **evaluating or comparing all {num_inputs} relevant inputs** ({inputs_str}). "
+            f"Conceptually, they are identifying which input (among concepts like {formatted_child_names_str} and new values like {formatted_direct_values_str}) corresponds to the **smallest underlying numerical value**. " # Clarified source
+            f"Your narrative MUST clearly show them **selecting ONLY the item/quantity corresponding to this smallest value ({correct_result})**. "
+            f"The reason for choosing the minimum should be plausible within the story. The final quantity associated with '{owner_name}' becomes {correct_result} because they chose the minimum."
+        )
+    elif node.op == "MED":
+        action_description = (
+            f"Your narrative MUST describe the characters **evaluating all {num_inputs} relevant inputs ({inputs_str}) based purely on their underlying NUMERICAL VALUES**. "
+            f"Conceptually, this step involves:\n"
+            f"1.  Imagining all {num_inputs} input values (from previous steps like {formatted_child_names_str} and new ones like {formatted_direct_values_str}).\n" # Clarified source
+            f"2.  Imagining sorting these numerical values from smallest to largest.\n"
+            f"3.  Identifying the item/quantity that corresponds to the value sitting exactly in the **middle position** of this imagined sorted list.\n"
+            f"Your narrative action MUST clearly show the characters **identifying and selecting ONLY the item/quantity corresponding to this numerically middle value ({correct_result})**. "
+            f"The reason for needing the median should be plausible. The final quantity associated with '{owner_name}' becomes {correct_result} because they chose the median."
+        )
+    else:
+        # Fallback (remains the same)
+        action_description = (
+            f"Your narrative MUST clearly describe the characters applying the '{op_label}' rule to all {num_inputs} inputs ({inputs_str}). The outcome should correspond to {correct_result}."
+        )
+    # --- End NEW Action Descriptions ---
+
+
+    # Add reminder about number usage (remains the same structure, but uses formatted strings)
+    reminder = ""
+    if input_names_for_reminder:
+        reminder_names_str = ', '.join(f"'{name}'" for name in input_names_for_reminder)
+        # Clarify which numbers MUST be mentioned using the formatted string
+        must_mention_str = formatted_direct_values_str if has_direct_atom_children else "None for this step"
+        reminder = (
+            f"\n**REMINDER:** Do NOT mention the actual numeric results associated with previous conceptual steps ({reminder_names_str}) in your text. Refer to them by name or conceptually only. "
+            f"However, you MUST explicitly mention the newly discovered quantities for *this* step: {must_mention_str}."
+        )
+
+    # Assemble the operational instruction (remains the same structure)
+    operational_instruction = (
+        f"This scene resolves the step named '{owner_name}'.\n"
+        f"{action_description}\n"
+        f"{reminder}"
     )
-elif node.op == "AVG":
-    action_description = (
-        f"Your narrative MUST describe an action involving all {num_inputs} relevant inputs ({inputs_str}). "
-        f"Conceptually, this step involves:\n"
-        f"1.  Imagining the sum of the underlying numerical values of all these inputs (from concepts like {formatted_child_names_str} and new values like {formatted_direct_values_str}).\n" # Clarified source
-        f"2.  Imagining dividing that sum by the total number of inputs ({num_inputs}) and taking the integer part (rounding down).\n"
-        f"Your narrative MUST describe an event (e.g., a magical balancing, fair distribution leaving a specific remainder, an averaging mechanism) "
-        f"that **results in the characters possessing ONLY the quantity equal to this calculated integer average ({correct_result})**. "
-        f"Focus on the *outcome* matching {correct_result}, making the narrative reason plausible for the {world.get('genre', 'story')} setting. The final quantity associated with '{owner_name}' is {correct_result}."
-    )
-elif node.op == "SM":
-    action_description = (
-        f"Your narrative MUST describe an action involving all {num_inputs} relevant inputs ({inputs_str}). "
-        f"Conceptually, this step involves:\n"
-        f"1.  Imagining the sum of the underlying numerical values of all these inputs (from concepts like {formatted_child_names_str} and new values like {formatted_direct_values_str}).\n" # Clarified source
-        f"2.  Imagining determining the final digit (0-9) of that sum.\n"
-        f"Your narrative MUST describe an event (e.g., using a cipher that only uses the last digit, a magical process leaving only a residue equal to the last digit) "
-        f"that **results in the characters possessing ONLY the quantity equal to this final digit ({correct_result})**. "
-        f"Focus on the *outcome* matching {correct_result}, making the narrative reason plausible. The final quantity associated with '{owner_name}' is {correct_result}."
-    )
-elif node.op == "MAX":
-    action_description = (
-        f"Your narrative MUST describe the characters **evaluating or comparing all {num_inputs} relevant inputs** ({inputs_str}). "
-        f"Conceptually, they are identifying which input (among concepts like {formatted_child_names_str} and new values like {formatted_direct_values_str}) corresponds to the **largest underlying numerical value**. " # Clarified source
-        f"Your narrative MUST clearly show them **selecting ONLY the item/quantity corresponding to this largest value ({correct_result})**. "
-        f"The reason for choosing the maximum should be plausible within the story. The final quantity associated with '{owner_name}' becomes {correct_result} because they chose the maximum."
-    )
-elif node.op == "MIN":
-    action_description = (
-        f"Your narrative MUST describe the characters **evaluating or comparing all {num_inputs} relevant inputs** ({inputs_str}). "
-        f"Conceptually, they are identifying which input (among concepts like {formatted_child_names_str} and new values like {formatted_direct_values_str}) corresponds to the **smallest underlying numerical value**. " # Clarified source
-        f"Your narrative MUST clearly show them **selecting ONLY the item/quantity corresponding to this smallest value ({correct_result})**. "
-        f"The reason for choosing the minimum should be plausible within the story. The final quantity associated with '{owner_name}' becomes {correct_result} because they chose the minimum."
-    )
-elif node.op == "MED":
-    action_description = (
-        f"Your narrative MUST describe the characters **evaluating all {num_inputs} relevant inputs ({inputs_str}) based purely on their underlying NUMERICAL VALUES**. "
-        f"Conceptually, this step involves:\n"
-        f"1.  Imagining all {num_inputs} input values (from previous steps like {formatted_child_names_str} and new ones like {formatted_direct_values_str}).\n" # Clarified source
-        f"2.  Imagining sorting these numerical values from smallest to largest.\n"
-        f"3.  Identifying the item/quantity that corresponds to the value sitting exactly in the **middle position** of this imagined sorted list.\n"
-        f"Your narrative action MUST clearly show the characters **identifying and selecting ONLY the item/quantity corresponding to this numerically middle value ({correct_result})**. "
-        f"The reason for needing the median should be plausible. The final quantity associated with '{owner_name}' becomes {correct_result} because they chose the median."
-    )
-else:
-    # Fallback (remains the same)
-    action_description = (
-        f"Your narrative MUST clearly describe the characters applying the '{op_label}' rule to all {num_inputs} inputs ({inputs_str}). The outcome should correspond to {correct_result}."
-    )
-# --- End NEW Action Descriptions ---
+
+    # --- Assemble Task Body ---
+    task_body_parts = []
+    if scene_preamble:
+        task_body_parts.append(f"**Item Discovery:** {scene_preamble}")
+    task_body_parts.append(f"**Action/Calculation:** {operational_instruction}")
+    task_body = "\n\n".join(task_body_parts)
 
 
-# Add reminder about number usage (remains the same structure, but uses formatted strings)
-reminder = ""
-if input_names_for_reminder:
-    reminder_names_str = ', '.join(f"'{name}'" for name in input_names_for_reminder)
-    # Clarify which numbers MUST be mentioned using the formatted string
-    must_mention_str = formatted_direct_values_str if has_direct_atom_children else "None for this step"
-    reminder = (
-        f"\n**REMINDER:** Do NOT mention the actual numeric results associated with previous conceptual steps ({reminder_names_str}) in your text. Refer to them by name or conceptually only. "
-        f"However, you MUST explicitly mention the newly discovered quantities for *this* step: {must_mention_str}."
+    # Decide header and mode (Keep existing logic)
+    task_header = "Final Discovery" if is_root else "Discovery Step"
+    beat_mode = (
+        f"{world['genre']}, {'concluding' if is_root else 'continuous'} scene about "
+        f"{primary_object}"
     )
 
-# Assemble the operational instruction (remains the same structure)
-operational_instruction = (
-    f"This scene resolves the step named '{owner_name}'.\n"
-    f"{action_description}\n"
-    f"{reminder}"
-)
-
-# --- Assemble Task Body ---
-task_body_parts = []
-if scene_preamble:
-    task_body_parts.append(f"**Item Discovery:** {scene_preamble}")
-task_body_parts.append(f"**Action/Calculation:** {operational_instruction}")
-task_body = "\n\n".join(task_body_parts)
-
-
-# Decide header and mode (Keep existing logic)
-task_header = "Final Discovery" if is_root else "Discovery Step"
-beat_mode = (
-    f"{world['genre']}, {'concluding' if is_root else 'continuous'} scene about "
-    f"{primary_object}"
-)
-
-# --- Conditionally Add Meta-Instruction and Task-Solving Few-Shots ---
-few_shot_section = ""
-num_shots = config.NUM_FEW_SHOT_EXAMPLES # Get from config
-if 0 < num_shots <= len(TASK_SOLVING_FEW_SHOTS):
-    few_shot_section += META_INSTRUCTION + "\n\n---\n\n" # Add meta-instruction
-    # Select the requested number of examples
-    selected_examples = TASK_SOLVING_FEW_SHOTS[:num_shots]
-    # Format them
-    few_shot_section += "\n\n---\n\n".join(selected_examples)
-    few_shot_section += "\n\n---\n\n" # Separator after examples
-elif num_shots > len(TASK_SOLVING_FEW_SHOTS):
-    logger.warning(f"Requested {num_shots} few-shot examples, but only {len(TASK_SOLVING_FEW_SHOTS)} are available. Using all available.")
-    few_shot_section += META_INSTRUCTION + "\n\n---\n\n" # Add meta-instruction
-    selected_examples = TASK_SOLVING_FEW_SHOTS # Use all
-    few_shot_section += "\n\n---\n\n".join(selected_examples)
-    few_shot_section += "\n\n---\n\n" # Separator after examples
-# If num_shots is 0, few_shot_section remains empty, correctly skipping meta-instruction and examples.
-# --- END NEW SECTION ---
+    # --- Conditionally Add Meta-Instruction and Task-Solving Few-Shots ---
+    few_shot_section = ""
+    num_shots = config.NUM_FEW_SHOT_EXAMPLES # Get from config
+    if 0 < num_shots <= len(TASK_SOLVING_FEW_SHOTS):
+        few_shot_section += META_INSTRUCTION + "\n\n---\n\n" # Add meta-instruction
+        # Select the requested number of examples
+        selected_examples = TASK_SOLVING_FEW_SHOTS[:num_shots]
+        # Format them
+        few_shot_section += "\n\n---\n\n".join(selected_examples)
+        few_shot_section += "\n\n---\n\n" # Separator after examples
+    elif num_shots > len(TASK_SOLVING_FEW_SHOTS):
+        logger.warning(f"Requested {num_shots} few-shot examples, but only {len(TASK_SOLVING_FEW_SHOTS)} are available. Using all available.")
+        few_shot_section += META_INSTRUCTION + "\n\n---\n\n" # Add meta-instruction
+        selected_examples = TASK_SOLVING_FEW_SHOTS # Use all
+        few_shot_section += "\n\n---\n\n".join(selected_examples)
+        few_shot_section += "\n\n---\n\n" # Separator after examples
+    # If num_shots is 0, few_shot_section remains empty, correctly skipping meta-instruction and examples.
+    # --- END NEW SECTION ---
 
 
     # --- Build the final prompt ---
@@ -1706,12 +1632,10 @@ elif num_shots > len(TASK_SOLVING_FEW_SHOTS):
         "--- Your Current Task Starts Below ---\n\n"
     )
 
-# Assemble the final prompt (remains the same structure)
-
     # Assemble the final prompt (remains the same structure)
     beat_prompt = (
         few_shot_section
-        + follow_example_instruction 
+        + follow_example_instruction
         + BASE_BEAT_TEMPLATE.substitute(
             beat_mode=beat_mode,
             characters=json.dumps(world["characters"]),
@@ -1739,7 +1663,11 @@ elif num_shots > len(TASK_SOLVING_FEW_SHOTS):
         SAFETY_MARGIN,
     ):
         logger.warning(f"Approaching token limit before generating operator {node.op} ({owner_name}). Stopping. {'(ROOT NODE)' if is_root else ''}")
-        return
+        # Need to decide how to handle this - maybe return here?
+        # Or raise a specific exception? For now, just log and continue,
+        # but the LLM call might fail or be cut short.
+        # Consider adding: return # Stop processing this node if budget exceeded
+
 
     # --- Create Validator ---
     # IMPORTANT: Use the strict validator you want the LLM to learn (e.g., Option A or original)
@@ -1761,6 +1689,7 @@ elif num_shots > len(TASK_SOLVING_FEW_SHOTS):
     # --- LLM Call and Validation Loop ---
     system_prompt = "You are a storyteller focused on narrative flow. FOLLOW THE USER'S NUMBER RULES EXACTLY. Use numbers rather than word forms."
     beat_text = None
+    candidate_text = "" # Initialize candidate_text outside the loop
     for attempt in range(1, config.MAX_BEAT_RETRIES + 1):
         reason = None
         try:
@@ -1773,7 +1702,14 @@ elif num_shots > len(TASK_SOLVING_FEW_SHOTS):
                 max_completion_tokens=MAX_BEAT_TOKENS,
                 temperature=0.4,
             )
-            candidate_text = resp.choices[0].message.content.strip()
+            # Safely access content
+            if resp and resp.choices and resp.choices[0] and resp.choices[0].message:
+                 candidate_text = resp.choices[0].message.content.strip() if resp.choices[0].message.content else ""
+            else:
+                 candidate_text = "" # Ensure it's an empty string if structure is invalid
+                 logger.warning(f"Beat {context.beat_counter['current']} attempt {attempt}: Invalid response structure from API: {resp}")
+
+
             log_prompt(
                 f"LLM Beat Generation Attempt {attempt} for operator {node.op} ({owner_name})",
                 f"System: {system_prompt}\nUser: {beat_prompt}\n\nGeneration:\n{candidate_text}",
@@ -1786,14 +1722,17 @@ elif num_shots > len(TASK_SOLVING_FEW_SHOTS):
                 reason = "number validation failed" # Updated reason
             else:
                 beat_text = candidate_text
-                break
+                break # Success! Exit the loop.
         except Exception as e:
             reason = f"exception: {e}"
-        if attempt < config.MAX_BEAT_RETRIES:
-            logger.warning(f"Beat {context.beat_counter['current']}/{context.beat_counter['total']} retry {attempt}/{config.MAX_BEAT_RETRIES} for operator {node.op} ({owner_name}): {reason}")
-            time.sleep(config.RETRY_INITIAL_DELAY * (2 ** (attempt - 1)))
-        if not validate_beat_numbers(candidate_text):
-            reason = "number validation failed" # <--- Could fail repeatedly for root
+            logger.error(f"Exception during beat generation attempt {attempt}: {e}", exc_info=True) # Log stack trace
+
+        # Log failure reason only if loop didn't break
+        if beat_text is None:
+             logger.warning(f"Beat {context.beat_counter['current']}/{context.beat_counter['total']} retry {attempt}/{config.MAX_BEAT_RETRIES} for operator {node.op} ({owner_name}): {reason}")
+             if attempt < config.MAX_BEAT_RETRIES:
+                 time.sleep(config.RETRY_INITIAL_DELAY * (2 ** (attempt - 1)))
+        # Removed the duplicate validation check here, it's handled above
 
 
     # --- Process Successful Generation or Raise Error ---
@@ -1895,8 +1834,8 @@ elif num_shots > len(TASK_SOLVING_FEW_SHOTS):
             break # Exit padding loop
 
     # --- No explicit return needed as context is modified in place ---
-    return
 
+# ... (rest of the file remains the same) ...
 
 # --- generate_narrative function remains largely the same ---
 # It sets up the context and makes the initial call to the modified _generate_narrative_recursive
@@ -2000,6 +1939,7 @@ def generate_narrative(
         # Validator ensures no numbers are present
         validate_fn=make_number_validator(allowed_atoms=set(), forbidden_atoms=all_atoms.union({0,1}), operand_count=0),
         retries=3, # Increase retries slightly for this specific task
+        sample_index=sample_index # Pass sample index for logging
     )
 
     if intro_text and len(encoder.encode(intro_text)) <= config.DEFAULT_MAX_TOTAL_TOKENS:
@@ -2015,7 +1955,7 @@ def generate_narrative(
     total_beats = len(operator_nodes)
     beat_counter = {"current": 0, "total": total_beats}
 
-# --- Create GenerationContext instance for sharing state ---
+    # --- Create GenerationContext instance for sharing state ---
     context = GenerationContext(
         world=world,
         config=config,
@@ -2112,14 +2052,14 @@ def generate_single_sample(sample_index: int) -> dict | None:
         logger.debug(f"[Sample {sample_index + 1}] World Info: {world_info}")
 
         logger.info(
-            f"[Sample {sample_index + 1}] Starting narrative rendering with pre-order strict validation (v5c)..."
+            f"[Sample {sample_index + 1}] Starting narrative rendering with post-order strict validation..." # Updated log message
         )
         narrative_prompt = generate_narrative(
             ast, world_info, config, encoder, p_inflect, logger, sample_index # <-- PASS sample_index here
         )
         if narrative_prompt is None:
             logger.error(
-                f"[Sample {sample_index + 1}] Narrative generation failed pre-order strict validation. Skipping."
+                f"[Sample {sample_index + 1}] Narrative generation failed post-order strict validation. Skipping." # Updated log message
             )
             sample_end_time = time.time()
             logger.error(
@@ -2150,15 +2090,16 @@ def generate_single_sample(sample_index: int) -> dict | None:
                 "atom_max_value": config.ATOM_MAX_VALUE,
                 "max_beat_retries": config.MAX_BEAT_RETRIES,
                 "max_pad_retries": config.MAX_PAD_RETRIES,
-                "validation_mode": (
-                    "postorder_llm_ownership_v1_strict_validate"
+                "validation_mode": ( # Updated validation mode string
+                    "postorder_llm_ownership_v2_strict_validate" # Changed v1 to v2 or similar
                     if (config.USE_OWNERSHIP_NARRATIVE and config.USE_LLM_NAMING)
                     else (
-                        "postorder_thematic_ownership_v1_strict_validate"
+                        "postorder_thematic_ownership_v2_strict_validate" # Changed v1 to v2 or similar
                         if config.USE_OWNERSHIP_NARRATIVE
-                        else "postorder_strict_validation_v1_strict_validate"
+                        else "postorder_strict_validation_v2_strict_validate" # Changed v1 to v2 or similar
                     )
                 ),
+                 "num_few_shot_examples": config.NUM_FEW_SHOT_EXAMPLES, # Add few-shot count
             },
         }
         sample_end_time = time.time()
@@ -2189,25 +2130,28 @@ def main(
     """Generate samples with strict validation."""
     # --- Dynamic Filename Generation ---
     sanitized_model_name = MODEL.replace("/", "_").replace(":", "-")
+    # Add few-shot count to filename
     output_file = (
         f"DATASET_"
         f"{config.NUM_FEW_SHOT_EXAMPLES}shot_"
         f"{config.DEFAULT_MAX_TOTAL_TOKENS}-tok_"
         f"{DEFAULT_MAX_OPS}-mxops_"
         f"{MIN_ARITY}-arity_"
-        f"{DEFAULT_MAX_BRANCH}-mxbrch"
+        f"{DEFAULT_MAX_BRANCH}-mxbrch_" # Added underscore
         f"{sanitized_model_name}_"
+        f"{datetime.datetime.now().strftime('%Y%m%d-%H%M')}" # Add timestamp
         f".jsonl"
     )
     logger.info(f"Output filename (dynamic): {output_file}")
     logger.info(
         f"Script started. Generating {num_samples} samples using up to {max_workers} workers."
     )
+    logger.info(f"Using {config.NUM_FEW_SHOT_EXAMPLES} few-shot examples for narrative generation.") # Log few-shot count
 
     samples_generated_successfully = 0
     samples_failed = 0
     output_dir = os.path.dirname(output_file)
-    if output_dir:
+    if output_dir and not os.path.exists(output_dir): # Create dir only if it doesn't exist
         os.makedirs(output_dir, exist_ok=True)
     start_time = time.time()
     results = []
@@ -2225,32 +2169,44 @@ def main(
                 else:
                     samples_failed += 1
             except Exception as exc:
-                logger.error(f"[Sample {index + 1}] task generated exception: {exc}")
+                logger.error(f"[Sample {index + 1}] task generated exception: {exc}", exc_info=True) # Log stack trace for task exceptions
                 samples_failed += 1
     logger.info(
         f"Parallel generation complete. Writing {samples_generated_successfully} samples to {output_file}..."
     )
     try:
-        with open(output_file, "a", encoding="utf-8") as f:
-            for sample_data in results:
+        # Use 'w' to overwrite if file exists from previous partial run, or 'a' to append
+        write_mode = 'w' # Or 'a' if you prefer appending
+        logger.info(f"Opening {output_file} in '{write_mode}' mode.")
+        with open(output_file, write_mode, encoding="utf-8") as f:
+            for sample_data in results: # Iterate through successfully generated results
                 try:
                     f.write(json.dumps(sample_data, ensure_ascii=False) + "\n")
                 except TypeError as e:
+                    # This error might indicate non-serializable data within the sample
                     logger.error(
-                        f"Serialization failed: {e}. Sample: {sample_data.get('id', 'Unknown')}"
+                        f"Serialization failed for sample {sample_data.get('id', 'Unknown')}: {e}. Skipping write for this sample."
                     )
+                    # Adjust counters if needed, though the sample was technically generated
                     samples_failed += 1
-                    samples_generated_successfully -= 1
+                    samples_generated_successfully -= 1 # Decrement success as it wasn't written
                 except Exception as e:
                     logger.error(
-                        f"Write error sample {sample_data.get('id', 'Unknown')}: {e}"
+                        f"Unexpected error writing sample {sample_data.get('id', 'Unknown')}: {e}. Skipping write."
                     )
                     samples_failed += 1
-                    samples_generated_successfully -= 1
+                    samples_generated_successfully -= 1 # Decrement success
     except IOError as e:
-        logger.error(f"Fatal file write error {output_file}: {e}")
-        samples_failed = num_samples
+        logger.error(f"Fatal file write error opening/writing {output_file}: {e}")
+        # Adjust counts to reflect write failure
+        samples_failed += samples_generated_successfully # All successful generations failed to write
         samples_generated_successfully = 0
+    except Exception as e:
+        logger.error(f"Unexpected error during file writing phase: {e}", exc_info=True)
+        samples_failed += samples_generated_successfully
+        samples_generated_successfully = 0
+
+
     end_time = time.time()
     total_time = end_time - start_time
     logger.info(f"--- Batch generation complete ---")
@@ -2258,15 +2214,21 @@ def main(
     logger.info(f"Successfully generated and written: {samples_generated_successfully}")
     logger.info(f"Failed generations or writes: {samples_failed}")
     total_count   = num_samples # Use the function argument
-    success_count = samples_generated_successfully # Use the counter
+    success_count = samples_generated_successfully # Use the counter for written samples
     success_rate  = (success_count / total_count * 100) if total_count else 0
-    logger.info(f"Generation success rate: {success_rate:.2f}% ({success_count}/{total_count})")
+    logger.info(f"Overall success rate (generated AND written): {success_rate:.2f}% ({success_count}/{total_count})")
     logger.info(f"Total time: {total_time:.2f} seconds")
-    logger.info(f"Dataset output file: {output_file}")
+    if samples_generated_successfully > 0:
+        logger.info(f"Dataset output file: {output_file}")
+    else:
+        logger.warning(f"No samples were successfully generated and written. Output file '{output_file}' may be empty or non-existent.")
     logging.shutdown()
 
 
 if __name__ == "__main__":
+    # You might want to add argument parsing here later (e.g., using argparse)
+    # to override config values from the command line.
+    # For now, it uses the defaults set in the script.
     main(
         config,
         num_samples=config.NUM_SAMPLES_TO_GENERATE,

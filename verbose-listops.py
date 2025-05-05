@@ -2137,7 +2137,7 @@ def main(
         f"{config.DEFAULT_MAX_TOTAL_TOKENS}-tok_"
         f"{DEFAULT_MAX_OPS}-mxops_"
         f"{MIN_ARITY}-arity_"
-        f"{DEFAULT_MAX_BRANCH}-mxbrch_" # Added underscore
+        f"{DEFAULT_MAX_BRANCH}-mxbrch_"
         f"{sanitized_model_name}_"
         f"{datetime.datetime.now().strftime('%Y%m%d-%H%M')}" # Add timestamp
         f".jsonl"

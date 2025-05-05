@@ -55,7 +55,7 @@ BASE_BEAT_TEMPLATE = Template(
 #  Configuration Constants 
 
 # --- Batch Generation & Output ---
-NUM_SAMPLES_TO_GENERATE = 1 # How many samples to generate in one run
+NUM_SAMPLES_TO_GENERATE = 8 # How many samples to generate in one run
 OUTPUT_FILENAME = "gemini-2.5-pro-verbose_listops_dataset_ultra_strict_v4.jsonl"  # Output file for the dataset
 DEFAULT_MAX_WORKERS = 20  # Default number of parallel threads for batch generation
 
@@ -204,7 +204,7 @@ def log_prompt(
 
 LOG_MAX_BYTES = 5 * 1024 * 1024  # Maximum log file size (5MB)
 LOG_BACKUP_COUNT = 3  # Number of backup log files to keep
-CLEAR_LOGS_ON_START = False  # If True, delete existing logs in LOG_DIR on startup
+CLEAR_LOGS_ON_START = True  # If True, delete existing logs in LOG_DIR on startup
 
 FINAL_QUESTION_TEMPLATE = Template( # Note: $primary_object is no longer used in this version
     "\n\n---\n\n**Final Question:** Carefully follow the main sequence of calculations described throughout the *entire narrative* above, focusing on the primary objective the characters are pursuing. Identify the single, concluding calculation performed as the **final step of that primary objective**. What is the **single integer** value that results *exclusively* from this final, top-level calculation related to the main task? Ignore any unrelated side-calculations or estimations mentioned incidentally, especially if they occur late in the narrative but are not part of the core sequence."
@@ -610,67 +610,121 @@ def clean_and_parse_json_block(text: str):
         raise  # Re-raise after logging
 
 
-def generate_world(num_characters: int = 5, num_concepts: int = 7) -> dict:
-    """Generates fictional world metadata including entity concepts."""
+# --- Tuned Generate World Function ---
+def generate_world(num_characters: int = 5, num_concepts: int = 7, max_retries: int = 3) -> dict:
+    """
+    Generates fictional world metadata using an LLM, with a tuned prompt
+    to maximize the likelihood of receiving valid, parseable JSON,
+    especially regarding quote escaping. Includes retries as a fallback.
+    """
     if not isinstance(num_characters, int) or num_characters < 1:
         raise ValueError("num_characters must be positive int")
     if not isinstance(num_concepts, int) or num_concepts < 1:
         raise ValueError("num_concepts must be positive int")
 
+    # --- TUNED PROMPT ---
     prompt = (
-        "You are a creative world-builder.\n"
-        f"Generate {num_characters} distinct characters (name, role, quirk). Define a genre and setting.\n"
-        "Also, name a category of objects that characters will search for and collect, in plural form (e.g., 'coins').\n"
-        "Output *only* a valid JSON object with NO extra text before or after the JSON structure:\n"
+        "You are an expert system designed to generate structured data in **strictly valid JSON format**.\n"
+        "Your task is to create fictional world metadata.\n\n"
+        "**Instructions:**\n"
+        f"1. Generate exactly {num_characters} distinct characters. Each character MUST have a 'name', 'role', and 'quirk' field, all as strings.\n"
+        "2. Define a 'genre' (string).\n"
+        "3. Define a 'setting' (string).\n"
+        "4. Define an 'object' (string, plural noun for items characters collect).\n\n"
+        "**Output Format:**\n"
+        "Output *ONLY* a single, raw, **strictly valid JSON object** adhering precisely to the following structure. Do NOT include ```json markdown fences or *any* other text before or after the JSON object.\n"
         "{\n"
         '  "characters": [{"name": "string", "role": "string", "quirk": "string"}, ...],\n'
         '  "genre": "string",\n'
         '  "setting": "string",\n'
         '  "object": "string"\n'
-        "}"
+        "}\n\n"
+        "**!!! CRITICAL JSON RULE !!!**\n"
+        "If any string value itself needs to contain double quotes (e.g., a nickname within a name, a quote in a setting description), these internal double quotes **MUST** be escaped with a backslash (`\\`).\n"
+        "   - **CORRECT Example:** `\"name\": \"Bartholomew \\\"Barty\\\" Bumble\"`\n"
+        "   - **INCORRECT Example:** `\"name\": \"Bartholomew \"Barty\" Bumble\"` (This will cause a parsing error!)\n"
+        "Adhere strictly to all JSON syntax rules, including commas between elements and correct brace/bracket usage.\n\n"
+        "Generate the JSON data now."
     )
+    # --- END TUNED PROMPT ---
 
-    # Around line 585 in generate_world
-    text = None # Initialize text variable
-    try:
-        resp = _chat_completion_call(
-            model=MODEL,
-            messages=[{"role": "user", "content": prompt}],
-            max_completion_tokens=2000,
-            temperature=0.8,
-        )
+    for attempt in range(max_retries):
+        logger.debug(f"Attempting world generation (Attempt {attempt + 1}/{max_retries}) with tuned prompt.")
+        text = None
+        try:
+            # !!! Ensure _chat_completion_call, MODEL, logger exist in your script !!!
+            resp = _chat_completion_call(
+                model=MODEL, # Uses the MODEL constant defined in your script
+                messages=[{"role": "user", "content": prompt}],
+                max_completion_tokens=2000, # Adjust if needed
+                temperature=0.7, # Slightly lower temp might help consistency
+            )
+            if hasattr(resp, "choices") and resp.choices: # Check if choices list exists and is not empty
+                # Access the *first* choice object in the list
+                first_choice = resp.choices[0]
+                # Check if the first choice has a 'message' attribute and it's not None
+                if hasattr(first_choice, "message") and first_choice.message:
+                    # Access content from the message within the first choice
+                    text = first_choice.message.content
+                    if text is None:
+                        # Log if the content *within* the message is None
+                        logger.warning(f"World Gen Attempt {attempt + 1}: API returned None content within message. Response: {resp}")
+                        text = "" # Treat as empty string
+                else:
+                    # Log if the first choice object itself lacks a 'message' attribute
+                    logger.error(f"World Gen Attempt {attempt + 1}: First choice object lacks 'message' attribute or message is empty. Response: {resp}")
+                    text = "" # Treat as error / empty string
+            else:
+                # Log if the response lacks the 'choices' list entirely or it's empty
+                logger.error(f"World Gen Attempt {attempt + 1}: API response lacks 'choices' list or it's empty. Response: {resp}")
+                text = "" # Treat as error / empty string
+            if not text.strip():
+                logger.warning(f"World Gen Attempt {attempt + 1}: Received empty response from API.")
+                # Optional: Add a small delay before retrying
+                if attempt < max_retries - 1:
+                    time.sleep(1) # Uses the time module
+                continue # Go to the next attempt
 
-        # Check response structure before accessing attributes
-        if hasattr(resp, "choices") and resp.choices:
-            text = resp.choices[0].message.content.strip() # Assign text here
-        else:
-            # Log unexpected format and raise an error to prevent proceeding
-            logger.error(f"Unexpected API response format in generate_world: {resp}")
-            raise RuntimeError("World generation failed: Unexpected API response format")
+            # !!! Ensure clean_and_parse_json_block exists in your script !!!
+            world = clean_and_parse_json_block(text) # Uses your existing cleaning function
 
-        # Moved parsing outside the if/else - ensure 'text' is not None
-        if text is None:
-            raise RuntimeError("World generation failed: No text content received from API")
+            # --- Validation ---
+            required_keys = ["characters", "genre", "setting", "object"]
+            if not all(k in world for k in required_keys):
+                 logger.warning(f"World Gen Attempt {attempt + 1}: Generated JSON missing required keys. Keys found: {world.keys()}")
+                 raise ValueError("Generated JSON missing required keys") # Raise error to trigger except block
 
-        cleaned = clean_and_parse_json_block(text)
-        world = cleaned
+            if not isinstance(world.get("characters"), list) or not world["characters"]:
+                 logger.warning(f"World Gen Attempt {attempt + 1}: 'characters' key is not a non-empty list.")
+                 raise ValueError("'characters' key is not a non-empty list")
 
-        # --- Validation ---
-        required_keys = ["characters", "genre", "setting", "object"]
-        # ... (rest of the validation logic) ...
+            logger.debug(f"World Gen Attempt {attempt + 1}: Successfully generated and parsed world JSON.")
+            logger.debug(f"Generated object: {world.get('object', 'N/A')}")
+            return world # Success! Exit the function.
 
-        logger.debug(f"Generated object: {world['object']}")
-        return world
+        except (json.JSONDecodeError, ValueError) as e: # Catch both parsing and validation errors
+            logger.error(f"World Gen Attempt {attempt + 1}: Failed ({type(e).__name__}): {e}. Raw text:\n---\n{text}\n---")
+            # Fall through to retry
+        except Exception as e:
+            # Catch other potential errors during API call or processing
+            logger.error(f"World Gen Attempt {attempt + 1}: Unexpected error: {e}. Raw text:\n---\n{text if text else 'N/A'}\n---")
+            # Fall through to retry
 
-    except json.JSONDecodeError as e: # Keep specific JSON error handling
-        logger.error(f"JSON Decode Error: {e} in text:\n---\n{text if text else 'N/A'}\n---")
-        raise RuntimeError("JSON parse failed") from e
-    except Exception as e:
-        # Now 'text' should be defined (or None if API call failed before assignment)
-        logger.error(f"Error processing generated world JSON: {e}. Raw text: {text if text else 'N/A'}")
-        # Re-raise a more specific error or the original one
-        raise RuntimeError("World JSON processing failed.") from e
+        # If parsing or validation failed and retries remain, wait before next attempt
+        if attempt < max_retries - 1:
+            # !!! Ensure config exists or adapt this delay calculation !!!
+            # Option 1: Use your config object (Recommended if config is accessible here)
+            # delay = config.RETRY_INITIAL_DELAY * (2 ** attempt)
 
+            # Option 2: Use a simple hardcoded delay if config isn't easily available
+            delay = 1.0 * (2 ** attempt) # Simple exponential backoff starting at 1 second
+
+            logger.info(f"Retrying world generation in {delay:.2f} seconds...")
+            time.sleep(delay) # Uses the time module
+
+    # If loop finishes without returning, all retries failed
+    logger.error(f"Failed to generate valid world JSON after {max_retries} attempts.")
+    raise RuntimeError("World generation failed: Could not get valid JSON from LLM.") # Raise an error to stop the sample generation
 
 # --- Number Extraction (Enhanced with Inflect for Words up to MAX_VALUE) ---
 DIGIT_REGEX = re.compile(r"\b-?\d+\b")
@@ -1109,7 +1163,7 @@ def _generate_narrative_recursive(
     is_root: bool,  # Flag to know if this is the root node call
 ):
     """
-    Recursive helper for POST-ORDER strict narrative generation.
+    Recursive helper for strict narrative generation.
     Processes children first, then the current node.
     Handles nested operators with specific prompt instructions.
     Modifies the context object directly.
@@ -1291,8 +1345,6 @@ def _generate_narrative_recursive(
                  f"They collect all these {primary_object}, combining their haul. However, for a reason you concoct, "
                  f"they are forced to give away most of their collection, leaving them only with a quantity equal to the final digit of the total number gathered (e.g., they collect a total of 27 {primary_object}, and can only walk away with 7 {primary_object})."
              )
-
-    # --- REFINED: Dynamic Ownership Instruction Detail for Post-Order ---
 
     # Build strings for prompt instructions (MUST INCLUDE, MUST AVOID, MAY USE)
     # ... (Keep the logic from the previous fix where only direct atoms are in must_include_combined_str) ...
@@ -1701,7 +1753,7 @@ def generate_narrative(
 
     # --- Pre-calculate node values ---
     # Ensure all node values are computed *before* generation starts
-    # This is crucial because post-order relies on child values being ready
+    # This is crucial as post-order relies on child values being ready
     logger.debug("Pre-calculating all AST node values...")
     try:
         eval_node(ast) # Evaluate the whole tree to populate .value attributes
@@ -1840,7 +1892,7 @@ def generate_narrative(
          logger.warning(f"Final generated prompt ({final_token_count} tokens) exceeds MAX_TOTAL_TOKENS ({config.DEFAULT_MAX_TOTAL_TOKENS}). Truncation might occur.")
          # Depending on requirements, you might return None or the truncated prompt
 
-    logger.info(f"Successfully generated narrative prompt using POST-ORDER traversal. Final estimated tokens: {context.tokens_used} (body), {final_token_count} (full prompt)")
+    logger.info(f"Successfully generated narrative prompt. Final estimated tokens: {context.tokens_used} (body), {final_token_count} (full prompt)")
     return final_prompt.strip()
 
 # --- Other functions (AST generation, evaluation, world gen, main loop, etc.) remain unchanged ---

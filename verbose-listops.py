@@ -55,7 +55,7 @@ BASE_BEAT_TEMPLATE = Template(
 #  Configuration Constants 
 
 # --- Batch Generation & Output ---
-NUM_SAMPLES_TO_GENERATE = 1 # How many samples to generate in one run
+NUM_SAMPLES_TO_GENERATE = 20 # How many samples to generate in one run
 DEFAULT_MAX_WORKERS = 20  # Default number of parallel threads for batch generation
 
 # --- COMPREHENSIVE FEW-SHOT EXAMPLES (Illustrating Success & Failure) ---
@@ -1402,13 +1402,9 @@ def _generate_narrative_recursive(
                 f"They collect all of these {primary_object}, combining their haul."
             )
         elif node.op == "MED":
-            correct_result = node.value # Get the pre-calculated correct result
-            num_inputs = len(node.children) # Total number of inputs (atoms + child ops)
-            action_description = (
-                f"Your narrative MUST describe the characters **evaluating all relevant inputs ({inputs_str}) based purely on their NUMERICAL VALUES**. "
-                f"It must be clear they are identifying the **middle value** after conceptually **sorting all {num_inputs} input values from smallest to largest**. "
-                f"The narrative action must clearly show them selecting the item or quantity corresponding to this numerically middle value, disregarding the order of discovery or physical arrangement. "
-                f"The correct median value they should identify and select is {correct_result}." 
+            scene_preamble = (
+                f"In this stage, the characters discover separate caches or groups containing "
+                f"{object_list_str_for_preamble} {primary_object} respectively. "
             )
         elif node.op == "MIN":
             scene_preamble = (
@@ -1627,8 +1623,7 @@ def _generate_narrative_recursive(
         f"{action_description}\n"
         f"The final quantity associated with '{owner_name}' after this action is {correct_result}."
         f"{reminder}"
-
-    # --- END REVISED Operational Instruction Detail ---
+    )
 
 
     # --- Assemble Task Body ---

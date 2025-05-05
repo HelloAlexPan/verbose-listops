@@ -1,16 +1,16 @@
-# README: Verbose ListOps Evaluation Benchmark
+# Verbose ListOps Evaluation Benchmark
 
 ## Overview
 
-Welcome to the Verbose ListOps Evaluation Benchmark repository. This project provides tools to synthetically generate multi-hop QA evaluation tasks of variable difficulty for Large Language Models (LLMs). The benchmark assesses reasoning capabilities when faced with tasks embedded within extremely long, narratively structured, and potentially distracting contexts.
+Welcome to the Verbose ListOps Evaluation Benchmark repository. This project provides tools to agentically generate synthetic multi-hop QA evaluation tasks of variable difficulty for Large Language Models (LLMs). The benchmark assesses reasoning capabilities when faced with tasks embedded within extremely long, narratively structured, and potentially distracting contexts.
 
 It builds upon the [2018 ListOps](https://arxiv.org/abs/1804.06028) benchmark by first, **reversing the traversal order** of a ListOps problem, and then transforming its concise, symbolic problem representation into lengthy, natural language narratives generated dynamically using an LLM. The core Python script, `verbose-listops.py`, orchestrates this process.
 
-Currently, only SOTA LLMs can generate the complex logic required by this eval, namely GPT-4.5 and Gemini 2.5 Pro. OpenAI's o(x) models and Anthropic's models do not work.
+Currently, only GPT-4.5 and Gemini 2.5 Pro are able to generate this benchmark. OpenAI's o(x), GPT, and Anthropic's family of models will have <50% success rates in generating samples.
 
 Despite sharing the exact core task of the ListOps benchmark, current SOTA models universally fail verbose-listops narratives—even with multiple-shot prompting—at just 10,000 tokens, whilst successfully solving their identical standard ListOps representations. However, on easier problems, few-shot prompting has a significant effect on improving success rate.
 
-Standard long‑context benchmarks typically emphasize “needle‑in‑a‑haystack” retrieval—locating a specific fact buried in a long document. In contrast, Verbose ListOps deterministically weaves explicit multi‑step operations (e.g., SUM, MIN, MAX) and their required operands into a narrative. Each story interleaves these operations with semantically related filler sentences, so a model must first identify and sequence the specified operations correctly before performing the computation. Though every narrative is dynamically generated with an LLM, strict deterministic tests enforced through agentic techniques and careful prompt engineering guarantee both reproducibility and soundness of semantic reasoning.
+Standard long‑context benchmarks typically emphasize “needle‑in‑a‑haystack” retrieval—locating a specific fact buried in a long document. In contrast, Verbose ListOps deterministically weaves explicit multi‑step operations (e.g., SUM, MIN, MAX) and their required operands into a narrative. Each story interleaves these operations with semantically related filler sentences, so a model must first identify and sequence the specified operations correctly before performing the computation. Though every narrative is dynamically generated with an LLM, strict deterministic tests guarantee reproducibility and soundness of semantic reasoning.
 
 Due to the nature of this computational task and its simulation of real-world human behaviours, this dataset is especially well-suited to understanding whether frontier models can excel at extracting and scoring arbitrarily defined predictive signals from large corpora of unstructured text, such as qualification signals from sales transcripts. Today's LLMs already excel at LLM-as-Judge tasks, and this benchmark attempts to understand whether they are able to synthesize multiple simple single-output generation tasks across long contexts.
 

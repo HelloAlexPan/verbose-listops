@@ -55,7 +55,7 @@ BASE_BEAT_TEMPLATE = Template(
 #  Configuration Constants 
 
 # --- Batch Generation & Output ---
-NUM_SAMPLES_TO_GENERATE = 8 # How many samples to generate in one run
+NUM_SAMPLES_TO_GENERATE = 2 # How many samples to generate in one run
 DEFAULT_MAX_WORKERS = 20  # Default number of parallel threads for batch generation
 
 # --- COMPREHENSIVE FEW-SHOT EXAMPLES (Illustrating Success & Failure) ---
@@ -265,7 +265,7 @@ class GenerationContext:
     sample_index: int
     max_pad_paragraphs: int = 2
 
-MODEL = "gemini-1.5-pro-latest"
+MODEL = "gemini-2.5-pro-preview-03-25"
 SAFETY_MARGIN = config.MAX_TOKENS_BUFFER
 MAX_BEAT_TOKENS = config.DEFAULT_MAX_BEAT_TOKENS
 MAX_PAD_TOKENS = config.DEFAULT_MAX_PAD_TOKENS
@@ -996,7 +996,7 @@ def generate_owner_name_with_llm(
     world_info: dict,
     op_node: OpNode,
     child_owner_names: list[str],
-    max_name_tokens: int = 50,
+    max_name_tokens: int = 300,
 ) -> str | None:
     """
     Uses an LLM call to generate a creative, thematic, and NARRATIVELY USEFUL name

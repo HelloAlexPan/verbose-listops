@@ -1,12 +1,12 @@
 # README: Verbose ListOps Evaluation Benchmark
 
-**HIGHLY EXPERIMENTAL — WIP**
-
 ## Overview
 
 Welcome to the Verbose ListOps Evaluation Benchmark repository. This project provides tools to synthetically generate multi-hop QA evaluation tasks of variable difficulty for Large Language Models (LLMs). The benchmark assesses reasoning capabilities when faced with tasks embedded within extremely long, narratively structured, and potentially distracting contexts.
 
-It builds upon the 2018 ListOps benchmark by first, reversing the traversal order of a ListOps problem, and then transforming its concise, symbolic problem representation into lengthy, natural language narratives generated dynamically using an LLM (e.g., OpenAI's GPT series, Anthropic's Claude). The core Python script, `verbose-listops.py`, orchestrates this process. 
+It builds upon the [2018 ListOps](https://arxiv.org/abs/1804.06028) benchmark by first, **reversing the traversal order** of a ListOps problem, and then transforming its concise, symbolic problem representation into lengthy, natural language narratives generated dynamically using an LLM. The core Python script, `verbose-listops.py`, orchestrates this process.
+
+Currently, only SOTA LLMs can generate the complex logic required by this eval, namely GPT-4.5 and Gemini 2.5 Pro. OpenAI's o(x) models and Anthropic's models do not work.
 
 Despite sharing the exact core task of the ListOps benchmark, current SOTA models universally fail verbose-listops narratives—even with multiple-shot prompting—at just 10,000 tokens, whilst successfully solving their identical standard ListOps representations. However, on easier problems, few-shot prompting has a significant effect on improving success rate.
 

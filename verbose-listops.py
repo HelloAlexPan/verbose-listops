@@ -236,8 +236,8 @@ class Config:
 
     # --- Token Limits & Budgeting ---
     DEFAULT_MAX_TOTAL_TOKENS: int = 50000         # Overall token budget for a single sample
-    DEFAULT_MAX_BEAT_COMPLETION_TOKENS: int = 1000 # Max output tokens for a single narrative beat
-    DEFAULT_MAX_PAD_COMPLETION_TOKENS: int = 1000 # Max output tokens for a padding paragraph
+    DEFAULT_MAX_BEAT_COMPLETION_TOKENS: int = 5000 # Max output tokens for a single narrative beat
+    DEFAULT_MAX_PAD_COMPLETION_TOKENS: int = 5000 # Max output tokens for a padding paragraph
     MAX_TOKENS_BUFFER: int = 10000                 # Safety buffer subtracted from total token budget
 
     # --- World Generation ---

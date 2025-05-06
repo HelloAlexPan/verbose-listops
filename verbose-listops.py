@@ -55,18 +55,19 @@ BASE_BEAT_TEMPLATE = Template(
 
 
 # --- Batch Generation & Output ---
-NUM_SAMPLES_TO_GENERATE = 1 # How many samples to generate in one run
+NUM_SAMPLES_TO_GENERATE = 40 # How many samples to generate in one run
 DEFAULT_MAX_WORKERS = 20  # Default number of parallel threads for batch generation
 
 FEW_SHOT_EXAMPLES_STRICT = [
     (
         # --- Example 1: Basic Success vs. Extraneous Number (>10) ---
         (
-            "**ULTRA-STRICT NUMBER RULES (Apply ONLY to THIS Scene):**\\n"
-            "*   **MUST INCLUDE:** ... mention ... numbers (use digits): thirty-nine (39), ninety (90), and ninety-three (93).\\n"
-            "*   **MUST AVOID (FORBIDDEN):** Do NOT mention ...: five (5).\\n"
-            "*   You MAY use the number 3 ('three', the count of direct items...) and the number 1 ('one').\\n"
-            "*   **ABSOLUTELY NO OTHER NUMBERS:** Do not introduce any other numerical values...\\n"
+            "**ULTRA-STRICT NUMBER RULES (Apply ONLY to THIS Scene):**\\\\n"
+            # Changed from: "*   **MUST INCLUDE:** ... mention ... numbers (use digits): thirty-nine (39), ninety (90), and ninety-three (93).\\n"
+            "*   **MUST INCLUDE:** ... mention ... numbers as digits: 39, 90, and 93.\\\\n"
+            "*   **MUST AVOID (FORBIDDEN):** Do NOT mention ...: five (5).\\\\n"
+            "*   You MAY use the number 3 ('three', the count of direct items...) and the number 1 ('one').\\\\n"
+            "*   **ABSOLUTELY NO OTHER NUMBERS:** Do not introduce any other numerical values...\\\\n"
             "**Adhere strictly to these rules for this scene only.**"
         ),
 
@@ -214,24 +215,59 @@ FINAL_QUESTION_TEMPLATE = Template( # Note: $primary_object is no longer used in
 # --- Dataclasses ---
 @dataclass
 class Config:
-    NUM_SAMPLES_TO_GENERATE: int = NUM_SAMPLES_TO_GENERATE
-    DEFAULT_MAX_WORKERS: int = DEFAULT_MAX_WORKERS
-    DEFAULT_MAX_TOTAL_TOKENS: int = 10000
-    DEFAULT_MAX_BEAT_TOKENS: int = 1500
-    DEFAULT_MAX_PAD_TOKENS: int = 1000
-    MAX_TOKENS_BUFFER: int = 1000
-    RETRY_MAX_ATTEMPTS: int = 5
-    RETRY_INITIAL_DELAY: int = 0.5
-    MAX_BEAT_RETRIES: int = 5
-    MAX_PAD_RETRIES: int = 5
-    ATOM_MIN_VALUE: int = 1 # currently only supports p+ integers
-    ATOM_MAX_VALUE: int = 100
-    USE_NARRATIVE_ANCHORS: bool = True
-    USE_LLM_NAMING: bool = (
-        True  # If True, use LLM for narrative anchors; else use thematic fallback
-    )
-    NUM_FEW_SHOT_EXAMPLES: int = 3 # 0-3
+    # --- Problem Generation / Difficulty ---
+    DEFAULT_MAX_OPS: int = 5                      # Max operations in AST
+    MIN_ARITY: int = 3                          # Min numbers/sub-ops per operation
+    DEFAULT_MAX_BRANCH: int = 5                 # Max numbers/sub-ops per operation
+    ATOM_MIN_VALUE: int = 1                     # Min value for atomic numbers
+    ATOM_MAX_VALUE: int = 100                    # Max value for atomic numbers
+    EARLY_TERMINATION_PROBABILITY: float = 0.1    # Chance to end AST branch early
 
+    # --- Narrative Generation (Style, LLM Behavior, Anchors) ---
+    USE_NARRATIVE_ANCHORS: bool = True            # Use conceptual placeholders for intermediate results
+    USE_LLM_NAMING: bool = True                 # Use LLM for anchor names (if True and USE_NARRATIVE_ANCHORS is True)
+    NUM_FEW_SHOT_EXAMPLES: int = 1              # Number of few-shot examples for beat generation (currently supports 0 or 1)
+    BEAT_GEN_TEMPERATURE: float = 0.6           # Temperature for generating narrative beats
+    DEFAULT_HELPER_TEMPERATURE: float = 0.7       # Default temperature for helper LLM calls (intro, padding)
+    ANCHOR_GEN_TEMPERATURE: float = 0.75          # Temperature for narrative anchor generation
+    INTRO_SCENE_MAX_COMPLETION_TOKENS: int = 250  # Max tokens for the intro scene
+    DEFAULT_SNIPPET_MAX_LEN: int = 150            # Max length of the previous scene snippet passed to LLM
+    DEFAULT_MAX_PAD_PARAGRAPHS: int = 5       # Max number of padding paragraphs between beats
+
+    # --- Token Limits & Budgeting ---
+    DEFAULT_MAX_TOTAL_TOKENS: int = 10000         # Overall token budget for a single sample
+    DEFAULT_MAX_BEAT_COMPLETION_TOKENS: int = 600 # Max output tokens for a single narrative beat
+    DEFAULT_MAX_PAD_COMPLETION_TOKENS: int = 500 # Max output tokens for a padding paragraph
+    MAX_TOKENS_BUFFER: int = 1000                 # Safety buffer subtracted from total token budget
+
+    # --- World Generation ---
+    DEFAULT_WORLD_NUM_CHARACTERS: int = 5         # Default number of characters if not randomized
+    DEFAULT_WORLD_NUM_CONCEPTS: int = 7         # Default number of concepts if not randomized
+    WORLD_GEN_MAX_COMPLETION_TOKENS: int = 2500   # Max tokens for world generation call
+    WORLD_GEN_TEMPERATURE: float = 0.5            # Temperature for world generation
+    MIN_WORLD_CHARS: int = 3                      # Min characters for randomized world gen
+    MAX_WORLD_CHARS: int = 6                      # Max characters for randomized world gen
+    MIN_WORLD_CONCEPTS: int = 5                   # Min concepts for randomized world gen
+    MAX_WORLD_CONCEPTS: int = 10                  # Max concepts for randomized world gen
+
+    # --- Retry & Technical Parameters ---
+    NUM_SAMPLES_TO_GENERATE: int = NUM_SAMPLES_TO_GENERATE # Global constant passed in
+    DEFAULT_MAX_WORKERS: int = DEFAULT_MAX_WORKERS         # Global constant passed in
+    RETRY_MAX_ATTEMPTS: int = 5                   # General max retry attempts for API calls
+    RETRY_INITIAL_DELAY: float = 0.5              # Initial delay for exponential backoff
+    MAX_BEAT_RETRIES: int = 5                     # Max retries specifically for narrative beat generation
+    MAX_PAD_RETRIES: int = 5                      # Max retries specifically for padding generation
+    INTRO_SCENE_MAX_RETRIES: int = 3              # Max retries specifically for intro scene generation
+    DEFAULT_WORLD_MAX_RETRIES: int = 3            # Max retries specifically for world generation
+    INITIAL_WORLD_RETRY_DELAY: float = 1.0        # Initial retry delay for world generation
+
+    # --- Miscellaneous Constants ---
+    FALLBACK_MIN_NUM_WORD: int = 0                # Fallback range for num_to_words
+    FALLBACK_MAX_NUM_WORD: int = 20               # Fallback range for num_to_words
+    MIN_ALLOWED_SMALL_NUMBER: int = 0             # Validator setting: min implicitly allowed small number
+    MAX_ALLOWED_SMALL_NUMBER: int = 10            # Validator setting: max implicitly allowed small number
+    INVALID_RESULT_PLACEHOLDER: int = -999        # Placeholder for validator in specific cases
+    MAX_ANCHOR_WORDS: int = 5                     # Max words allowed in a generated narrative anchor
 
 config = Config()
 
@@ -264,8 +300,8 @@ class GenerationContext:
 
 MODEL = "google/gemini-2.5-pro-preview-03-25"
 SAFETY_MARGIN = config.MAX_TOKENS_BUFFER
-MAX_BEAT_TOKENS = config.DEFAULT_MAX_BEAT_TOKENS
-MAX_PAD_TOKENS = config.DEFAULT_MAX_PAD_TOKENS
+MAX_BEAT_COMPLETION_TOKENS = config.DEFAULT_MAX_BEAT_COMPLETION_TOKENS # Renamed from MAX_BEAT_TOKENS
+MAX_PAD_COMPLETION_TOKENS = config.DEFAULT_MAX_PAD_COMPLETION_TOKENS # Renamed from MAX_PAD_TOKENS
 
 # --- Setup Logging ---
 
@@ -362,7 +398,7 @@ def with_retry(func: Callable, *args, **kwargs):
             delay *= 2
 # --------------------------------------------------------------------------
 
-def clean_snippet(text: str, max_len: int = 150) -> str:
+def clean_snippet(text: str, max_len: int = config.DEFAULT_SNIPPET_MAX_LEN) -> str: # Use config
     """Removes common model analysis/checklist lines and takes the last part."""
     if not text:
         return "The story begins..."
@@ -412,7 +448,7 @@ def would_exceed_budget(
 def generate_with_retry(
     system_prompt: str,
     user_prompt: str,
-    max_tokens: int,
+    max_completion_tokens: int, # Renamed from max_tokens
     validate_fn: Callable[[str], bool],
     retries: int = config.MAX_BEAT_RETRIES,
     sample_index: int | None = None, # <-- Add optional sample_index argument
@@ -431,7 +467,7 @@ def generate_with_retry(
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": user_prompt},
                 ],
-                max_completion_tokens=max_tokens,
+                max_completion_tokens=max_completion_tokens, # Parameter name now matches
                 temperature=0.7,
             )
             
@@ -513,18 +549,18 @@ class OpNode(Node):
 
 
 # --- AST Generation and Evaluation ---
-def build_random_ast(max_ops: int, max_branch: int = DEFAULT_MAX_BRANCH) -> Node:
+def build_random_ast(max_ops: int, max_branch: int = config.DEFAULT_MAX_BRANCH) -> Node: # Use config
     """Constructs a random ListOps AST."""
     if not isinstance(max_ops, int) or max_ops < 1:
         raise ValueError("max_ops must be a positive int")
-    if max_branch < MIN_ARITY:
-        raise ValueError(f"max_branch ({max_branch}) < MIN_ARITY ({MIN_ARITY})")
+    if max_branch < config.MIN_ARITY: # Use config
+        raise ValueError(f"max_branch ({max_branch}) < MIN_ARITY ({config.MIN_ARITY})")
     ops = ["MAX", "MIN", "MED", "SUM", "SM", "AVG"]
     count = 0
 
     def helper():
         nonlocal count
-        if count >= max_ops or (count > 0 and random.random() < 0.1):
+        if count >= max_ops or (count > 0 and random.random() < config.EARLY_TERMINATION_PROBABILITY): # Use config
             return Atom(random.randint(config.ATOM_MIN_VALUE, config.ATOM_MAX_VALUE))
         count += 1
         op = random.choice(ops)
@@ -532,15 +568,15 @@ def build_random_ast(max_ops: int, max_branch: int = DEFAULT_MAX_BRANCH) -> Node
         if op == "MED":
 
             possible_arities = [
-                n for n in range(MIN_ARITY, max_branch + 1) if n % 2 == 1
+                n for n in range(config.MIN_ARITY, max_branch + 1) if n % 2 == 1 # Use config
             ]
 
             if not possible_arities:
-                arity = MIN_ARITY if MIN_ARITY % 2 == 1 else MIN_ARITY + 1
+                arity = config.MIN_ARITY if config.MIN_ARITY % 2 == 1 else config.MIN_ARITY + 1 # Use config
             else:
                 arity = random.choice(possible_arities)
         else:
-            arity = random.randint(MIN_ARITY, max_branch)
+            arity = random.randint(config.MIN_ARITY, max_branch) # Use config
         children = [helper() for _ in range(arity)]
 
         # --- NEW: Ensure AVG direct atom sum is divisible by atom count ---
@@ -588,7 +624,7 @@ def build_random_ast(max_ops: int, max_branch: int = DEFAULT_MAX_BRANCH) -> Node
     root = helper()
     if isinstance(root, Atom) and max_ops >= 1:
         op = random.choice(ops)
-        arity = random.randint(MIN_ARITY, max_branch)
+        arity = random.randint(config.MIN_ARITY, max_branch) # Use config
         children = [
             Atom(random.randint(config.ATOM_MIN_VALUE, config.ATOM_MAX_VALUE))
             for _ in range(arity - 1)
@@ -757,7 +793,7 @@ def generate_world(num_characters: int = 5, num_concepts: int = 7, max_retries: 
             resp = _chat_completion_call(
                 model=MODEL, # Uses the MODEL constant defined in your script
                 messages=[{"role": "user", "content": prompt}],
-                max_completion_tokens=2500, # Changed from 2000 to 2500
+                max_completion_tokens=5000, # Changed from 2000 to 2500
                 temperature=0.5, # Changed from 0.7 to 0.5
             )
             if hasattr(resp, "choices") and resp.choices: # Check if choices list exists and is not empty
@@ -846,32 +882,14 @@ def _build_expanded_number_words_dict(
     """Builds a dictionary mapping number words to ints up to max_val using inflect."""
     if p_inflect is None:
         logger.error(
-            "Inflect engine not available for building expanded number words dict. Using basic 0-20."
+            "Inflect engine not available for building expanded number words dict. Using basic range."
         )
-
+        # Use config for fallback range
         return {
-            "zero": 0,
-            "one": 1,
-            "two": 2,
-            "three": 3,
-            "four": 4,
-            "five": 5,
-            "six": 6,
-            "seven": 7,
-            "eight": 8,
-            "nine": 9,
-            "ten": 10,
-            "eleven": 11,
-            "twelve": 12,
-            "thirteen": 13,
-            "fourteen": 14,
-            "fifteen": 15,
-            "sixteen": 16,
-            "seventeen": 17,
-            "eighteen": 18,
-            "nineteen": 19,
-            "twenty": 20,
-        }
+            num_to_words(i).lower(): i 
+            for i in range(config.FALLBACK_MIN_NUM_WORD, config.FALLBACK_MAX_NUM_WORD + 1) 
+            if num_to_words(i) # Ensure conversion worked
+        } 
     num_word_dict = {}
     for i in range(max_val + 1):
         try:
@@ -988,35 +1006,27 @@ def make_number_validator(
     allowed_atoms: Set[int],
     forbidden_atoms: Set[int],
     operand_count: int,
-    correct_result_for_beat: int | None = None, # <<< ADD DEFAULT VALUE
+    correct_result_for_beat: int | None = None,
     intermediate_sum_allowed: int | None = None,
     strict_zero: bool = False
 ) -> Callable[[str], bool]:
-    """
-    Return a validator function based on new rules.
-    Allows the correct_result_for_beat (if not None), intermediate_sum (if provided),
-    operand_count (if not forbidden), and small numbers (0-10, if not forbidden).
-    If strict_zero is True, ALL numbers are forbidden.
-    """
     logger.debug(f"Creating validator with: Allowed_Atoms={allowed_atoms}, Forbidden={forbidden_atoms}, OpCount={operand_count}, Result={correct_result_for_beat}, InterSum={intermediate_sum_allowed}, StrictZero={strict_zero}")
 
+    IMPLICITLY_ALLOWED_SMALL_NUMBERS = set(range(0, 11))
 
-    IMPLICITLY_ALLOWED_SMALL_NUMBERS = set(range(0, 11)) # Allow 0 through 10
-
-    # --- Combine all potentially allowed numbers for checking extras --- 
-    explicitly_allowed_set = allowed_atoms.copy()
-    if correct_result_for_beat is not None: # <<< CHECK IF NOT NONE
-        explicitly_allowed_set.add(correct_result_for_beat) # Allow the result
+    # This set includes direct operands, the current beat's result, and its intermediate sum.
+    # These are numbers that *should* or *can* be in the text for this specific beat.
+    current_beat_explicitly_allowed_numbers = allowed_atoms.copy()
+    if correct_result_for_beat is not None:
+        current_beat_explicitly_allowed_numbers.add(correct_result_for_beat)
     if intermediate_sum_allowed is not None:
-        explicitly_allowed_set.add(intermediate_sum_allowed) # Allow intermediate sum if applicable
-    # --- END NEW --- 
+        current_beat_explicitly_allowed_numbers.add(intermediate_sum_allowed)
 
     def validate(text: str) -> bool:
         found_numbers = extract_numbers_from_text(text)
-        logger.debug(f"Validator Input Text: \"" + text[:100].replace('\n', ' ') + "...\"") # Log cleaned text
+        logger.debug(f"Validator Input Text: \"" + text[:100].replace('\n', ' ') + "...\"")
         logger.debug(f"Validator Found Numbers: {found_numbers}")
 
-        # --- Strict Zero Check --- 
         if strict_zero:
             if found_numbers:
                 log_reason = f"Validation FAIL (Strict Zero): Found numbers {found_numbers} when ZERO were allowed."
@@ -1025,80 +1035,76 @@ def make_number_validator(
             else:
                 logger.debug(f"Validation PASS (Strict Zero)")
                 return True
-        # --- End Strict Zero Check --- 
-
 
         missing_expected = allowed_atoms - found_numbers
         if missing_expected:
-            # --- MODIFIED LOG --- # Detailed Failure Logging
-            log_reason = f"Validation FAIL (Rule 1: Missing Required): Required={allowed_atoms}, Missing={missing_expected}, Found={found_numbers}."
+            log_reason = f"Validation FAIL (Rule 1: Missing Required Operands): RequiredOperands={allowed_atoms}, Missing={missing_expected}, FoundInText={found_numbers}."
             logger.debug(log_reason)
             return False
 
+        # Rule 2: Check for numbers that are on the forbidden_atoms list (from prior beats)
+        # but are NOT legitimately part of the current beat's explicit allowances.
+        forbidden_and_found_in_text = found_numbers & forbidden_atoms
+        
+        violations_of_forbidden_rule = set()
+        for num_in_question in forbidden_and_found_in_text:
+            # If the number is a direct operand, current result, or current intermediate sum, it's NOT a violation here.
+            if num_in_question in current_beat_explicitly_allowed_numbers:
+                continue 
+            
+            # Otherwise, it's a number from a past step, found in the text, and not allowed in current beat's explicit set.
+            violations_of_forbidden_rule.add(num_in_question)
 
-        found_forbidden = found_numbers & forbidden_atoms
-        if found_forbidden:
-            truly_forbidden_found = found_forbidden - allowed_atoms
-            if truly_forbidden_found:
-                # --- MODIFIED LOG --- # Detailed Failure Logging
-                log_reason = f"Validation FAIL (Rule 2: Found Forbidden): Forbidden={forbidden_atoms}, Found_Forbidden={truly_forbidden_found}, Allowed={allowed_atoms}, Found_All={found_numbers}."
-                logger.debug(log_reason)
-                return False
-            else:
-                logger.debug(f"Validator INFO: Found number(s) {found_forbidden} that were technically forbidden but also required. Allowing.")
+        if violations_of_forbidden_rule:
+            log_reason = (f"Validation FAIL (Rule 2: Found Forbidden Violation): "
+                          f"ForbiddenSetFromPriorBeats={forbidden_atoms}, Violations={violations_of_forbidden_rule}, "
+                          f"CurrentBeatExplicitlyAllowed={current_beat_explicitly_allowed_numbers}, FoundAllInText={found_numbers}.")
+            logger.debug(log_reason)
+            return False
+        else:
+            logger.debug(f"Validation INFO (Rule 2: Forbidden Check): No violations. ForbiddenAndFoundInText={forbidden_and_found_in_text}, CurrentBeatExplicitlyAllowed={current_beat_explicitly_allowed_numbers}")
 
+        # Numbers found in text that are NOT part of the current beat's explicit allowances (operands, result, intermediate sum).
+        # These are candidates for being "truly disallowed extras" unless they are operand_count or allowed small_numbers.
+        unexpected_found = found_numbers - current_beat_explicitly_allowed_numbers
+        logger.debug(f"Validator: initial unexpected_found (found_numbers - current_beat_explicitly_allowed_numbers)={unexpected_found}")
 
-        unexpected_found = found_numbers - allowed_atoms
-
-        # --- NEW: Whitelist the intermediate sum if provided ---
-        if intermediate_sum_allowed is not None and intermediate_sum_allowed in unexpected_found:
-            logger.debug(f"Validator INFO: Allowing explicitly permitted intermediate sum: {intermediate_sum_allowed}")
-            unexpected_found.remove(intermediate_sum_allowed)
-        # --- END NEW ---
-
+        # The specific removal of intermediate_sum_allowed from unexpected_found is now redundant
+        # as it's already excluded by subtracting current_beat_explicitly_allowed_numbers above.
+        # if intermediate_sum_allowed is not None and intermediate_sum_allowed in unexpected_found:
+        #     logger.debug(f"Validator INFO: Allowing explicitly permitted intermediate sum: {intermediate_sum_allowed}")
+        #     unexpected_found.remove(intermediate_sum_allowed) # This block can be removed or commented out.
 
         truly_disallowed_extras = set()
         for extra_num in unexpected_found:
             is_allowed_one = (extra_num == 1)
-
             is_allowed_count = (extra_num == operand_count and extra_num not in forbidden_atoms) 
             is_allowed_small = (extra_num in IMPLICITLY_ALLOWED_SMALL_NUMBERS and extra_num not in forbidden_atoms)
 
             if not (is_allowed_one or is_allowed_count or is_allowed_small):
-
                 fail_reason_detail = []
-                if extra_num in forbidden_atoms:
-                    fail_reason_detail.append("explicitly forbidden")
-
-                if extra_num > 10 and extra_num != operand_count:
-                     fail_reason_detail.append("neither small (<=10) nor operand_count")
-                elif extra_num <=10 and extra_num not in IMPLICITLY_ALLOWED_SMALL_NUMBERS: # Should not happen if set is correct
-                     fail_reason_detail.append("small but not in allowed small set") 
-                elif extra_num <=10 and extra_num in forbidden_atoms:
-                     fail_reason_detail.append("small but forbidden")
-                elif extra_num == operand_count and extra_num in forbidden_atoms:
-                     fail_reason_detail.append("operand_count but forbidden")
-                elif extra_num == 1 and extra_num in forbidden_atoms: # Check if 'one' was forbidden
-                     fail_reason_detail.append("'one' but forbidden")
+                if extra_num in forbidden_atoms: # This check is important for detailed logging
+                    fail_reason_detail.append("on forbidden_atoms list (from prior beat) and not otherwise allowed for current beat")
                 
+                # Add more specific reasons why it's not allowed_one, allowed_count, or allowed_small
+                if not is_allowed_one and extra_num == 1: fail_reason_detail.append("is 1 but failed 'is_allowed_one' criteria (e.g. forbidden and not operand)") # Should be rare
+                if not is_allowed_count and extra_num == operand_count: fail_reason_detail.append(f"is operand_count ({operand_count}) but also in forbidden_atoms")
+                if not is_allowed_small and extra_num in IMPLICITLY_ALLOWED_SMALL_NUMBERS: fail_reason_detail.append(f"is small number ({extra_num}) but also in forbidden_atoms")
+                if not (extra_num == 1 or extra_num == operand_count or extra_num in IMPLICITLY_ALLOWED_SMALL_NUMBERS):
+                    fail_reason_detail.append("not 1, not operand_count, and not an allowed small number")
 
                 truly_disallowed_extras.add((extra_num, ", ".join(fail_reason_detail) if fail_reason_detail else "unexpected extraneous"))
 
-
-
-
-
         if truly_disallowed_extras:
-            # --- MODIFIED LOG --- # Detailed Failure Logging
-
             formatted_disallowed = ', '.join([f'{n}({reason})' for n, reason in truly_disallowed_extras])
-            log_reason = f"Validation FAIL (Strict Rule: Extraneous Numbers): Disallowed_Extras={{ {formatted_disallowed} }}. AllowedSet={allowed_atoms}, ForbiddenSet={forbidden_atoms}, OperandCount={operand_count}, Found={found_numbers}, UnexpectedRaw={unexpected_found}"
+            log_reason = (f"Validation FAIL (Strict Rule: Extraneous Numbers): Disallowed_Extras={{ {formatted_disallowed} }}. "
+                          f"CurrentBeatExplicitlyAllowed={current_beat_explicitly_allowed_numbers}, ForbiddenSet={forbidden_atoms}, "
+                          f"OperandCount={operand_count}, FoundInText={found_numbers}, UnexpectedRawAfterExplicit={unexpected_found}")
             logger.debug(log_reason)
             return False
 
-
         logger.debug(f"Validation PASS (Strict)")
-        logger.debug(f"--> Context: Allowed={allowed_atoms}, Forbidden={forbidden_atoms}, OperandCount={operand_count}, Found={found_numbers}")
+        logger.debug(f"--> Context: AllowedOperands={allowed_atoms}, ForbiddenSet={forbidden_atoms}, OperandCount={operand_count}, Result={correct_result_for_beat}, IntermediateSum={intermediate_sum_allowed}, FoundInText={found_numbers}")
         return True
 
     return validate
@@ -1185,10 +1191,6 @@ Examples of good anchors based on different inputs:
 
 You will be given the Genre, Setting, Item (Primary Object), and Concept/Operation Hint. Provide ONLY the generated anchor as your response."""
 
-# You can then use this system_prompt variable in your LLM calls.
-# For example:
-# print(system_prompt)
-
     # MODIFIED User Prompt to include Setting and Previously Used Anchors
     user_prompt = (
         f"Genre: {genre}\\n"
@@ -1196,10 +1198,8 @@ You will be given the Genre, Setting, Item (Primary Object), and Concept/Operati
         f"Item: {primary_object}\\n"
         f"Concept/Operation Hint: {concept_keywords_for_prompt}\\n"
     )
-    # --- END NEW Ultra-Simple Prompt ---
-
-    prompt_log_header = f"--- Narrative Anchor Prompt (Op: {op_node.op}, Item: {primary_object}, Concept: {concept_keywords_for_prompt}) ---" # Updated log header
-    prompt_content_for_log = f"System: {system_prompt}\\nUser:\\n{user_prompt}" # Adjusted user prompt variable name for clarity
+    prompt_log_header = f"--- Narrative Anchor Prompt (Op: {op_node.op}, Item: {primary_object}, Concept: {concept_keywords_for_prompt}) ---" 
+    prompt_content_for_log = f"System: {system_prompt}\\nUser:\\n{user_prompt}"
     
     # --- Log the prompt using log_prompt ---
     log_prompt(
@@ -1220,9 +1220,7 @@ You will be given the Genre, Setting, Item (Primary Object), and Concept/Operati
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_prompt},
             ],
-            "temperature": 0.55,
-            # If you decide to add top_p later, include it here too:
-            # "top_p": 0.95,
+            "temperature": 0.8,
         }
         logger.debug(f"--- LLM Anchor Gen: EXACT REQUEST PAYLOAD ---")
         logger.debug(json.dumps(request_payload, indent=2)) # Make sure you have `import json` at the top of your file
@@ -1442,7 +1440,8 @@ def _generate_narrative_recursive(  # Line ~1315
 
     must_include_list = []
     if required_atoms_for_beat:
-        items = [f"{num_to_words(x)} ({x})" for x in sorted(required_atoms_for_beat)]
+        # Changed from: items = [f"{num_to_words(x)} ({x})" for x in sorted(required_atoms_for_beat)]
+        items = [str(x) for x in sorted(required_atoms_for_beat)] # Use digits as strings
         must_include_list.extend(items)
 
     if not must_include_list:
@@ -1455,7 +1454,8 @@ def _generate_narrative_recursive(  # Line ~1315
         must_include_combined_str = ", ".join(must_include_list[:-1]) + ", and " + must_include_list[-1]
 
     if truly_forbidden_for_prompt:
-        must_avoid_str = ", ".join(f"{num_to_words(x)} ({x})" for x in sorted(truly_forbidden_for_prompt))
+        # Changed from: must_avoid_str = ", ".join(f"{num_to_words(x)} ({x})" for x in sorted(truly_forbidden_for_prompt))
+        must_avoid_str = ", ".join(str(x) for x in sorted(truly_forbidden_for_prompt)) # Use digits as strings
     else:
         must_avoid_str = "None"
 
@@ -1480,7 +1480,8 @@ def _generate_narrative_recursive(  # Line ~1315
 
     object_list_str_for_preamble = ""
     if direct_atom_values:
-        items = [f"{num_to_words(x)} ({x})" for x in sorted(direct_atom_values)]
+        # Changed from: items = [f"{num_to_words(x)} ({x})" for x in sorted(direct_atom_values)]
+        items = [str(x) for x in sorted(direct_atom_values)] # Use digits as strings
         if len(items) == 1:
             object_list_str_for_preamble = items[0]
         elif len(items) == 2:
@@ -1540,8 +1541,9 @@ def _generate_narrative_recursive(  # Line ~1315
 
     formatted_direct_values_str = "None"
     if has_direct_atom_children:
-        direct_atom_words = [num_to_words(a) for a in sorted(direct_atom_values)]
-        formatted_direct_values_list = [f"{w} ({v})" for w, v in zip(direct_atom_words, sorted(direct_atom_values))]
+        # Changed from: direct_atom_words = [num_to_words(a) for a in sorted(direct_atom_values)]
+        # formatted_direct_values_list = [f"{w} ({v})" for w, v in zip(direct_atom_words, sorted(direct_atom_values))]
+        formatted_direct_values_list = [str(v) for v in sorted(direct_atom_values)] # Use digits as strings
         formatted_direct_values_str = ', '.join(formatted_direct_values_list)
 
     input_description_parts = []
@@ -1714,10 +1716,14 @@ def _generate_narrative_recursive(  # Line ~1315
 
     user_message_content += f"{current_scene_instructions}\\n" # Add the combined requirements
 
-    # --- Strengthened Number Rules Section ---
+    # --- Strengthened Number Rules Section --- (and explicit formatting instruction)
     user_message_content += (
-        f"**!!! CRITICAL NUMBER RULES !!!** Your writing MUST\n"
-        f"- Explicitly state these numbers for the calculation the characters are about to perform: {must_include_combined_str}\n"
+        f"**!!! CRITICAL NUMBER RULES & FORMATTING !!!**\\n"
+        f"Your writing MUST explicitly state the numbers for the current calculation (listed as 'MUST INCLUDE' below) using only digits (e.g., '42', '107').\\n"
+        f"For other numbers you are allowed to use (like counts or the number 'one'), if you choose to include them, write them out as words (e.g., 'three', 'one').\\n"
+        f"Do NOT use the 'word (digit)' format like 'seven (7)' in your story text for ANY number.\\n"
+        f"--- Current Step's Numbers ---\\n"
+        f"- MUST INCLUDE: {must_include_combined_str} (as digits)\\n"
     ) 
 
     # New explicit construction for "You may optionally use..."
@@ -1765,8 +1771,8 @@ def _generate_narrative_recursive(  # Line ~1315
     # --- END REFINED USER PROMPT ---
 
     log_prompt(
-        f"{'=== FINAL' if is_root else '=== Intermediate'} Operator Beat Prompt (Op: {node.op}, Narrative Anchor: {narrative_anchor})",
-        f"System: {system_prompt}\n---\nUser:\n{user_message_content}",
+        f"{{'=== FINAL' if is_root else '=== Intermediate'}} Operator Beat Prompt (Op: {node.op}, Narrative Anchor: {narrative_anchor})",
+        f"System: {system_prompt}\\n---\\nUser:\\n{user_message_content}",
         sample_index=context.sample_index
     )
 
@@ -1776,20 +1782,17 @@ def _generate_narrative_recursive(  # Line ~1315
     except Exception as e:
         logger.error(f"Error encoding prompt for token estimation: {e}")
 
+    current_max_beat_completion_tokens = config.DEFAULT_MAX_BEAT_COMPLETION_TOKENS # Renamed variable
 
-
-
-    current_max_beat_tokens = config.DEFAULT_MAX_BEAT_TOKENS # Use the config value
-
-    logger.info(f"Beat Gen Pre-Call Tokens: Prompt Est={estimated_prompt_tokens}, Max Comp={current_max_beat_tokens}, Current Total={context.tokens_used}, Budget={config.DEFAULT_MAX_TOTAL_TOKENS}")
+    logger.info(f"Beat Gen Pre-Call Tokens: Prompt Est={estimated_prompt_tokens}, Max Comp={current_max_beat_completion_tokens}, Current Total={context.tokens_used}, Budget={config.DEFAULT_MAX_TOTAL_TOKENS}")
 
     if would_exceed_budget(
         context.tokens_used,
-        estimated_prompt_tokens + current_max_beat_tokens,
+        estimated_prompt_tokens + current_max_beat_completion_tokens, # Use renamed variable
         config.DEFAULT_MAX_TOTAL_TOKENS,
         SAFETY_MARGIN,
     ):
-        logger.warning(f"Approaching token limit BEFORE generating operator {node.op} ({narrative_anchor}). Est Prompt {estimated_prompt_tokens} + Max Comp {current_max_beat_tokens} vs Remaining {config.DEFAULT_MAX_TOTAL_TOKENS - context.tokens_used}. Stopping.")
+        logger.warning(f"Approaching token limit BEFORE generating operator {node.op} ({narrative_anchor}). Est Prompt {estimated_prompt_tokens} + Max Comp {current_max_beat_completion_tokens} vs Remaining {config.DEFAULT_MAX_TOTAL_TOKENS - context.tokens_used}. Stopping.")
         raise BeatGenerationError(f"Token budget exceeded before generating beat for {node.op}")
 
     validate_beat_numbers = make_number_validator(
@@ -1822,7 +1825,7 @@ def _generate_narrative_recursive(  # Line ~1315
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": user_message_content},
                 ],
-                max_completion_tokens=current_max_beat_tokens, # Use the config value
+                max_completion_tokens=current_max_beat_completion_tokens, # Use renamed variable and correct kwarg
                 temperature=0.6,
             )
 
@@ -1962,7 +1965,7 @@ def _generate_narrative_recursive(  # Line ~1315
 
         if would_exceed_budget(
             context.tokens_used,
-            estimated_pad_prompt_tokens + MAX_PAD_TOKENS, # Global MAX_PAD_TOKENS
+            estimated_pad_prompt_tokens + MAX_PAD_COMPLETION_TOKENS, # Use renamed global constant
             config.DEFAULT_MAX_TOTAL_TOKENS,
             SAFETY_MARGIN,
         ):
@@ -1973,7 +1976,7 @@ def _generate_narrative_recursive(  # Line ~1315
         padding_text = generate_with_retry(
             system_prompt=padding_system_prompt,
             user_prompt=padding_user_prompt,
-            max_tokens=MAX_PAD_TOKENS, # Global MAX_PAD_TOKENS
+            max_completion_tokens=MAX_PAD_COMPLETION_TOKENS, # Use renamed global constant and correct kwarg
             validate_fn=validate_padding,
             retries=config.MAX_PAD_RETRIES,
             sample_index=context.sample_index
@@ -2117,7 +2120,7 @@ def generate_narrative(
     intro_text = generate_with_retry(
         system_prompt=intro_system_prompt,
         user_prompt=intro_user_prompt,
-        max_tokens=250,
+        max_completion_tokens=250,
 
         validate_fn=make_number_validator( # <<< UPDATE THIS CALL
             allowed_atoms=set(), 
@@ -2229,7 +2232,8 @@ def generate_single_sample(sample_index: int) -> dict | None:
             return None
 
         logger.info(f"[Sample {sample_index + 1}] Building random AST...")
-        ast = build_random_ast(max_ops=DEFAULT_MAX_OPS, max_branch=DEFAULT_MAX_BRANCH)
+        # Use config for build_random_ast parameters
+        ast = build_random_ast(max_ops=config.DEFAULT_MAX_OPS, max_branch=config.DEFAULT_MAX_BRANCH)
         validate_ast(ast)
         ast_prefix_string = ast_to_prefix(ast)
         logger.debug(f"[Sample {sample_index + 1}] Generated AST: {ast_prefix_string}")
@@ -2280,8 +2284,8 @@ def generate_single_sample(sample_index: int) -> dict | None:
             "metadata": {
                 "generation_timestamp": datetime.datetime.now().isoformat(),
                 "model_used": MODEL,
-                "max_ops": DEFAULT_MAX_OPS,
-                "max_branch": DEFAULT_MAX_BRANCH,
+                "max_ops": config.DEFAULT_MAX_OPS, # Use config
+                "max_branch": config.DEFAULT_MAX_BRANCH, # Use config
                 "atom_min_value": config.ATOM_MIN_VALUE,
                 "atom_max_value": config.ATOM_MAX_VALUE,
                 "max_beat_retries": config.MAX_BEAT_RETRIES,
@@ -2330,11 +2334,11 @@ def main(
     output_file = (
         f"DATASET_"
         f"{config.NUM_FEW_SHOT_EXAMPLES}shot_"
-        f"{config.DEFAULT_MAX_BEAT_TOKENS}btok_"
+        f"{config.DEFAULT_MAX_BEAT_COMPLETION_TOKENS}btok_"
         f"{config.DEFAULT_MAX_TOTAL_TOKENS}-ttok_"
-        f"{DEFAULT_MAX_OPS}-mxops_"
-        f"{MIN_ARITY}-arity_"
-        f"{DEFAULT_MAX_BRANCH}-mxbrch_"
+        f"{config.DEFAULT_MAX_OPS}-mxops_"
+        f"{config.MIN_ARITY}-arity_"
+        f"{config.DEFAULT_MAX_BRANCH}-mxbrch_"
         f"{sanitized_model_name}_"
         f"{datetime.datetime.now().strftime('%Y%m%d-%H%M')}"
         f".jsonl"
@@ -2423,7 +2427,7 @@ def main(
 
 
 
-def clean_snippet(text: str, max_len: int = 150) -> str:
+def clean_snippet(text: str, max_len: int = config.DEFAULT_SNIPPET_MAX_LEN) -> str: # Use config
     """Removes common model analysis/checklist lines and takes the last part."""
     if not text:
         return "The story begins..."

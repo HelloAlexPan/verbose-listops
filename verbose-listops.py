@@ -55,7 +55,7 @@ BASE_BEAT_TEMPLATE = Template(
 
 
 # --- Batch Generation & Output ---
-NUM_SAMPLES_TO_GENERATE = 40 # How many samples to generate in one run
+NUM_SAMPLES_TO_GENERATE = 5 # How many samples to generate in one run
 DEFAULT_MAX_WORKERS = 20  # Default number of parallel threads for batch generation
 
 FEW_SHOT_EXAMPLES_STRICT = [
@@ -235,10 +235,10 @@ class Config:
     DEFAULT_MAX_PAD_PARAGRAPHS: int = 5       # Max number of padding paragraphs between beats
 
     # --- Token Limits & Budgeting ---
-    DEFAULT_MAX_TOTAL_TOKENS: int = 10000         # Overall token budget for a single sample
-    DEFAULT_MAX_BEAT_COMPLETION_TOKENS: int = 600 # Max output tokens for a single narrative beat
-    DEFAULT_MAX_PAD_COMPLETION_TOKENS: int = 500 # Max output tokens for a padding paragraph
-    MAX_TOKENS_BUFFER: int = 1000                 # Safety buffer subtracted from total token budget
+    DEFAULT_MAX_TOTAL_TOKENS: int = 50000         # Overall token budget for a single sample
+    DEFAULT_MAX_BEAT_COMPLETION_TOKENS: int = 1000 # Max output tokens for a single narrative beat
+    DEFAULT_MAX_PAD_COMPLETION_TOKENS: int = 1000 # Max output tokens for a padding paragraph
+    MAX_TOKENS_BUFFER: int = 10000                 # Safety buffer subtracted from total token budget
 
     # --- World Generation ---
     DEFAULT_WORLD_NUM_CHARACTERS: int = 5         # Default number of characters if not randomized

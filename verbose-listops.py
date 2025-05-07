@@ -41,16 +41,13 @@ Modify the difficulty of the generated problems by changing the parameters below
 @dataclass
 class Config:
     # === Core Experiment Variables ===
-
-    # --- 1. ListOps Problem Difficulty & Context Length ---
+    # --- 1. ListOps Problem Difficulty  ---
     MAX_OPS: int = 10                               # Max ListOps operations
     MIN_ARITY: int = 3                              # Min numbers/sub-ops per operation
     MAX_BRANCH: int = 8                             # Max numbers/sub-ops per operation
     MIN_ATOM_VAL: int = 1                           # Min value for atomic numbers
     MAX_ATOM_VAL: int = 100                         # Max value for atomic numbers
-    MAX_TOTAL_TOKENS: int = 10000                   # Sample token budget
-    MAX_BEAT_TOKENS: int = 500                      # Max tok for narrativized ListOps 'beat'
-    MAX_PADDING_TOKENS: int = 500                   # Max tok for padding paragraph
+    MAX_TOTAL_TOKENS: int = 10000                   # Cleaned sample token budget
     EARLY_TERMINATION_PROBABILITY: float = 0.2      # Chance to end AST branch early
 
     # --- 2. Narrative Context Generation & Style ---
@@ -61,32 +58,29 @@ class Config:
     MIN_WORLD_CONCEPTS: int = 5                     # Min concepts for randomized world gen
     MAX_WORLD_CONCEPTS: int = 10                    # Max concepts for randomized world gen
     BEAT_CONTEXT: int = 200                         # Max previous scene chars for beat gen prompt
-    PADDING_CONTEXT: int = 200                      # Max previous scene chars for padding gen prompt
-    MAX_PAD_PARAGRAPHS: int = 5                     # Max padding paragraphs between story beats
+    PADDING_CONTEXT: int = 150                      # Tokens of context for padding
+    MAX_PAD_PARAGRAPHS: int = 3                      # Max padding segments per-beat
+    PADDING_MAX_TOK_PERCENT: float = 0.60            # How much total tok budget can be padding
 
-    # --- 3. Temperature Controls ---
+    # --- 3. Temperature ---
     WORLD_GEN_TEMP:  float = 0.9                    # Temp. for world gen
     BEAT_GEN_TEMP: float = 0.2                      # Temp. for generating narrative beats
     CREATIVE_NARRATIVE_TEMP: float = 0.75           # Temp. for creative parts (intro, padding)
     ANCHOR_GEN_TEMP: float = 0.75                   # Temp. for narrative anchor generation
 
-    # === Experiment Execution & Resource Management ===
+    # === Other ===
+    # LLM Interaction & Prompting
+    MAX_ANCHOR_WORDS: int = 4                       # Max words allowed in a narrative anchor name
+    FEW_SHOT_EXAMPLES: int = 1                      # Few-shot examples for beat generation
 
-    # --- 4. Batch Generation & Concurrency ---
-    NUM_SAMPLES_TO_GENERATE: int = NUM_SAMPLES_TO_GENERATE
-    DEFAULT_MAX_WORKERS: int = DEFAULT_MAX_WORKERS
+    # Data Validation & Fallbacks
+    FALLBACK_MIN_NUM_WORD: int = 0                  # Fallback range for num_to_words
+    FALLBACK_MAX_NUM_WORD: int = 20                 # Fallback range for num_to_words
+    MIN_ALLOWED_SMALL_NUMBER: int = 0               # Validator setting: min implicitly allowed small number
+    MAX_ALLOWED_SMALL_NUMBER: int = 2               # Validator: max implicitly allowed small numbers
+    INVALID_RESULT_PLACEHOLDER: int = -999          # Validator: placeholder for specific error cases
 
-    # --- 5. Rate Limiting ---
-    MAX_REQUESTS_PER_SECOND: float = 50.0           # Max requests per second to OpenRouter
-    MIN_REQUEST_INTERVAL: float = 0.015             # Min time (seconds) between requests
-
-    # --- 6. Other Token Controls & Buffers ---
-    MAX_TOKENS_BUFFER: int = 1000                   # Safety buffer for overall budget
-    INTRO_MAX_TOKENS: int = 500    # Intro scene max tok
-    WORLD_GEN_MAX_TOKENS: int = 2000     # World gen .json max tok
-    ANCHOR_MAX_TOKENS: int = 10      # Anchor gen max tok
-
-    # --- 7. API Retry Logic ---
+    #  API Configuration & Retries
     RETRY_MAX_ATTEMPTS: int = 5                     # Max retries for API calls
     RETRY_INITIAL_DELAY: float = 0.5                # Initial delay for exponential backoff
     MAX_BEAT_RETRIES: int = 5                       # Max retries for beat generation
@@ -94,31 +88,33 @@ class Config:
     INTRO_MAX_RETRIES: int = 3                      # Max retries for intro scene generation
     WORLDGEN_MAX_RETRIES: int = 3                   # Max retries for world generation
     INITIAL_WORLD_RETRY_DELAY: float = 0.5          # Initial retry delay for world gen
+    MAX_REQUESTS_PER_SECOND: float = 500.0          # Max requests per second to OpenRouter
+    MIN_REQUEST_INTERVAL: float = 0.015             # Min time (seconds) between requests
 
-    # === Misc. & Technical Constants ===
-    FALLBACK_MIN_NUM_WORD: int = 0                  # Fallback range for num_to_words
-    FALLBACK_MAX_NUM_WORD: int = 20                 # Fallback range for num_to_words
-    MIN_ALLOWED_SMALL_NUMBER: int = 0               # Validator setting: min implicitly allowed small number
-    MAX_ALLOWED_SMALL_NUMBER: int = 2               # Validator: max implicitly allowed small numbers
-    INVALID_RESULT_PLACEHOLDER: int = -999          # Validator: placeholder for specific error cases
-    MAX_ANCHOR_WORDS: int = 4                       # Max words allowed in a narrative anchor name
-    REASONING_EFFORT: str = "high"                  # LLM reasoning depth ("high", "medium", "low")
-    REASONING_EXCLUDE: bool = True                  # Always on. True = don't count reasoning tokens  
-    FEW_SHOT_EXAMPLES: int = 1                      # Few-shot examples for beat generation
-    #   --- Logging Config ---
+    # Logging Configuration
     LOG_MAX_BYTES: int = 5 * 1024 * 1024            # Maximum log file size (5MB)
     LOG_BACKUP_COUNT: int = 3                       # Number of backup log files to keep
     CLEAR_LOGS_ON_START: bool = True                # If True delete existing logs on startup
+
+    # Token & Budget Management !!! DONT FUCKING TOUCH THIS !!!
+    MAX_TOKENS_BUFFER: int = 500                    # Safety buffer for overall budget
+    INTRO_MAX_TOKENS: int = 10000                   # Intro scene max tok
+    WORLD_GEN_MAX_TOKENS: int = 10000               # World gen .json max tok
+    ANCHOR_MAX_TOKENS: int = 10000                  # Anchor gen max tok
+    MAX_BEAT_TOKENS: int = 10000                    # Tok limit narrativized ListOps 'beat' output + reasoning
+    MAX_PADDING_TOKENS: int = 10000                 # Tok limit padding paragraph output + reasoning
+
+
 
 
 config = Config()
 
 
 ORDINAL_WORDS_TO_IGNORE = {
-#    "first",
-#    "second",
-#    "third",
-##    "fourth",
+    "first",
+    "second",
+    "third",
+    "fourth",
 #    "fifth",
 #    "sixth",
 #    "seventh",
@@ -456,9 +452,9 @@ class RateLimiter:
     Allows for bursts of requests while maintaining a long-term rate limit.
     """
     def __init__(self, max_requests_per_second: float = 40.0,
-                 min_interval: float = 0.05,
-                 bucket_capacity: int = 5,
-                 jitter: float = 0.1):
+                min_interval: float = 0.05,
+                bucket_capacity: int = 5,
+                jitter: float = 0.1):
         self.max_requests_per_second = max_requests_per_second
         self.min_interval = min_interval  # Minimum time between requests in seconds
         self.bucket_capacity = bucket_capacity  # Maximum tokens in the bucket
@@ -471,7 +467,7 @@ class RateLimiter:
 
         # Log configuration
         logger.info(f"Rate limiter initialized: {max_requests_per_second} req/s, "
-                   f"{min_interval}s min interval, bucket capacity {bucket_capacity}, jitter {jitter}")
+                f"{min_interval}s min interval, bucket capacity {bucket_capacity}, jitter {jitter}")
 
     def wait_if_needed(self):
         """
@@ -765,8 +761,10 @@ def generate_with_retry(
                 "temperature": temperature,
             }
             if reasoning_settings:
-                api_params["reasoning"] = reasoning_settings
-            # If reasoning_settings is None, _chat_completion_call will use global defaults
+                api_params["reasoning"] = reasoning_settings.copy() # Pass a copy
+                logger.debug(f"generate_with_retry: Passing reasoning_settings to _chat_completion_call: {api_params['reasoning']}")
+            # If reasoning_settings is None, _chat_completion_call will apply its own
+            # default logic based on config.REASONING_EXCLUDE.
 
             resp = _chat_completion_call(**api_params)
 
@@ -1009,12 +1007,6 @@ def _chat_completion_call(*args, **kwargs):
         )
 
     logger.debug(f"_chat_completion_call received kwargs: {kwargs}")
-    
-    # Add specific logging for max_completion_tokens and max_tokens
-    if "max_completion_tokens" in kwargs:
-        logger.info(f"DEBUG: max_completion_tokens passed to _chat_completion_call: {kwargs['max_completion_tokens']}")
-    if "max_tokens" in kwargs:
-        logger.info(f"DEBUG: max_tokens directly passed to _chat_completion_call: {kwargs['max_tokens']}")
 
     if client is None:
         logger.error(
@@ -1022,69 +1014,96 @@ def _chat_completion_call(*args, **kwargs):
         )
         raise RuntimeError("API client not initialized.")
 
-    standard_params = {
-        "model",
-        "messages",
-        "max_tokens",
-        "temperature",
-        "top_p",
-        "n",
-        "stream",
-        "stop",
-        "presence_penalty",
-        "frequency_penalty",
-        "logit_bias",
-        "user",
-        "top_k",
-        "reasoning", # Added reasoning
+    # Standard OpenAI client parameters
+    standard_openai_client_params = {
+        "model", "messages", "max_tokens", "temperature", "top_p", "n",
+        "stream", "stop", "presence_penalty", "frequency_penalty",
+        "logit_bias", "user", "top_k"
+        # 'reasoning' is NOT a standard OpenAI client param, will go in extra_body
     }
-    standard_kwargs = {k: v for k, v in kwargs.items() if k in standard_params}
 
-    # Check if there's a hardcoded max_tokens in standard_kwargs before we attempt to set it
-    if "max_tokens" in standard_kwargs:
-        logger.info(f"DEBUG: max_tokens already in standard_kwargs: {standard_kwargs['max_tokens']}")
+    # Separate standard kwargs from OpenRouter-specific ones (like reasoning)
+    api_call_standard_kwargs = {}
+    openrouter_specific_params = {}
 
-    if "max_completion_tokens" in kwargs and "max_tokens" not in standard_kwargs:
-        standard_kwargs["max_tokens"] = kwargs["max_completion_tokens"]
-        logger.info(f"DEBUG: Setting max_tokens from max_completion_tokens: {standard_kwargs['max_tokens']}")
+    if "max_completion_tokens" in kwargs and "max_tokens" not in kwargs:
+        # Use a temporary dict to avoid modifying original kwargs if it's passed around
+        temp_kwargs = kwargs.copy()
+        temp_kwargs["max_tokens"] = temp_kwargs.pop("max_completion_tokens")
+        logger.info(f"DEBUG: Aliased max_completion_tokens to max_tokens")
+    else:
+        temp_kwargs = kwargs.copy()
+
+    for k, v in temp_kwargs.items():
+        if k in standard_openai_client_params:
+            api_call_standard_kwargs[k] = v
+        elif k == "reasoning": # Explicitly handle reasoning for extra_body
+            openrouter_specific_params[k] = v
+        # else: # You could log other unexpected kwargs if needed
+            # logger.warning(f"DEBUG: Unexpected kwarg '{k}' in _chat_completion_call, may be ignored or cause error if not for extra_body.")
+
+
+    # --- REFINED REASONING LOGIC for openrouter_specific_params ---
+    current_model_name = api_call_standard_kwargs.get("model", "").lower()
+    is_openai_o_series = ("openai/" in current_model_name and
+                          (re.search(r"/o\d+", current_model_name) or "gpt-4o-mini" in current_model_name))
+
+    reasoning_config_to_send = openrouter_specific_params.get("reasoning", {})
+    if reasoning_config_to_send is None: # Handle if None was explicitly passed
+        reasoning_config_to_send = {}
     
-    # Add default reasoning settings if not provided in kwargs
-    if "reasoning" not in standard_kwargs:
-        standard_kwargs["reasoning"] = {
-            "effort": config.REASONING_EFFORT,
-            "exclude": config.REASONING_EXCLUDE
-        }
-        logger.debug(f"DEBUG: Using default reasoning settings: {standard_kwargs['reasoning']}")
+    # Ensure it's a dict if it was passed as something else or not at all
+    if not isinstance(reasoning_config_to_send, dict):
+        reasoning_config_to_send = {}
 
-    # Remove reasoning parameter for Google models, as they might not support it
-    if "model" in standard_kwargs and "google" in standard_kwargs["model"].lower():
-        if "reasoning" in standard_kwargs:
-            logger.debug("DEBUG: Removing 'reasoning' parameter for Google model.")
-            del standard_kwargs["reasoning"]
+    # The global reasoning configuration check is removed - we now expect reasoning params to be explicitly passed
+
+    # 2. Handle 'effort' - Only allow on OpenAI o-series models
+    if "effort" in reasoning_config_to_send:
+        if not is_openai_o_series:
+            logger.warning(
+                f"DEBUG: Removing 'effort' from reasoning_config for non-o-series model ({current_model_name}). "
+                f"Original effort: {reasoning_config_to_send['effort']}"
+            )
+            del reasoning_config_to_send["effort"]
+        else:
+            logger.debug(f"DEBUG: Keeping 'effort' for OpenAI o-series model ({current_model_name}).")
     
-    # Check for model-specific overrides for max_tokens - this is likely the issue
-    if "model" in standard_kwargs and "max_tokens" in standard_kwargs:
-        model = standard_kwargs["model"]
-        # OpenRouter might be enforcing different token limits for different models
-        # The logs suggest the limit being enforced is 250 for intro scenes, despite config being 1000
-        logger.info(f"DEBUG: Before OpenRouter call - Model: {model}, max_tokens: {standard_kwargs['max_tokens']}")
+    # Update openrouter_specific_params with the processed reasoning_config
+    if reasoning_config_to_send:
+        openrouter_specific_params["reasoning"] = reasoning_config_to_send
+    elif "reasoning" in openrouter_specific_params: # If it was there but became empty
+        del openrouter_specific_params["reasoning"]
 
-    logger.debug(f"Final args for client.chat.completions.create: {standard_kwargs}")
-    max_tokens_value = standard_kwargs.get('max_tokens', 'NOT SET')
+    logger.debug(f"Final standard API call_kwargs: {json.dumps(api_call_standard_kwargs, indent=2)}")
+    logger.debug(f"Final OpenRouter specific_params (for extra_body): {json.dumps(openrouter_specific_params, indent=2)}")
+
+    max_tokens_value = api_call_standard_kwargs.get('max_tokens', 'NOT SET')
     if max_tokens_value == 'NOT SET':
-        logger.warning(f"DEBUG: max_tokens value NOT SET for API call. API will use its default value, which may be suboptimal. Check the caller function.")
+        logger.warning(f"DEBUG: max_tokens value NOT SET for API call. API will use its default.")
+    elif isinstance(max_tokens_value, int) and max_tokens_value <= 0:
+        logger.error(f"DEBUG: max_tokens value is invalid ({max_tokens_value}). API call will likely fail.")
     else:
         logger.info(f"DEBUG: FINAL max_tokens value being sent to API: {max_tokens_value}")
-    
+
     try:
-        # Apply rate limiting before making the API call
         wait_time = rate_limiter.wait_if_needed()
         if wait_time > 0:
             logger.debug(f"Rate limit applied - waited {wait_time:.2f}s before API call")
-        return client.chat.completions.create(**standard_kwargs)
+
+        # Use extra_body for OpenRouter-specific parameters
+        if openrouter_specific_params:
+            return client.chat.completions.create(**api_call_standard_kwargs, extra_body=openrouter_specific_params)
+        else:
+            return client.chat.completions.create(**api_call_standard_kwargs)
+
     except Exception as e:
         logger.error(f"Error during client.chat.completions.create: {e}")
-        logger.error(f"Args that failed: {standard_kwargs}")
+        # Log both standard and extra_body args for clarity
+        log_payload = {"standard_args": api_call_standard_kwargs}
+        if openrouter_specific_params:
+            log_payload["extra_body_args"] = openrouter_specific_params
+        logger.error(f"Args that failed: {json.dumps(log_payload, indent=2)}")
         raise
 
 
@@ -1169,6 +1188,7 @@ def generate_world(
                 messages=[{"role": "user", "content": prompt}],
                 max_completion_tokens=config.WORLD_GEN_MAX_TOKENS,
                 temperature=0.5,
+                reasoning={"exclude": True}
             )
             if (
                 hasattr(resp, "choices") and resp.choices
@@ -1615,14 +1635,13 @@ You will be given the Genre, Setting, Item (Primary Object), and Concept/Operati
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_prompt},
             ],
+            "max_tokens": config.ANCHOR_MAX_TOKENS,
             "temperature": config.ANCHOR_GEN_TEMP,
-            "max_completion_tokens": config.ANCHOR_MAX_TOKENS
+            "reasoning": {"exclude": True}
         }
-        logger.debug(f"--- LLM Anchor Gen: EXACT REQUEST PAYLOAD ---")
-        logger.debug(json.dumps(request_payload, indent=2))
-        logger.debug(f"--- END EXACT REQUEST PAYLOAD ---")
-
-        # Modify the existing call to use the payload dictionary:
+        
+        logger.debug(f"Using request_payload for narrative anchor generation: {request_payload}")
+        
         resp = _chat_completion_call(**request_payload)
 
         raw_candidate = None
@@ -2374,6 +2393,7 @@ def _generate_narrative_recursive(  # Line ~1315
                 ],
                 max_completion_tokens=current_max_beat_completion_tokens,
                 temperature=config.BEAT_GEN_TEMP,
+                reasoning={"exclude": True}
             )
 
             # Get the raw content from LLM response, without any stripping yet
@@ -2634,6 +2654,7 @@ def _generate_narrative_recursive(  # Line ~1315
                 retries=config.MAX_PAD_RETRIES,
                 sample_index=context.sample_index,
                 temperature=config.CREATIVE_NARRATIVE_TEMP,
+                reasoning_settings={"exclude": True}  # Always exclude thinking tokens
             )
 
             if padding_text:
@@ -2792,7 +2813,8 @@ def generate_narrative(
         ),
         retries=config.INTRO_MAX_RETRIES,
         sample_index=sample_index,
-        temperature=config.CREATIVE_NARRATIVE_TEMP, # Use new name
+        temperature=config.CREATIVE_NARRATIVE_TEMP,
+        reasoning_settings={"exclude": True}  # Always exclude thinking tokens
     )
 
     # --- ADD EXPLICIT LOGGING FOR THE RESULT OF INTRO GENERATION ---
@@ -3029,8 +3051,8 @@ def generate_single_sample(sample_index: int) -> dict | None:
 
 def main(
     config: Config,
-    num_samples: int = config.NUM_SAMPLES_TO_GENERATE,
-    max_workers: int = config.DEFAULT_MAX_WORKERS,
+    num_samples: int = NUM_SAMPLES_TO_GENERATE,  # Use global constant instead
+    max_workers: int = DEFAULT_MAX_WORKERS,      # Use global constant instead
 ):
     """Generate samples with strict validation."""
     # --- Dynamic Filename Generation ---
@@ -3158,6 +3180,6 @@ if __name__ == "__main__":
 
     main(
         config,
-        num_samples=config.NUM_SAMPLES_TO_GENERATE,
-        max_workers=config.DEFAULT_MAX_WORKERS,
+        num_samples=NUM_SAMPLES_TO_GENERATE,
+        max_workers=DEFAULT_MAX_WORKERS,
     )

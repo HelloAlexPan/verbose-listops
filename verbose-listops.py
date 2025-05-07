@@ -23,6 +23,69 @@ from openai import OpenAI # Add or ensure this line exists
 from dotenv import load_dotenv
 load_dotenv()
 
+# --- Batch Settings ---
+NUM_SAMPLES_TO_GENERATE = 5 # How many samples to generate in one run
+DEFAULT_MAX_WORKERS = 20  # Default number of parallel threads for batch generation
+
+# --- Generation Settings ---
+@dataclass
+class Config:
+    # --- Problem Generation / Difficulty ---
+    DEFAULT_MAX_OPS: int = 5                       # Max operations in AST
+    MIN_ARITY: int = 3                             # Min numbers/sub-ops per operation
+    DEFAULT_MAX_BRANCH: int = 5                    # Max numbers/sub-ops per operation
+    ATOM_MIN_VALUE: int = 1                        # Min value for atomic numbers
+    ATOM_MAX_VALUE: int = 100                      # Max value for atomic numbers
+    EARLY_TERMINATION_PROBABILITY: float = 0.1     # Chance to end AST branch early
+
+    # --- Narrative Generation (Style, LLM Behavior, Anchors) ---
+    USE_NARRATIVE_ANCHORS: bool = True             # Use anchors for intermediate results
+    USE_LLM_NAMING: bool = True                    # Use LLM for anchor names
+    NUM_FEW_SHOT_EXAMPLES: int = 1                 # # of shot examples for beat gen (0 or 1)
+    BEAT_GEN_TEMPERATURE: float = 0.6              # Temp. for generating narrative beats
+    DEFAULT_HELPER_TEMPERATURE: float = 0.7        # Default temp. for helper LLM calls (intro, padding)
+    ANCHOR_GEN_TEMPERATURE: float = 0.75           # Temp. for narrative anchor generation
+    DEFAULT_SNIPPET_MAX_LEN: int = 150             # Max length of the previous scene snippet passed to LLM
+    DEFAULT_MAX_PAD_PARAGRAPHS: int = 5            # Max # of padding paras between beats
+
+    # --- Token Limits & Budgeting ---
+    INTRO_SCENE_MAX_COMPLETION_TOKENS: int = 1000  # Max tokens for intro scene
+    DEFAULT_MAX_TOTAL_TOKENS: int = 50000          # Overall token budget for a sample
+    DEFAULT_MAX_BEAT_COMPLETION_TOKENS: int = 5000 # Max output tokens for a narrative beat
+    DEFAULT_MAX_PAD_COMPLETION_TOKENS: int = 5000  # Max output tokens for a padding paragraph
+    MAX_TOKENS_BUFFER: int = 10000                 # Safety buffer subtracted from total token budget
+
+    # --- World Generation ---
+    DEFAULT_WORLD_NUM_CHARACTERS: int = 5          # Default number of characters if not randomized
+    DEFAULT_WORLD_NUM_CONCEPTS: int = 7            # # of concepts if not randomized
+    WORLD_GEN_MAX_COMPLETION_TOKENS: int = 2500    # Max tokens for world generation call
+    WORLD_GEN_TEMPERATURE: float = 0.5             # Temp for world generation
+    MIN_WORLD_CHARS: int = 3                       # Min chars for randomized world gen
+    MAX_WORLD_CHARS: int = 6                       # Max chars for randomized world gen
+    MIN_WORLD_CONCEPTS: int = 5                    # Min concepts for randomized world gen
+    MAX_WORLD_CONCEPTS: int = 10                   # Max concepts for randomized world gen
+
+    # --- Retry & Technical Parameters ---
+    NUM_SAMPLES_TO_GENERATE: int = NUM_SAMPLES_TO_GENERATE # Global constant passed in
+    DEFAULT_MAX_WORKERS: int = DEFAULT_MAX_WORKERS         # Global constant passed in
+    RETRY_MAX_ATTEMPTS: int = 5                    # Max retries for API calls
+    RETRY_INITIAL_DELAY: float = 0.5               # Initial delay for exponential backoff
+    MAX_BEAT_RETRIES: int = 5                      # Max retries for beat generation
+    MAX_PAD_RETRIES: int = 5                       # Max retries for padding generation
+    INTRO_SCENE_MAX_RETRIES: int = 3               # Max retries for intro scene generation
+    DEFAULT_WORLD_MAX_RETRIES: int = 3             # Max retries for world generation
+    INITIAL_WORLD_RETRY_DELAY: float = 0.5         # Initial retry delay for world generation
+
+    # --- Miscellaneous Constants ---
+    FALLBACK_MIN_NUM_WORD: int = 0                 # Fallback range for num_to_words
+    FALLBACK_MAX_NUM_WORD: int = 20                # Fallback range for num_to_words
+    MIN_ALLOWED_SMALL_NUMBER: int = 0              # Validator setting: min implicitly allowed small number
+    MAX_ALLOWED_SMALL_NUMBER: int = 10             # Validator: max implicitly allowed small numbers
+    INVALID_RESULT_PLACEHOLDER: int = -999         # Validator: placeholder for specific cases
+    MAX_ANCHOR_WORDS: int = 5                      # Max words allowed in narrative anchor
+
+config = Config()
+
 
 ORDINAL_WORDS_TO_IGNORE = {
     "first", "second", "third",
@@ -52,11 +115,6 @@ BASE_BEAT_TEMPLATE = Template(
     "$ultra_strict_instruction\n\n" # This will contain the refined number rules
     "Output only the narrative text for this new scene, continuing from the snippet. Do not include titles, headings, or explanations." # Clarified output expectation
 )
-
-
-# --- Batch Generation & Output ---
-NUM_SAMPLES_TO_GENERATE = 5 # How many samples to generate in one run
-DEFAULT_MAX_WORKERS = 20  # Default number of parallel threads for batch generation
 
 FEW_SHOT_EXAMPLES_STRICT = [
     (
@@ -175,12 +233,6 @@ EXAMPLE_TEXTS = [
     ),
 ]
 
-# --- AST Random ListOps problem gen params ---
-DEFAULT_MAX_OPS = 5  # Max operations (e.g. max, min ,etc.) in a problem
-MIN_ARITY = 3  # Min numbers in an operation
-DEFAULT_MAX_BRANCH = 5  # Max operations / numbers in an operation
-
-
 # --- Prompt Logging Helper ---
 def log_prompt(
     header: str,
@@ -211,66 +263,6 @@ CLEAR_LOGS_ON_START = True  # If True, delete existing logs in LOG_DIR on startu
 FINAL_QUESTION_TEMPLATE = Template( # Note: $primary_object is no longer used in this version
     "\n\n---\n\n**Question:** Following the entire sequence of events described in the story, exactly how many $primary_object did the characters end up with? Provide only the final integer count."
 )
-
-# --- Dataclasses ---
-@dataclass
-class Config:
-    # --- Problem Generation / Difficulty ---
-    DEFAULT_MAX_OPS: int = 5                      # Max operations in AST
-    MIN_ARITY: int = 3                          # Min numbers/sub-ops per operation
-    DEFAULT_MAX_BRANCH: int = 5                 # Max numbers/sub-ops per operation
-    ATOM_MIN_VALUE: int = 1                     # Min value for atomic numbers
-    ATOM_MAX_VALUE: int = 100                    # Max value for atomic numbers
-    EARLY_TERMINATION_PROBABILITY: float = 0.1    # Chance to end AST branch early
-
-    # --- Narrative Generation (Style, LLM Behavior, Anchors) ---
-    USE_NARRATIVE_ANCHORS: bool = True            # Use conceptual placeholders for intermediate results
-    USE_LLM_NAMING: bool = True                 # Use LLM for anchor names (if True and USE_NARRATIVE_ANCHORS is True)
-    NUM_FEW_SHOT_EXAMPLES: int = 1              # Number of few-shot examples for beat generation (currently supports 0 or 1)
-    BEAT_GEN_TEMPERATURE: float = 0.6           # Temperature for generating narrative beats
-    DEFAULT_HELPER_TEMPERATURE: float = 0.7       # Default temperature for helper LLM calls (intro, padding)
-    ANCHOR_GEN_TEMPERATURE: float = 0.75          # Temperature for narrative anchor generation
-    INTRO_SCENE_MAX_COMPLETION_TOKENS: int = 250  # Max tokens for the intro scene
-    DEFAULT_SNIPPET_MAX_LEN: int = 150            # Max length of the previous scene snippet passed to LLM
-    DEFAULT_MAX_PAD_PARAGRAPHS: int = 5       # Max number of padding paragraphs between beats
-
-    # --- Token Limits & Budgeting ---
-    DEFAULT_MAX_TOTAL_TOKENS: int = 50000         # Overall token budget for a single sample
-    DEFAULT_MAX_BEAT_COMPLETION_TOKENS: int = 5000 # Max output tokens for a single narrative beat
-    DEFAULT_MAX_PAD_COMPLETION_TOKENS: int = 5000 # Max output tokens for a padding paragraph
-    MAX_TOKENS_BUFFER: int = 10000                 # Safety buffer subtracted from total token budget
-
-    # --- World Generation ---
-    DEFAULT_WORLD_NUM_CHARACTERS: int = 5         # Default number of characters if not randomized
-    DEFAULT_WORLD_NUM_CONCEPTS: int = 7         # Default number of concepts if not randomized
-    WORLD_GEN_MAX_COMPLETION_TOKENS: int = 2500   # Max tokens for world generation call
-    WORLD_GEN_TEMPERATURE: float = 0.5            # Temperature for world generation
-    MIN_WORLD_CHARS: int = 3                      # Min characters for randomized world gen
-    MAX_WORLD_CHARS: int = 6                      # Max characters for randomized world gen
-    MIN_WORLD_CONCEPTS: int = 5                   # Min concepts for randomized world gen
-    MAX_WORLD_CONCEPTS: int = 10                  # Max concepts for randomized world gen
-
-    # --- Retry & Technical Parameters ---
-    NUM_SAMPLES_TO_GENERATE: int = NUM_SAMPLES_TO_GENERATE # Global constant passed in
-    DEFAULT_MAX_WORKERS: int = DEFAULT_MAX_WORKERS         # Global constant passed in
-    RETRY_MAX_ATTEMPTS: int = 5                   # General max retry attempts for API calls
-    RETRY_INITIAL_DELAY: float = 0.5              # Initial delay for exponential backoff
-    MAX_BEAT_RETRIES: int = 5                     # Max retries specifically for narrative beat generation
-    MAX_PAD_RETRIES: int = 5                      # Max retries specifically for padding generation
-    INTRO_SCENE_MAX_RETRIES: int = 3              # Max retries specifically for intro scene generation
-    DEFAULT_WORLD_MAX_RETRIES: int = 3            # Max retries specifically for world generation
-    INITIAL_WORLD_RETRY_DELAY: float = 1.0        # Initial retry delay for world generation
-
-    # --- Miscellaneous Constants ---
-    FALLBACK_MIN_NUM_WORD: int = 0                # Fallback range for num_to_words
-    FALLBACK_MAX_NUM_WORD: int = 20               # Fallback range for num_to_words
-    MIN_ALLOWED_SMALL_NUMBER: int = 0             # Validator setting: min implicitly allowed small number
-    MAX_ALLOWED_SMALL_NUMBER: int = 10            # Validator setting: max implicitly allowed small number
-    INVALID_RESULT_PLACEHOLDER: int = -999        # Placeholder for validator in specific cases
-    MAX_ANCHOR_WORDS: int = 5                     # Max words allowed in a generated narrative anchor
-
-config = Config()
-
 
 # --- GenerationContext dataclass for shared mutable state in recursive narrative generation ---
 from dataclasses import dataclass

@@ -42,3 +42,6 @@ logs/
 .DS_Store
 Thumbs.dbvenv/
 venv/
+
+# Script-specific exclusions
+check_limits.py

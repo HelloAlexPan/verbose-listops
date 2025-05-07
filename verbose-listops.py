@@ -43,15 +43,15 @@ class Config:
     # === Core Experiment Variables ===
 
     # --- 1. ListOps Problem Difficulty & Context Length ---
-    MAX_OPS: int = 5                                # Max ListOps operations
+    MAX_OPS: int = 10                               # Max ListOps operations
     MIN_ARITY: int = 3                              # Min numbers/sub-ops per operation
-    MAX_BRANCH: int = 5                             # Max numbers/sub-ops per operation
-    ATOM_MIN_VALUE: int = 1                         # Min value for atomic numbers
-    ATOM_MAX_VALUE: int = 100                       # Max value for atomic numbers
-    EARLY_TERMINATION_PROBABILITY: float = 0.2      # Chance to end AST branch early
+    MAX_BRANCH: int = 8                             # Max numbers/sub-ops per operation
+    MIN_ATOM_VAL: int = 1                           # Min value for atomic numbers
+    MAX_ATOM_VAL: int = 100                         # Max value for atomic numbers
     MAX_TOTAL_TOKENS: int = 10000                   # Sample token budget
-    MAX_BEAT_TOKENS: int = 500                      # Max output tok for a narrativized ListOps 'beat'
-    MAX_PADDING_TOKENS: int = 500                   # Max output tok for a padding paragraph
+    MAX_BEAT_TOKENS: int = 500                      # Max tok for narrativized ListOps 'beat'
+    MAX_PADDING_TOKENS: int = 500                   # Max tok for padding paragraph
+    EARLY_TERMINATION_PROBABILITY: float = 0.2      # Chance to end AST branch early
 
     # --- 2. Narrative Context Generation & Style ---
     USE_NARRATIVE_ANCHORS: bool = True              # Conceptual placeholders for intermediate results
@@ -60,18 +60,15 @@ class Config:
     MAX_WORLD_CHARS: int = 6                        # Max chars for randomized world gen
     MIN_WORLD_CONCEPTS: int = 5                     # Min concepts for randomized world gen
     MAX_WORLD_CONCEPTS: int = 10                    # Max concepts for randomized world gen
-    BEAT_CONTEXT: int = 150                         # Max previous scene chars for LLM prompt context
-    PADDING_CONTEXT: int = 100                      # Max previous scene chars for LLM prompt context
+    BEAT_CONTEXT: int = 200                         # Max previous scene chars for beat gen prompt
+    PADDING_CONTEXT: int = 200                      # Max previous scene chars for padding gen prompt
     MAX_PAD_PARAGRAPHS: int = 5                     # Max padding paragraphs between story beats
 
-    # --- 3. LLM Generation & Behavior Control ---
-    WORLD_GEN_TEMPERATURE: float = 0.9              # Temp. for world gen
-    BEAT_GEN_TEMPERATURE: float = 0.2               # Temp. for generating narrative beats
-    ANCHOR_GEN_TEMPERATURE: float = 0.75            # Temp. for narrative anchor generation
-    CREATIVE_NARRATIVE_TEMPERATURE: float = 0.7     # Temp. for creative parts (intro, padding)
-    REASONING_EFFORT: str = "high"                  # LLM reasoning depth ("high", "medium", "low")
-    REASONING_EXCLUDE: bool = True                  # Always on. True = don't count reasoning tokens  
-    FEW_SHOT_EXAMPLES: int = 1                      # Few-shot examples for beat generation
+    # --- 3. Temperature Controls ---
+    WORLD_GEN_TEMP:  float = 0.9                    # Temp. for world gen
+    BEAT_GEN_TEMP: float = 0.2                      # Temp. for generating narrative beats
+    CREATIVE_NARRATIVE_TEMP: float = 0.75           # Temp. for creative parts (intro, padding)
+    ANCHOR_GEN_TEMP: float = 0.75                   # Temp. for narrative anchor generation
 
     # === Experiment Execution & Resource Management ===
 
@@ -79,23 +76,23 @@ class Config:
     NUM_SAMPLES_TO_GENERATE: int = NUM_SAMPLES_TO_GENERATE
     DEFAULT_MAX_WORKERS: int = DEFAULT_MAX_WORKERS
 
-    # --- 5. API Configuration & Rate Limiting ---
+    # --- 5. Rate Limiting ---
     MAX_REQUESTS_PER_SECOND: float = 50.0           # Max requests per second to OpenRouter
-    MIN_REQUEST_INTERVAL: float = 0.05              # Min time (seconds) between requests
+    MIN_REQUEST_INTERVAL: float = 0.015             # Min time (seconds) between requests
 
     # --- 6. Other Token Controls & Buffers ---
-    MAX_TOKENS_BUFFER: int = 10000                  # Safety buffer for overall budget
-    INTRO_SCENE_MAX_COMPLETION_TOKENS: int = 500    # Max tokens for the introductory scene
-    WORLD_GEN_MAX_COMPLETION_TOKENS: int = 200      # Max tokens for world generation call
-    ANCHOR_GEN_MAX_COMPLETION_TOKENS: int = 10      # Max tokens for narrative anchor name generation
+    MAX_TOKENS_BUFFER: int = 1000                   # Safety buffer for overall budget
+    INTRO_MAX_TOKENS: int = 500    # Intro scene max tok
+    WORLD_GEN_MAX_TOKENS: int = 2000     # World gen .json max tok
+    ANCHOR_MAX_TOKENS: int = 10      # Anchor gen max tok
 
     # --- 7. API Retry Logic ---
     RETRY_MAX_ATTEMPTS: int = 5                     # Max retries for API calls
     RETRY_INITIAL_DELAY: float = 0.5                # Initial delay for exponential backoff
     MAX_BEAT_RETRIES: int = 5                       # Max retries for beat generation
     MAX_PAD_RETRIES: int = 5                        # Max retries for padding generation
-    INTRO_SCENE_MAX_RETRIES: int = 3                # Max retries for intro scene generation
-    DEFAULT_WORLD_MAX_RETRIES: int = 3              # Max retries for world generation
+    INTRO_MAX_RETRIES: int = 3                      # Max retries for intro scene generation
+    WORLDGEN_MAX_RETRIES: int = 3                   # Max retries for world generation
     INITIAL_WORLD_RETRY_DELAY: float = 0.5          # Initial retry delay for world gen
 
     # === Misc. & Technical Constants ===
@@ -105,6 +102,9 @@ class Config:
     MAX_ALLOWED_SMALL_NUMBER: int = 2               # Validator: max implicitly allowed small numbers
     INVALID_RESULT_PLACEHOLDER: int = -999          # Validator: placeholder for specific error cases
     MAX_ANCHOR_WORDS: int = 4                       # Max words allowed in a narrative anchor name
+    REASONING_EFFORT: str = "high"                  # LLM reasoning depth ("high", "medium", "low")
+    REASONING_EXCLUDE: bool = True                  # Always on. True = don't count reasoning tokens  
+    FEW_SHOT_EXAMPLES: int = 1                      # Few-shot examples for beat generation
     #   --- Logging Config ---
     LOG_MAX_BYTES: int = 5 * 1024 * 1024            # Maximum log file size (5MB)
     LOG_BACKUP_COUNT: int = 3                       # Number of backup log files to keep
@@ -467,7 +467,7 @@ class RateLimiter:
         self.last_refill_time = time.time()  # Last token refill timestamp
         self.lock = threading.Lock()  # Thread lock for concurrent access
         self.last_limits_check_time = 0  # Last time we checked account limits
-        self.limits_check_interval = 300  # Check limits every 5 minutes (300 seconds)
+        self.limits_check_interval = 30  # Check limits every 5 minutes (300 seconds)
 
         # Log configuration
         logger.info(f"Rate limiter initialized: {max_requests_per_second} req/s, "
@@ -744,7 +744,7 @@ def generate_with_retry(
     validate_fn: Callable[[str], bool],
     retries: int = config.MAX_BEAT_RETRIES,
     sample_index: int | None = None,
-    temperature: float = config.DEFAULT_HELPER_TEMPERATURE,
+    temperature: float = config.CREATIVE_NARRATIVE_TEMP,
     reasoning_settings: dict = None, # Added reasoning_settings parameter
 ):
     """
@@ -867,7 +867,7 @@ def build_random_ast(max_ops: int, max_branch: int = config.MAX_BRANCH) -> Node:
         if count >= max_ops or (
             count > 0 and random.random() < config.EARLY_TERMINATION_PROBABILITY
         ):
-            return Atom(random.randint(config.ATOM_MIN_VALUE, config.ATOM_MAX_VALUE))
+            return Atom(random.randint(config.MIN_ATOM_VAL, config.MAX_ATOM_VAL))
         count += 1
         op = random.choice(ops)
 
@@ -906,7 +906,7 @@ def build_random_ast(max_ops: int, max_branch: int = config.MAX_BRANCH) -> Node:
                     adjusted = False
 
                     new_value_add = atom_to_adjust.n + adjustment_needed
-                    if config.ATOM_MIN_VALUE <= new_value_add <= config.ATOM_MAX_VALUE:
+                    if config.MIN_ATOM_VAL <= new_value_add <= config.MAX_ATOM_VAL:
                         atom_to_adjust.n = new_value_add
                         atom_to_adjust.value = new_value_add
                         logger.debug(
@@ -917,9 +917,9 @@ def build_random_ast(max_ops: int, max_branch: int = config.MAX_BRANCH) -> Node:
                     if not adjusted:
                         new_value_sub = atom_to_adjust.n - (arity - adjustment_needed)
                         if (
-                            config.ATOM_MIN_VALUE
+                            config.MIN_ATOM_VAL
                             <= new_value_sub
-                            <= config.ATOM_MAX_VALUE
+                            <= config.MAX_ATOM_VAL
                         ):
                             atom_to_adjust.n = new_value_sub
                             atom_to_adjust.value = new_value_sub
@@ -931,7 +931,7 @@ def build_random_ast(max_ops: int, max_branch: int = config.MAX_BRANCH) -> Node:
                     if not adjusted:
 
                         logger.warning(
-                            f"AST Gen (AVG): Could not adjust atom value {atom_to_adjust.n} (target adjustment {adjustment_needed}) for AVG node sum {current_sum} to be divisible by {arity} due to bounds [{config.ATOM_MIN_VALUE}, {config.ATOM_MAX_VALUE}]."
+                            f"AST Gen (AVG): Could not adjust atom value {atom_to_adjust.n} (target adjustment {adjustment_needed}) for AVG node sum {current_sum} to be divisible by {arity} due to bounds [{config.MIN_ATOM_VAL}, {config.MAX_ATOM_VAL}]."
                         )
 
         return OpNode(op, children)
@@ -941,7 +941,7 @@ def build_random_ast(max_ops: int, max_branch: int = config.MAX_BRANCH) -> Node:
         op = random.choice(ops)
         arity = random.randint(config.MIN_ARITY, max_branch)
         children = [
-            Atom(random.randint(config.ATOM_MIN_VALUE, config.ATOM_MAX_VALUE))
+            Atom(random.randint(config.MIN_ATOM_VAL, config.MAX_ATOM_VAL))
             for _ in range(arity - 1)
         ]
         children.append(root)
@@ -1106,7 +1106,7 @@ def clean_and_parse_json_block(text: str):
 def generate_world(
     num_characters: int = 5,
     num_concepts: int = 7,
-    max_retries: int = 3,
+    max_retries: int = config.WORLDGEN_MAX_RETRIES,  # Use the config variable
     sample_index: int | None = None,
 ) -> dict:
     """
@@ -1167,7 +1167,7 @@ def generate_world(
             resp = _chat_completion_call(
                 model=MODEL,
                 messages=[{"role": "user", "content": prompt}],
-                max_completion_tokens=config.WORLD_GEN_MAX_COMPLETION_TOKENS,
+                max_completion_tokens=config.WORLD_GEN_MAX_TOKENS,
                 temperature=0.5,
             )
             if (
@@ -1615,8 +1615,8 @@ You will be given the Genre, Setting, Item (Primary Object), and Concept/Operati
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_prompt},
             ],
-            "temperature": config.ANCHOR_GEN_TEMPERATURE,
-            "max_completion_tokens": config.ANCHOR_GEN_MAX_COMPLETION_TOKENS
+            "temperature": config.ANCHOR_GEN_TEMP,
+            "max_completion_tokens": config.ANCHOR_MAX_TOKENS
         }
         logger.debug(f"--- LLM Anchor Gen: EXACT REQUEST PAYLOAD ---")
         logger.debug(json.dumps(request_payload, indent=2))
@@ -2373,7 +2373,7 @@ def _generate_narrative_recursive(  # Line ~1315
                     {"role": "user", "content": user_message_content},
                 ],
                 max_completion_tokens=current_max_beat_completion_tokens,
-                temperature=config.BEAT_GEN_TEMPERATURE,
+                temperature=config.BEAT_GEN_TEMP,
             )
 
             # Get the raw content from LLM response, without any stripping yet
@@ -2599,7 +2599,7 @@ def _generate_narrative_recursive(  # Line ~1315
             validate_fn=validate_padding,
             retries=config.MAX_PAD_RETRIES,
             sample_index=context.sample_index,
-            temperature=config.CREATIVE_NARRATIVE_TEMPERATURE, # Use new name
+            temperature=config.CREATIVE_NARRATIVE_TEMP, # Use new name
         )
 
         if padding_text:
@@ -2745,7 +2745,7 @@ def generate_narrative(
     intro_text = generate_with_retry(
         system_prompt=intro_system_prompt,
         user_prompt=intro_user_prompt,
-        max_completion_tokens=config.INTRO_SCENE_MAX_COMPLETION_TOKENS,
+        max_completion_tokens=config.INTRO_MAX_TOKENS,
         validate_fn=make_number_validator(
             allowed_atoms=set(),
             forbidden_atoms=set(),
@@ -2753,9 +2753,9 @@ def generate_narrative(
             correct_result_for_beat=-999,
             strict_zero=True,
         ),
-        retries=config.INTRO_SCENE_MAX_RETRIES,
+        retries=config.INTRO_MAX_RETRIES,
         sample_index=sample_index,
-        temperature=config.CREATIVE_NARRATIVE_TEMPERATURE, # Use new name
+        temperature=config.CREATIVE_NARRATIVE_TEMP, # Use new name
     )
 
     # --- ADD EXPLICIT LOGGING FOR THE RESULT OF INTRO GENERATION ---
@@ -2947,8 +2947,8 @@ def generate_single_sample(sample_index: int) -> dict | None:
                 "model_used": MODEL,
                 "max_ops": config.MAX_OPS,
                 "max_branch": config.MAX_BRANCH,
-                "atom_min_value": config.ATOM_MIN_VALUE,
-                "atom_max_value": config.ATOM_MAX_VALUE,
+                "atom_min_value": config.MIN_ATOM_VAL,
+                "atom_max_value": config.MAX_ATOM_VAL,
                 "max_beat_retries": config.MAX_BEAT_RETRIES,
                 "max_pad_retries": config.MAX_PAD_RETRIES,
                 "validation_mode": (  # Updated validation mode string
@@ -3001,8 +3001,7 @@ def main(
 
     output_file = (
         f"DATASET_"
-        f"{config.MAX_BEAT_TOKENS}btok_"
-        f"{config.MAX_TOTAL_TOKENS}-ttok_"
+        f"{config.MAX_TOTAL_TOKENS}tok_"
         f"{config.MAX_OPS}-mxops_"
         f"{config.MIN_ARITY}-arity_"
         f"{config.MAX_BRANCH}-mxbrch_"

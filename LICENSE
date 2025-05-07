@@ -1,21 +1,30 @@
-MIT License
+Reciprocal Commercial Contribution License (RCCL) 1.1
 
-Copyright (c) 2025 Alex Pan
+1. Definitions.
+   a. “Software” means the source code and associated documentation.
+   b. “Commercial Use” means any use of the Software for commercial advantage or monetary compensation.
+   c. “Hosting” means operating the Software on any server, cloud, or infrastructure to make its functionality available over a network.
 
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
+2. Grant of Rights.
+   Licensor grants Licensee a worldwide, royalty-free license to use, copy, modify, and distribute the Software for academic or non-commercial purposes.
 
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
+3. Commercial Hosting Prohibition.
+   Licensee shall not host, deploy, or offer the Software as a service for Commercial Use. Only Licensor may provide the Software as a hosted commercial service.
 
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
+4. Commercial Trigger.
+   Any Commercial Use of the Software invokes additional obligations as set out in Sections 5 and 6. No rights beyond Section 2 are granted for Commercial Use.
+
+5. Contribution-Back Option.
+   Within 30 days of first Commercial Use, Licensee must submit all changes, patches, and enhancements made to the Software back to a branch in the Upstream Repository under this same license.
+
+6. License-Fee Option.
+   In lieu of Section 5, Licensee may pay Licensor a license fee in an amount and currency mutually agreed in writing, due within 30 days of first Commercial Use.
+
+7. Notification Requirement.
+   Licensee shall notify Licensor within 30 days of any Commercial Use, specifying the Software version and a summary of modifications.
+
+8. Compliance & Termination.
+   Failure to comply with Sections 3, 5, 6, or 7 terminates this license automatically, and all rights revert to Licensor.
+
+9. Disclaimer & Limitation of Liability.
+   THE SOFTWARE IS PROVIDED “AS IS,” WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED. IN NO EVENT SHALL LICENSOR BE LIABLE FOR ANY DAMAGES ARISING FROM ITS USE.

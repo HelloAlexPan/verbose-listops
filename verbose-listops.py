@@ -26,6 +26,7 @@ load_dotenv()
 # --- Batch Settings ---
 NUM_SAMPLES_TO_GENERATE = 5 # How many samples to generate in one run
 DEFAULT_MAX_WORKERS = 20  # Default number of parallel threads for batch generation
+MODEL = "google/gemini-2.5-pro-preview-03-25" # OpenRouter model
 
 # --- Generation Settings ---
 """
@@ -40,6 +41,16 @@ class Config:
     ATOM_MIN_VALUE: int = 1                        # Min value for atomic numbers
     ATOM_MAX_VALUE: int = 100                      # Max value for atomic numbers
     EARLY_TERMINATION_PROBABILITY: float = 0.1     # Chance to end AST branch early
+
+    # --- World Generation ---
+    DEFAULT_WORLD_NUM_CHARACTERS: int = 5          # Default number of characters if not randomized
+    DEFAULT_WORLD_NUM_CONCEPTS: int = 7            # # of concepts if not randomized
+    WORLD_GEN_MAX_COMPLETION_TOKENS: int = 2500    # Max tokens for world generation call
+    WORLD_GEN_TEMPERATURE: float = 0.5             # Temp for world generation
+    MIN_WORLD_CHARS: int = 3                       # Min chars for randomized world gen
+    MAX_WORLD_CHARS: int = 6                       # Max chars for randomized world gen
+    MIN_WORLD_CONCEPTS: int = 5                    # Min concepts for randomized world gen
+    MAX_WORLD_CONCEPTS: int = 10                   # Max concepts for randomized world gen
 
     # --- Narrative Generation (Style, LLM Behavior, Anchors) ---
     USE_NARRATIVE_ANCHORS: bool = True             # Use anchors for intermediate results
@@ -57,16 +68,6 @@ class Config:
     DEFAULT_MAX_BEAT_COMPLETION_TOKENS: int = 5000 # Max output tokens for a narrative beat
     DEFAULT_MAX_PAD_COMPLETION_TOKENS: int = 5000  # Max output tokens for a padding paragraph
     MAX_TOKENS_BUFFER: int = 10000                 # Safety buffer subtracted from total token budget
-
-    # --- World Generation ---
-    DEFAULT_WORLD_NUM_CHARACTERS: int = 5          # Default number of characters if not randomized
-    DEFAULT_WORLD_NUM_CONCEPTS: int = 7            # # of concepts if not randomized
-    WORLD_GEN_MAX_COMPLETION_TOKENS: int = 2500    # Max tokens for world generation call
-    WORLD_GEN_TEMPERATURE: float = 0.5             # Temp for world generation
-    MIN_WORLD_CHARS: int = 3                       # Min chars for randomized world gen
-    MAX_WORLD_CHARS: int = 6                       # Max chars for randomized world gen
-    MIN_WORLD_CONCEPTS: int = 5                    # Min concepts for randomized world gen
-    MAX_WORLD_CONCEPTS: int = 10                   # Max concepts for randomized world gen
 
     # --- Retry & Technical Parameters ---
     NUM_SAMPLES_TO_GENERATE: int = NUM_SAMPLES_TO_GENERATE
@@ -87,6 +88,11 @@ class Config:
     INVALID_RESULT_PLACEHOLDER: int = -999         # Validator: placeholder for specific cases
     MAX_ANCHOR_WORDS: int = 5                      # Max words allowed in narrative anchor
 
+    # --- API retry + logging config ---
+    LOG_MAX_BYTES = 5 * 1024 * 1024                # Maximum log file size (5MB)
+    LOG_BACKUP_COUNT = 3                           # Number of backup log files to keep
+    CLEAR_LOGS_ON_START = True                     # If True delete existing logs in LOG_DIR on startup
+
 config = Config()
 
 
@@ -96,10 +102,10 @@ ORDINAL_WORDS_TO_IGNORE = {
 
 
 # --- OpenAI API Key and Tokenizer Initialization ---
-OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY") # Use OpenRouter variable name
+OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY")
 if not OPENROUTER_API_KEY:
-    print("Warning: OPENROUTER_API_KEY environment variable not set. Using placeholder.") # Updated warning
-    OPENROUTER_API_KEY = "YOUR_OPENROUTER_API_KEY_HERE" # Updated placeholder
+    print("Warning: OPENROUTER_API_KEY environment variable not set. Using placeholder.")
+    OPENROUTER_API_KEY = "YOUR_OPENROUTER_API_KEY_HERE"
 try:
     encoder = tiktoken.get_encoding("cl100k_base")
 except Exception as e:
@@ -109,14 +115,14 @@ from string import Template
 
 # --- Prompt Templates ---
 BASE_BEAT_TEMPLATE = Template(
-    "You are a $beat_mode storyteller writing the next sequential scene in an ongoing narrative.\n" # Added "sequential"
+    "You are a $beat_mode storyteller writing the next sequential scene in an ongoing narrative.\n"
     "Characters: $characters\n"
     "Setting: $setting\n"
     'Previous Scene Snippet (End of last scene): "...$snippet"\n\n'
     "--- $task_header ---\n"
     "$task_body\n\n"
-    "$ultra_strict_instruction\n\n" # This will contain the refined number rules
-    "Output only the narrative text for this new scene, continuing from the snippet. Do not include titles, headings, or explanations." # Clarified output expectation
+    "$ultra_strict_instruction\n\n"
+    "Output only the narrative text for this new scene, continuing from the snippet. Do not include titles, headings, or explanations."
 )
 
 FEW_SHOT_EXAMPLES_STRICT = [
@@ -124,7 +130,6 @@ FEW_SHOT_EXAMPLES_STRICT = [
         # --- Example 1: Basic Success vs. Extraneous Number (>10) ---
         (
             "**ULTRA-STRICT NUMBER RULES (Apply ONLY to THIS Scene):**\\\\n"
-            # Changed from: "*   **MUST INCLUDE:** ... mention ... numbers (use digits): thirty-nine (39), ninety (90), and ninety-three (93).\\n"
             "*   **MUST INCLUDE:** ... mention ... numbers as digits: 39, 90, and 93.\\\\n"
             "*   **MUST AVOID (FORBIDDEN):** Do NOT mention ...: five (5).\\\\n"
             "*   You MAY use the number 3 ('three', the count of direct items...) and the number 1 ('one').\\\\n"
@@ -206,8 +211,6 @@ TASK_SOLVING_FEW_SHOTS = [
 *   **Answer:** 7
     """
 ]
-# --- END NEW FEW-SHOT SECTION ---
-
 
 # --- Base configurations ---
 
@@ -255,13 +258,7 @@ def log_prompt(
             f.write(f"--- Log Time: {timestamp} ---\n")
             f.write(f"{log_header}\n{prompt}\n\n---\n\n")
     except Exception as e:
-        print(f"Error writing to log file {path}: {e}")  # Fallback to console if logging fails
-
-# --- API retry + logging config ---
-
-LOG_MAX_BYTES = 5 * 1024 * 1024  # Maximum log file size (5MB)
-LOG_BACKUP_COUNT = 3  # Number of backup log files to keep
-CLEAR_LOGS_ON_START = True  # If True, delete existing logs in LOG_DIR on startup
+        print(f"Error writing to log file {path}: {e}")
 
 FINAL_QUESTION_TEMPLATE = Template( # Note: $primary_object is no longer used in this version
     "\n\n---\n\n**Question:** Following the entire sequence of events described in the story, exactly how many $primary_object did the characters end up with? Provide only the final integer count."
@@ -293,14 +290,13 @@ class GenerationContext:
     sample_index: int
     max_pad_paragraphs: int = 2
 
-MODEL = "google/gemini-2.5-pro-preview-03-25"
 SAFETY_MARGIN = config.MAX_TOKENS_BUFFER
 MAX_BEAT_COMPLETION_TOKENS = config.DEFAULT_MAX_BEAT_COMPLETION_TOKENS # Renamed from MAX_BEAT_TOKENS
 MAX_PAD_COMPLETION_TOKENS = config.DEFAULT_MAX_PAD_COMPLETION_TOKENS # Renamed from MAX_PAD_TOKENS
 
 # --- Setup Logging ---
 
-if CLEAR_LOGS_ON_START:
+if config.CLEAR_LOGS_ON_START:
     for filename in os.listdir(LOG_DIR):
         file_path = os.path.join(LOG_DIR, filename)
         try:
@@ -314,8 +310,8 @@ logger.setLevel(logging.DEBUG)
 if not logger.handlers:
     handler = logging.handlers.RotatingFileHandler(
         filename=os.path.join(LOG_DIR, "verbose_listops.log"),
-        maxBytes=LOG_MAX_BYTES,
-        backupCount=LOG_BACKUP_COUNT,
+        maxBytes=config.LOG_MAX_BYTES,
+        backupCount=config.LOG_BACKUP_COUNT,
         encoding="utf-8",
     )
     formatter = logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s")

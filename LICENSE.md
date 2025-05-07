@@ -1,8 +1,8 @@
 # Reciprocal Commercial Contribution License (RCCL) Version 1.5
 
-**tl;dr (Too Long; Didn't Read) - Summary of RCCL 1.5:**
+Hey Developers! We developed RCCL with you in mind, and this license is our way of keeping it strong, innovative, and freely available for almost everything you do. Go ahead: use it for your personal projects, academic work, and even most commercial applications. Our goal is to empower you. The only time RCCL asks for something back is to ensure fairness and fuel the R&D that benefits everyone, including you. If you build a significant commercial service by deeply modifying and hosting our code, we simply ask that those awesome enhancements are merged back. This isn't about restriction; it's about shared success. It prevents 'strip-mining' where big players might exploit the core tech without giving back, dividng the community and stopping innovation. Let's build amazing things together, sustainably.
 
-Hey Developers! We developed RCCL with you in mind, and this license is our way of keeping it strong, innovative, and freely available for almost everything you do. Go ahead: use it for your personal projects, academic work, and even most commercial applications. Our goal is to empower you. The only time RCCL asks for something back is to ensure fairness and fuel the R&D that benefits everyone, including you. If you build a significant commercial service by deeply modifying and hosting our code, we simply ask that those awesome enhancements are merged back. This isn't about restriction; it's about shared success. It prevents 'strip-mining' where big players might exploit the core tech without giving back, dividng the community and stopping innovation. Let's build amazing things together, sustainably!"
+**tl;dr (Too Long; Didn't Read) - Summary of RCCL 1.5:**
 
 *   **For Personal & Academic Projects:** Feel free to use, adapt, and share the software however you'd like, as long as you keep it under this RCCL license.
 

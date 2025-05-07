@@ -28,6 +28,9 @@ NUM_SAMPLES_TO_GENERATE = 5 # How many samples to generate in one run
 DEFAULT_MAX_WORKERS = 20  # Default number of parallel threads for batch generation
 
 # --- Generation Settings ---
+"""
+Modify the difficulty of the generated problems by changing the parameters below.
+"""
 @dataclass
 class Config:
     # --- Problem Generation / Difficulty ---
@@ -66,8 +69,8 @@ class Config:
     MAX_WORLD_CONCEPTS: int = 10                   # Max concepts for randomized world gen
 
     # --- Retry & Technical Parameters ---
-    NUM_SAMPLES_TO_GENERATE: int = NUM_SAMPLES_TO_GENERATE # Global constant passed in
-    DEFAULT_MAX_WORKERS: int = DEFAULT_MAX_WORKERS         # Global constant passed in
+    NUM_SAMPLES_TO_GENERATE: int = NUM_SAMPLES_TO_GENERATE
+    DEFAULT_MAX_WORKERS: int = DEFAULT_MAX_WORKERS
     RETRY_MAX_ATTEMPTS: int = 5                    # Max retries for API calls
     RETRY_INITIAL_DELAY: float = 0.5               # Initial delay for exponential backoff
     MAX_BEAT_RETRIES: int = 5                      # Max retries for beat generation

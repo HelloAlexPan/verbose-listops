@@ -2550,80 +2550,117 @@ def _generate_narrative_recursive(  # Line ~1315
             f"Failed to generate narrative beat for operator {node.op} ({narrative_anchor})"
         )
 
-    pad_count = 0
-    add_padding = not is_root
-    while (
-        add_padding
-        and context.tokens_used < config.MAX_TOTAL_TOKENS - SAFETY_MARGIN
-        and pad_count < context.max_pad_paragraphs
-    ):
-        pad_count += 1
-        logger.debug(
-            f"Attempting padding {pad_count}/{context.max_pad_paragraphs} after beat for {node.op} ({narrative_anchor})"
-        )
-
-        padding_system_prompt = "You are a concise storyteller adding descriptive filler. FOLLOW THE USER'S RULES EXACTLY."
-        cleaned_snippet_padding = clean_snippet(context.last_scene_text, max_len=config.PADDING_CONTEXT)
-
-        padding_user_prompt = (
-            f'Previous Scene Snippet: "...{cleaned_snippet_padding.replace("\n", " ")}"\n\n'
-            f"Task: Write ONE short paragraph (3-5 sentences) continuing the story. Describe atmosphere, character reactions, or minor transitions. DO NOT mention ANY numbers (digits or words like 'one', 'two', 'first', etc.). Output ONLY the padding paragraph."
-        )
-
-        log_prompt(
-            f"Padding Prompt {pad_count} after {node.op} ({narrative_anchor})",
-            f"System: {padding_system_prompt}\nUser: {padding_user_prompt}",
-            sample_index=context.sample_index,
-        )
-
-        estimated_pad_prompt_tokens = len(
-            encoder.encode(padding_system_prompt + padding_user_prompt)
-        )
-
-        if would_exceed_budget(
-            context.tokens_used,
-            estimated_pad_prompt_tokens + MAX_PAD_COMPLETION_TOKENS,
-            config.MAX_TOTAL_TOKENS,
-            SAFETY_MARGIN,
+    # --- Enhanced Intelligent Padding Loop ---
+    # No padding after the root node's beat processing is complete.
+    # The padding loop attempts to fill the token budget more aggressively
+    # after each non-root beat, up to a local cap per beat.
+    if not is_root:
+        local_padding_segments_added = 0
+        
+        # Loop to add padding segments after the current beat
+        while (
+            # Condition 1: Global token budget allows for more content
+            context.tokens_used < config.MAX_TOTAL_TOKENS - SAFETY_MARGIN
+            
+            # Condition 2: We haven't added too many padding segments *locally* for this beat.
+            # context.max_pad_paragraphs (from config.MAX_PAD_PARAGRAPHS) acts as the per-beat cap.
+            and local_padding_segments_added < context.max_pad_paragraphs
         ):
-            logger.warning(
-                f"Approaching token limit before generating padding {pad_count}. Stopping padding."
+            # Estimate the cost of the next padding segment (prompt + completion)
+            # Prompt tokens for padding are generally small; estimate ~100.
+            # MAX_PAD_COMPLETION_TOKENS is config.MAX_PADDING_TOKENS.
+            estimated_next_padding_segment_cost = MAX_PAD_COMPLETION_TOKENS + 100 
+            
+            if context.tokens_used + estimated_next_padding_segment_cost > config.MAX_TOTAL_TOKENS - SAFETY_MARGIN:
+                logger.debug(
+                    f"Padding after beat for {node.op} ({narrative_anchor}): "
+                    f"Adding another full padding segment (est. {estimated_next_padding_segment_cost} tokens) might exceed budget "
+                    f"(current tokens: {context.tokens_used}, target max: {config.MAX_TOTAL_TOKENS - SAFETY_MARGIN}). "
+                    f"Stopping padding here for this beat."
+                )
+                break # Break from this beat's padding loop if next segment likely too costly
+
+            # Increment counter for this beat's padding *before* attempting generation
+            local_padding_segments_added += 1
+            
+            logger.debug(
+                f"Attempting padding segment {local_padding_segments_added}/{context.max_pad_paragraphs} "
+                f"after beat for {node.op} ({narrative_anchor}). "
+                f"Current tokens: {context.tokens_used}, Target Max (excluding safety margin): {config.MAX_TOTAL_TOKENS - SAFETY_MARGIN}"
             )
-            add_padding = False
-            break
 
-        padding_text = generate_with_retry(
-            system_prompt=padding_system_prompt,
-            user_prompt=padding_user_prompt,
-            max_completion_tokens=MAX_PAD_COMPLETION_TOKENS,
-            validate_fn=validate_padding,
-            retries=config.MAX_PAD_RETRIES,
-            sample_index=context.sample_index,
-            temperature=config.CREATIVE_NARRATIVE_TEMP, # Use new name
-        )
+            padding_system_prompt = "You are a concise storyteller adding descriptive filler. FOLLOW THE USER'S RULES EXACTLY."
+            cleaned_snippet_padding = clean_snippet(context.last_scene_text, max_len=config.PADDING_CONTEXT)
 
-        if padding_text:
-            ptoks = len(encoder.encode(padding_text))
-            if (
-                context.tokens_used + ptoks
-                <= config.MAX_TOTAL_TOKENS - SAFETY_MARGIN
+            # Corrected f-string and multi-line string handling for padding_user_prompt
+            padding_user_prompt = (
+                f'Previous Scene Snippet: "...{cleaned_snippet_padding.replace("\n", " ")}"...\n\n'
+                f"Task: Write ONE short paragraph (3-5 sentences) continuing the story. "
+                f"Describe atmosphere, character reactions, or minor transitions. "
+                f"DO NOT mention ANY numbers (digits or words like 'one', 'two', 'first', etc.). "
+                f"Output ONLY the padding paragraph."
+            )
+
+            log_prompt(
+                f"Padding Prompt Segment {local_padding_segments_added} after {node.op} ({narrative_anchor})",
+                f"System: {padding_system_prompt}\nUser: {padding_user_prompt}",
+                sample_index=context.sample_index,
+            )
+
+            estimated_pad_prompt_tokens = len(
+                encoder.encode(padding_system_prompt + padding_user_prompt)
+            )
+
+            # This check is slightly more precise for the immediate call to generate_with_retry
+            if would_exceed_budget(
+                context.tokens_used,
+                estimated_pad_prompt_tokens + MAX_PAD_COMPLETION_TOKENS, # MAX_PAD_COMPLETION_TOKENS is used by generate_with_retry
+                config.MAX_TOTAL_TOKENS,
+                SAFETY_MARGIN,
             ):
-                context.scenes.append(padding_text)
-                context.tokens_used += ptoks
-                context.last_scene_text = padding_text
-                logger.debug(f"Padding {pad_count} successful.")
+                logger.warning(
+                    f"Padding after beat for {node.op} ({narrative_anchor}): "
+                    f"Budget check indicates insufficient space for padding segment {local_padding_segments_added} "
+                    f"(prompt {estimated_pad_prompt_tokens} + max_completion {MAX_PAD_COMPLETION_TOKENS}). "
+                    f"Stopping padding for this beat."
+                )
+                break # Break from this beat's padding loop
+
+            padding_text = generate_with_retry(
+                system_prompt=padding_system_prompt,
+                user_prompt=padding_user_prompt,
+                max_completion_tokens=MAX_PAD_COMPLETION_TOKENS,
+                validate_fn=validate_padding,
+                retries=config.MAX_PAD_RETRIES,
+                sample_index=context.sample_index,
+                temperature=config.CREATIVE_NARRATIVE_TEMP,
+            )
+
+            if padding_text:
+                ptoks = len(encoder.encode(padding_text))
+                # Re-check budget with actual token count before adding, though prior checks should catch most overflows
+                if (
+                    context.tokens_used + ptoks
+                    <= config.MAX_TOTAL_TOKENS - SAFETY_MARGIN
+                ):
+                    context.scenes.append(padding_text)
+                    context.tokens_used += ptoks
+                    context.last_scene_text = padding_text
+                    logger.debug(f"Padding segment {local_padding_segments_added} successful after {node.op} ({narrative_anchor}). Tokens used: {ptoks}. Total: {context.tokens_used}")
+                else:
+                    logger.warning(
+                        f"Generated padding segment {local_padding_segments_added} ({ptoks} tokens) "
+                        f"after {node.op} ({narrative_anchor}) would exceed token limit. Discarding."
+                    )
+                    # Even if we discard, we should break as we are at the budget limit.
+                    break 
             else:
                 logger.warning(
-                    f"Generated padding {pad_count} would exceed token limit. Discarding."
+                    f"Padding segment generation {local_padding_segments_added} failed after beat for {node.op} ({narrative_anchor}) "
+                    f"(validator failed or API error after retries). Stopping further padding attempts for this beat."
                 )
-                add_padding = False
-                break
-        else:
-            logger.warning(
-                f"Padding generation {pad_count} failed after retries. Stopping padding."
-            )
-            add_padding = False
-            break
+                break # Break from this beat's padding loop if generation fails
+    # --- End of Enhanced Intelligent Padding Loop ---
 
 
 def generate_narrative(

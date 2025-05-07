@@ -7,7 +7,7 @@
 *   **For Business Use (Not a Hosting Service):** 
     * Using the software as-is? Just drop us a quick note!
     * Making changes to the code? You have two friendly options:
-        1. Share your improvements with the community by contributing them back
+        1. Share your improvements with the community by contributing them back to a branch in this repo
         2. Support the project by purchasing a commercial license
 
 *   **For Hosting Services:** You're welcome to host the software commercially!

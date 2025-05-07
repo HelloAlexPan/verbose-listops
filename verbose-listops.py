@@ -18,7 +18,7 @@ import concurrent.futures
 import inflect
 import tiktoken
 from functools import lru_cache
-from openai import OpenAI # Add or ensure this line exists
+from openai import OpenAI
 
 from dotenv import load_dotenv
 load_dotenv()
@@ -101,7 +101,6 @@ ORDINAL_WORDS_TO_IGNORE = {
 }
 
 
-# --- OpenAI API Key and Tokenizer Initialization ---
 OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY")
 if not OPENROUTER_API_KEY:
     print("Warning: OPENROUTER_API_KEY environment variable not set. Using placeholder.")
@@ -137,11 +136,11 @@ FEW_SHOT_EXAMPLES_STRICT = [
             "**Adhere strictly to these rules for this scene only.**"
         ),
 
-        "Felix examined the three caches. 'This one has 93 relics, that one 90, and the last 39,' he said. Liora checked the Cipher Wheel. 'We need the smallest: 39.'", # Concise good narrative
+        "Felix examined the three caches. 'This one has 93 relics, that one 90, and the last 39,' he said. Liora checked the Cipher Wheel. 'We need the smallest: 39.'",
 
-        "Felix examined the three caches. 'This one has 93 relics, that one 90, and the last 39,' he said. Liora checked the Cipher Wheel. 'We need the smallest: 39. It took 12 minutes.'", # Concise bad narrative
+        "Felix examined the three caches. 'This one has 93 relics, that one 90, and the last 39,' he said. Liora checked the Cipher Wheel. 'We need the smallest: 39. It took 12 minutes.'",
 
-        "BAD output failed: Included 12. Rule Analysis: 12 not in MUST INCLUDE {39, 90, 93}, not MUST AVOID {5}, not operand count (3), not allowed small num (0-10). Violates 'NO OTHER NUMBERS'." # Concise reasoning
+        "BAD output failed: Included 12. Rule Analysis: 12 not in MUST INCLUDE {39, 90, 93}, not MUST AVOID {5}, not operand count (3), not allowed small num (0-10). Violates 'NO OTHER NUMBERS'."
     ),
 
 ]
@@ -212,8 +211,6 @@ TASK_SOLVING_FEW_SHOTS = [
     """
 ]
 
-# --- Base configurations ---
-
 LOG_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "logs")
 os.makedirs(LOG_DIR, exist_ok=True)  # Create logs directory at startup
 
@@ -221,19 +218,19 @@ os.makedirs(LOG_DIR, exist_ok=True)  # Create logs directory at startup
 EXAMPLE_TEXTS = [
     (
         "Example 1:\\n"
-        'Narrative: "Guild offered two contracts: one 9 silver, other 4. Kaelen chose lower (4). Received 5 silver bonus."\\n' # Concise narrative
+        'Narrative: "Guild offered two contracts: one 9 silver, other 4. Kaelen chose lower (4). Received 5 silver bonus."\\n'
         "Implicit Calculation: MIN(9, 4) = 4. SUM(4, 5) = 9.\\n"
         "Answer: 9\\n"
     ),
     (
         "Example 2:\\n"
-        "Narrative: Vault needed combined energy of four crystals (1, 1, 1, 1). Lock used final digit of total power.\\n" # Concise narrative
+        "Narrative: Vault needed combined energy of four crystals (1, 1, 1, 1). Lock used final digit of total power.\\n"
         "Implicit Calculation: SUM(1, 1, 1, 1) = 4. Mod 10 -> 4.\\n"
         "Answer: 4\\n"
     ),
     (
         "Example 3:\\n"
-        "Narrative: Three scouts reported patrol durations: 5, 5, 5 hours. Procedure: calculate average time (rounded down) for logbook.\\n" # Concise narrative
+        "Narrative: Three scouts reported patrol durations: 5, 5, 5 hours. Procedure: calculate average time (rounded down) for logbook.\\n"
         "Implicit Calculation: SUM(5, 5, 5) = 15. Count=3. AVG = 15/3 = 5. Floor(5) = 5.\\n"
         "Answer: 5"
     ),
@@ -260,11 +257,11 @@ def log_prompt(
     except Exception as e:
         print(f"Error writing to log file {path}: {e}")
 
-FINAL_QUESTION_TEMPLATE = Template( # Note: $primary_object is no longer used in this version
+FINAL_QUESTION_TEMPLATE = Template(
     "\n\n---\n\n**Question:** Following the entire sequence of events described in the story, exactly how many $primary_object did the characters end up with? Provide only the final integer count."
 )
 
-# --- GenerationContext dataclass for shared mutable state in recursive narrative generation ---
+# --- GenerationContext for recursive narrative state ---
 from dataclasses import dataclass
 import logging
 
@@ -291,8 +288,8 @@ class GenerationContext:
     max_pad_paragraphs: int = 2
 
 SAFETY_MARGIN = config.MAX_TOKENS_BUFFER
-MAX_BEAT_COMPLETION_TOKENS = config.DEFAULT_MAX_BEAT_COMPLETION_TOKENS # Renamed from MAX_BEAT_TOKENS
-MAX_PAD_COMPLETION_TOKENS = config.DEFAULT_MAX_PAD_COMPLETION_TOKENS # Renamed from MAX_PAD_TOKENS
+MAX_BEAT_COMPLETION_TOKENS = config.DEFAULT_MAX_BEAT_COMPLETION_TOKENS
+MAX_PAD_COMPLETION_TOKENS = config.DEFAULT_MAX_PAD_COMPLETION_TOKENS
 
 # --- Setup Logging ---
 
@@ -320,25 +317,23 @@ if not logger.handlers:
 
 
     console_handler = logging.StreamHandler()
-    console_handler.setLevel(logging.INFO) # Changed back from logging.ERROR
+    console_handler.setLevel(logging.INFO)
     console_handler.setFormatter(formatter)
     logger.addHandler(console_handler)
 
-# --- Instantiate OpenAI Client for OpenRouter Endpoint --- # Updated comment
-client = None # Initialize client variable
+# --- Instantiate OpenAI Client for OpenRouter Endpoint ---
+client = None
 try:
-
     if not OPENROUTER_API_KEY or OPENROUTER_API_KEY == "YOUR_OPENROUTER_API_KEY_HERE":
-         raise ValueError("OpenRouter API Key not found or is placeholder.") # Updated error message
+        raise ValueError("OpenRouter API Key not found or is placeholder.")
 
     client = OpenAI(
-        api_key=OPENROUTER_API_KEY, # Use OpenRouter key
-
-        base_url="https://openrouter.ai/api/v1" # OpenRouter URL
+        api_key=OPENROUTER_API_KEY,
+        base_url="https://openrouter.ai/api/v1"
     )
-    logger.info("OpenAI client configured to use OpenRouter API endpoint.") # Updated log message
+    logger.info("OpenAI client configured to use OpenRouter API endpoint.")
 except Exception as e:
-    logger.error(f"Failed to configure OpenAI client for OpenRouter endpoint: {e}") # Updated error log
+    logger.error(f"Failed to configure OpenAI client for OpenRouter endpoint: {e}")
     client = None
 
 
@@ -350,7 +345,7 @@ except Exception as e:
     p_inflect = None
 
 
-# --- Safe, memoised wrapper around inflect.number_to_words -----------------
+# --- Safe, memoised wrapper around inflect.number_to_words ---
 @lru_cache(maxsize=None)
 def num_to_words(n: int) -> str:
     """
@@ -363,9 +358,8 @@ def num_to_words(n: int) -> str:
         return p_inflect.number_to_words(n)
     except Exception:
         return str(n)
-# --------------------------------------------------------------------------
 
-# --- Generic retry helper (centralised back‑off policy) -------------------
+# --- Generic retry helper (centralised back‑off policy) ---
 def with_retry(func: Callable, *args, **kwargs):
     """
     Call `func` with the supplied args/kwargs, retrying on exception
@@ -387,9 +381,8 @@ def with_retry(func: Callable, *args, **kwargs):
                 raise
             time.sleep(delay)
             delay *= 2
-# --------------------------------------------------------------------------
 
-def clean_snippet(text: str, max_len: int = config.DEFAULT_SNIPPET_MAX_LEN) -> str: # Use config
+def clean_snippet(text: str, max_len: int = config.DEFAULT_SNIPPET_MAX_LEN) -> str:
     """Removes common model analysis/checklist lines and takes the last part."""
     if not text:
         return "The story begins..."
@@ -399,23 +392,21 @@ def clean_snippet(text: str, max_len: int = config.DEFAULT_SNIPPET_MAX_LEN) -> s
     cleaned_lines = [
         line for line in lines
         if not re.match(
-            r"^\s*(-|\*|\d+\.|Critique|Checklist|Yes|No|Draft \d+|Option \d+|\[.*?\]:|MUST INCLUDE|MUST AVOID|Problem:|REASONING:|GOOD:|BAD:|Confidence Score:|Mental Sandbox:|Outcome is|Narrative:|Generation:|Rules:|System:|User:|Okay|Check\.|REMINDER:|Instructions:|Task:|^\?|^\s*$)", # Added more patterns
+            r"^\s*(-|\*|\d+\.|Critique|Checklist|Yes|No|Draft \d+|Option \d+|\[.*?\]:|MUST INCLUDE|MUST AVOID|Problem:|REASONING:|GOOD:|BAD:|Confidence Score:|Mental Sandbox:|Outcome is|Narrative:|Generation:|Rules:|System:|User:|Okay|Check\.|REMINDER:|Instructions:|Task:|^\?|^\s*$)",
             line.strip(),
             re.IGNORECASE
         )
-        # Add a check for lines that seem like prompt echoing
-        and not line.strip().startswith(('Imply the sum', 'reference to the previous', 'Narrate comparing', 'This scene resolves')) # Add more prompt fragments if needed
+        and not line.strip().startswith(('Imply the sum', 'reference to the previous', 'Narrate comparing', 'This scene resolves'))
     ]
 
 
     cleaned_text = "\n".join(cleaned_lines).strip()
-    if not cleaned_text: # Handle case where cleaning removed everything
-
+    if not cleaned_text:
         original_lines = [line for line in lines if line.strip()]
         if original_lines:
             cleaned_text = original_lines[-1].strip()
-        else: # If original was also effectively empty
-            return "Previously..." # Or some other placeholder
+        else:
+            return "Previously..."
 
 
     return cleaned_text[-max_len:]
@@ -439,17 +430,17 @@ def would_exceed_budget(
 def generate_with_retry(
     system_prompt: str,
     user_prompt: str,
-    max_completion_tokens: int, # Renamed from max_tokens
+    max_completion_tokens: int,
     validate_fn: Callable[[str], bool],
     retries: int = config.MAX_BEAT_RETRIES,
-    sample_index: int | None = None, # <-- Add optional sample_index argument
+    sample_index: int | None = None,
 ):
     """
     Helper to call the OpenAI ChatCompletion API with retries and apply a validation function.
     Returns the first candidate text that passes validate_fn, or None if all attempts fail.
     Passes sample_index to log_prompt if provided.
     """
-    candidate = None # Initialize candidate outside the loop
+    candidate = None
     for attempt in range(1, retries + 1):
         try:
             resp = _chat_completion_call(
@@ -458,39 +449,34 @@ def generate_with_retry(
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": user_prompt},
                 ],
-                max_completion_tokens=max_completion_tokens, # Parameter name now matches
+                max_completion_tokens=max_completion_tokens,
                 temperature=0.7,
             )
             
-            truly_raw_llm_content = None # Initialize
+            truly_raw_llm_content = None
             if resp and resp.choices and len(resp.choices) > 0 and resp.choices[0].message:
-                truly_raw_llm_content = resp.choices[0].message.content # This is the truly raw content, could be None
-
-            # Log the TRULY raw content (or a placeholder if it's None)
-            # The 'Generation (Raw):' part of the message indicates its nature.
+                truly_raw_llm_content = resp.choices[0].message.content
             log_prompt(
                 f"LLM Turn Attempt {attempt}",
                 f"System: {system_prompt}\\nUser: {user_prompt}\\n\\nGeneration (Raw):\\n{truly_raw_llm_content if truly_raw_llm_content is not None else '[[API returned None content string]]'}",
                 sample_index=sample_index
             )
 
-            # Now, prepare the candidate for validation and return, which involves stripping.
+            # Prepare the candidate for validation and return, which involves stripping.
             candidate_for_validation_and_return = None
             if truly_raw_llm_content is not None:
-                candidate_for_validation_and_return = truly_raw_llm_content.strip() # Strip for validation and further use
+                candidate_for_validation_and_return = truly_raw_llm_content.strip()
             else:
                 logger.warning(f"API call in generate_with_retry attempt {attempt} returned None content. Response object: {resp}")
-                # candidate_for_validation_and_return remains None
             
-            # The rest of the function uses candidate_for_validation_and_return
             if candidate_for_validation_and_return is None:
                 logger.warning(f"generate_with_retry attempt {attempt} resulted in None candidate_for_validation_and_return (possibly after stripping None).")
             elif not candidate_for_validation_and_return or candidate_for_validation_and_return.lower().startswith(
                 ("i cannot", "i'm sorry", "i am unable")
             ):
                 logger.warning(f"API refusal on generate_with_retry attempt {attempt}.")
-            elif validate_fn(candidate_for_validation_and_return): # Validate the stripped version
-                return candidate_for_validation_and_return # Return stripped version
+            elif validate_fn(candidate_for_validation_and_return):
+                return candidate_for_validation_and_return
 
         except Exception as e:
             logger.warning(f"Error on generate_with_retry attempt {attempt}: {e}")
@@ -501,7 +487,7 @@ def generate_with_retry(
 
 
     logger.warning(f"generate_with_retry failed after {retries} attempts.")
-    return None # Return None explicitly if all retries fail
+    return None
 
 
 OP_LABELS = {
@@ -540,37 +526,36 @@ class OpNode(Node):
 
 
 # --- AST Generation and Evaluation ---
-def build_random_ast(max_ops: int, max_branch: int = config.DEFAULT_MAX_BRANCH) -> Node: # Use config
+def build_random_ast(max_ops: int, max_branch: int = config.DEFAULT_MAX_BRANCH) -> Node:
     """Constructs a random ListOps AST."""
     if not isinstance(max_ops, int) or max_ops < 1:
         raise ValueError("max_ops must be a positive int")
-    if max_branch < config.MIN_ARITY: # Use config
+    if max_branch < config.MIN_ARITY:
         raise ValueError(f"max_branch ({max_branch}) < MIN_ARITY ({config.MIN_ARITY})")
     ops = ["MAX", "MIN", "MED", "SUM", "SM", "AVG"]
     count = 0
 
     def helper():
         nonlocal count
-        if count >= max_ops or (count > 0 and random.random() < config.EARLY_TERMINATION_PROBABILITY): # Use config
+        if count >= max_ops or (count > 0 and random.random() < config.EARLY_TERMINATION_PROBABILITY):
             return Atom(random.randint(config.ATOM_MIN_VALUE, config.ATOM_MAX_VALUE))
         count += 1
         op = random.choice(ops)
 
         if op == "MED":
-
             possible_arities = [
-                n for n in range(config.MIN_ARITY, max_branch + 1) if n % 2 == 1 # Use config
+                n for n in range(config.MIN_ARITY, max_branch + 1) if n % 2 == 1
             ]
 
             if not possible_arities:
-                arity = config.MIN_ARITY if config.MIN_ARITY % 2 == 1 else config.MIN_ARITY + 1 # Use config
+                arity = config.MIN_ARITY if config.MIN_ARITY % 2 == 1 else config.MIN_ARITY + 1
             else:
                 arity = random.choice(possible_arities)
         else:
-            arity = random.randint(config.MIN_ARITY, max_branch) # Use config
+            arity = random.randint(config.MIN_ARITY, max_branch)
         children = [helper() for _ in range(arity)]
 
-        # --- NEW: Ensure AVG direct atom sum is divisible by atom count ---
+        # Ensure AVG direct atom sum is divisible by atom count
         if op == "AVG":
             direct_atoms = [c for c in children if isinstance(c, Atom)]
             arity = len(direct_atoms)
@@ -579,43 +564,37 @@ def build_random_ast(max_ops: int, max_branch: int = config.DEFAULT_MAX_BRANCH) 
                 remainder = current_sum % arity
 
                 if remainder != 0:
-
                     adjustment_needed = (arity - remainder) % arity
                     logger.debug(f"AST Gen (AVG): current_sum={current_sum}, arity={arity}, remainder={remainder}, adjustment_needed={adjustment_needed}")
-
 
                     atom_to_adjust = random.choice(direct_atoms)
                     adjusted = False
 
-
                     new_value_add = atom_to_adjust.n + adjustment_needed
                     if config.ATOM_MIN_VALUE <= new_value_add <= config.ATOM_MAX_VALUE:
                         atom_to_adjust.n = new_value_add
-                        atom_to_adjust.value = new_value_add # Update value too
+                        atom_to_adjust.value = new_value_add
                         logger.debug(f"AST Gen (AVG): Adjusted atom {id(atom_to_adjust)} value up to {atom_to_adjust.n} to make sum divisible by {arity}.")
                         adjusted = True
 
-
                     if not adjusted:
-
                         new_value_sub = atom_to_adjust.n - (arity - adjustment_needed)
                         if config.ATOM_MIN_VALUE <= new_value_sub <= config.ATOM_MAX_VALUE:
                             atom_to_adjust.n = new_value_sub
-                            atom_to_adjust.value = new_value_sub # Update value too
+                            atom_to_adjust.value = new_value_sub
                             logger.debug(f"AST Gen (AVG): Adjusted atom {id(atom_to_adjust)} value down to {atom_to_adjust.n} to make sum divisible by {arity}.")
                             adjusted = True
 
                     if not adjusted:
 
                         logger.warning(f"AST Gen (AVG): Could not adjust atom value {atom_to_adjust.n} (target adjustment {adjustment_needed}) for AVG node sum {current_sum} to be divisible by {arity} due to bounds [{config.ATOM_MIN_VALUE}, {config.ATOM_MAX_VALUE}].")
-        # --- END NEW ---
 
         return OpNode(op, children)
 
     root = helper()
     if isinstance(root, Atom) and max_ops >= 1:
         op = random.choice(ops)
-        arity = random.randint(config.MIN_ARITY, max_branch) # Use config
+        arity = random.randint(config.MIN_ARITY, max_branch)
         children = [
             Atom(random.randint(config.ATOM_MIN_VALUE, config.ATOM_MAX_VALUE))
             for _ in range(arity - 1)
@@ -682,32 +661,26 @@ def _chat_completion_call(*args, **kwargs):
     if args:
         logger.warning(f"_chat_completion_call received unexpected positional arguments: {args}")
 
-    logger.debug(f"DEBUG: _chat_completion_call received kwargs: {kwargs}") # <--- ADD THIS LINE
+    logger.debug(f"_chat_completion_call received kwargs: {kwargs}")
 
     if client is None:
         logger.error("OpenAI client (for OpenRouter) not initialized. Cannot make API call.")
         raise RuntimeError("API client not initialized.")
 
-
-
-    standard_params = {"model", "messages", "max_tokens", "temperature", "top_p", "n", "stream", "stop", "presence_penalty", "frequency_penalty", "logit_bias", "user", "top_k"} # Ensure top_p and top_k are here if used
+    standard_params = {"model", "messages", "max_tokens", "temperature", "top_p", "n", "stream", "stop", "presence_penalty", "frequency_penalty", "logit_bias", "user", "top_k"} 
     standard_kwargs = {k: v for k, v in kwargs.items() if k in standard_params}
-
 
     if "max_completion_tokens" in kwargs and "max_tokens" not in standard_kwargs:
         standard_kwargs["max_tokens"] = kwargs["max_completion_tokens"]
 
-    logger.debug(f"DEBUG: Final args for client.chat.completions.create: {standard_kwargs}")
+    logger.debug(f"Final args for client.chat.completions.create: {standard_kwargs}")
     logger.debug(f"Calling client.chat.completions.create with args: {standard_kwargs}")
     try:
-
         return client.chat.completions.create(**standard_kwargs)
     except Exception as e:
         logger.error(f"Error during client.chat.completions.create: {e}")
         logger.error(f"Args that failed: {standard_kwargs}")
-        raise # Re-raise the exception
-
-    # --- END TEMPORARY ---
+        raise
 
 
 
@@ -773,19 +746,18 @@ def generate_world(num_characters: int = 5, num_concepts: int = 7, max_retries: 
         logger.debug(f"Attempting world generation (Attempt {attempt + 1}/{max_retries}) with tuned prompt.")
         text = None
         try:
-            # --- Log the prompt ---
+            # Log the prompt
             log_prompt(
                 header=f"World Generation Prompt (Attempt {attempt + 1})",
-                prompt=f"System: (Implicit in API call structure for this function)\nUser:\n{prompt}", # Assuming prompt var holds the user part
+                prompt=f"System: (Implicit in API call structure for this function)\nUser:\n{prompt}",
                 sample_index=sample_index
             )
-            # --- End log prompt ---
 
             resp = _chat_completion_call(
-                model=MODEL, # Uses the MODEL constant defined in your script
+                model=MODEL,
                 messages=[{"role": "user", "content": prompt}],
-                max_completion_tokens=5000, # Changed from 2000 to 2500
-                temperature=0.5, # Changed from 0.7 to 0.5
+                max_completion_tokens=5000,
+                temperature=0.5,
             )
             if hasattr(resp, "choices") and resp.choices: # Check if choices list exists and is not empty
 
@@ -797,30 +769,29 @@ def generate_world(num_characters: int = 5, num_concepts: int = 7, max_retries: 
                     if text is None:
 
                         logger.warning(f"World Gen Attempt {attempt + 1}: API returned None content within message. Response: {resp}")
-                        text = "" # Treat as empty string
+                        text = ""
                 else:
 
                     logger.error(f"World Gen Attempt {attempt + 1}: First choice object lacks 'message' attribute or message is empty. Response: {resp}")
-                    text = "" # Treat as error / empty string
+                    text = ""
             else:
 
                 logger.error(f"World Gen Attempt {attempt + 1}: API response lacks 'choices' list or it's empty. Response: {resp}")
-                text = "" # Treat as error / empty string
+                text = ""
             
-            # --- Log the raw response ---
+            # Log raw response
             log_prompt(
                 header=f"World Generation Response (Attempt {attempt + 1})",
                 prompt=f"Raw LLM Output:\n{text}",
                 sample_index=sample_index
             )
-            # --- End log response ---
 
             if not text.strip():
                 logger.warning(f"World Gen Attempt {attempt + 1}: Received empty response from API.")
 
                 if attempt < max_retries - 1:
-                    time.sleep(1) # Uses the time module
-                continue # Go to the next attempt
+                    time.sleep(1)
+                continue
 
 
             world = clean_and_parse_json_block(text) # Uses your existing cleaning function
@@ -830,38 +801,22 @@ def generate_world(num_characters: int = 5, num_concepts: int = 7, max_retries: 
             if not all(k in world for k in required_keys):
                  logger.warning(f"World Gen Attempt {attempt + 1}: Generated JSON missing required keys. Keys found: {world.keys()}")
                  raise ValueError("Generated JSON missing required keys") # Raise error to trigger except block
-
             if not isinstance(world.get("characters"), list) or not world["characters"]:
                  logger.warning(f"World Gen Attempt {attempt + 1}: 'characters' key is not a non-empty list.")
                  raise ValueError("'characters' key is not a non-empty list")
-
             logger.debug(f"World Gen Attempt {attempt + 1}: Successfully generated and parsed world JSON.")
             logger.debug(f"Generated object: {world.get('object', 'N/A')}")
             return world # Success! Exit the function.
-
         except (json.JSONDecodeError, ValueError) as e: # Catch both parsing and validation errors
             logger.error(f"World Gen Attempt {attempt + 1}: Failed ({type(e).__name__}): {e}. Raw text:\n---\n{text}\n---")
-
         except Exception as e:
-
             logger.error(f"World Gen Attempt {attempt + 1}: Unexpected error: {e}. Raw text:\n---\n{text if text else 'N/A'}\n---")
-
-
-
         if attempt < max_retries - 1:
-
-
-
-
-
-            delay = 1.0 * (2 ** attempt) # Simple exponential backoff starting at 1 second
-
+            delay = 1.0 * (2 ** attempt)
             logger.info(f"Retrying world generation in {delay:.2f} seconds...")
-            time.sleep(delay) # Uses the time module
-
-
+            time.sleep(delay)
     logger.error(f"Failed to generate valid world JSON after {max_retries} attempts.")
-    raise RuntimeError("World generation failed: Could not get valid JSON from LLM.") # Raise an error to stop the sample generation
+    raise RuntimeError("World generation failed: Could not get valid JSON from LLM.")
 
 # --- Number Extraction (Enhanced with Inflect for Words up to MAX_VALUE) ---
 DIGIT_REGEX = re.compile(r"\b-?\d+\b")
@@ -875,11 +830,10 @@ def _build_expanded_number_words_dict(
         logger.error(
             "Inflect engine not available for building expanded number words dict. Using basic range."
         )
-        # Use config for fallback range
         return {
             num_to_words(i).lower(): i 
             for i in range(config.FALLBACK_MIN_NUM_WORD, config.FALLBACK_MAX_NUM_WORD + 1) 
-            if num_to_words(i) # Ensure conversion worked
+            if num_to_words(i)
         } 
     num_word_dict = {}
     for i in range(max_val + 1):
@@ -896,99 +850,49 @@ def _build_expanded_number_words_dict(
 
 EXPANDED_NUMBER_WORDS_DICT = _build_expanded_number_words_dict()
 
-# --- NEW: Sort keys by length descending to prioritize longer matches ---
+# --- Sort keys by length descending to prioritize longer matches ---
 sorted_number_words = sorted(EXPANDED_NUMBER_WORDS_DICT.keys(), key=len, reverse=True)
 NUMBER_WORDS_PATTERN = (
     r"\b(?:(minus|negative)\s+)?("
-    + "|".join(re.escape(k) for k in sorted_number_words) # Use sorted keys
+    + "|".join(re.escape(k) for k in sorted_number_words)
     + r")\b"
 )
-# --- END NEW ---
 NUMBER_WORDS_REGEX = re.compile(NUMBER_WORDS_PATTERN, re.IGNORECASE)
 
 
 def extract_numbers_from_text(text: str) -> Set[int]:
     """Extracts integers (digits and words), ignoring specified ordinals."""
-    # --- DEBUG START ---
-    logger.debug(f"--- extract_numbers_from_text START ---")
-    logger.debug(f"Input text (first 200 chars): '{text[:200]}...'")
-    # --- DEBUG END ---
-
     if not text:
         return set()
 
     found_numbers = set()
 
-    # --- DEBUG START ---
-    logger.debug("Checking for digits...")
-    # --- DEBUG END ---
     for match in DIGIT_REGEX.finditer(text):
         digit_str = match.group(0)
-        # --- DEBUG START ---
-        logger.debug(f"  Found digit string: '{digit_str}'")
-        # --- DEBUG END ---
         try:
             value = int(digit_str)
-            # --- DEBUG START ---
-            logger.debug(f"    Parsed as int: {value}")
-            # --- DEBUG END ---
-
             if value == 1:
-                # --- DEBUG START ---
-                logger.debug(f"    Skipping digit 1 (only word 'one' allowed).")
-                # --- DEBUG END ---
                 continue
             found_numbers.add(value)
-            # --- DEBUG START ---
-            logger.debug(f"    Added {value} to found_numbers.")
-            # --- DEBUG END ---
         except ValueError:
-            # --- DEBUG START ---
-            logger.debug(f"    Failed to parse '{digit_str}' as int.")
-            # --- DEBUG END ---
             continue
 
-    # --- DEBUG START ---
-    logger.debug("Checking for number words...")
-    # --- DEBUG END ---
     for match in NUMBER_WORDS_REGEX.finditer(text):
         sign_word = match.group(1)
         number_word = match.group(2).lower()
-        # --- DEBUG START ---
-        logger.debug(f"  Found potential number word: '{match.group(0)}' -> word: '{number_word}', sign: '{sign_word}'")
-        # --- DEBUG END ---
-
 
         if number_word in ORDINAL_WORDS_TO_IGNORE:
-            # --- DEBUG START ---
-            logger.debug(f"    Ignoring ordinal word: '{number_word}'")
-            # --- DEBUG END ---
             continue
 
-
         value = EXPANDED_NUMBER_WORDS_DICT.get(number_word)
-        # --- DEBUG START ---
-        logger.debug(f"    Dictionary lookup for '{number_word}': {value}")
-        # --- DEBUG END ---
 
         if value is not None:
             if sign_word and value != 0:
                 value = -value
-                # --- DEBUG START ---
-                logger.debug(f"    Applied negative sign: {value}")
-                # --- DEBUG END ---
             found_numbers.add(value)
-            # --- DEBUG START ---
-            logger.debug(f"    Added {value} to found_numbers.")
-            # --- DEBUG END ---
         else:
-
             logger.warning(f"    Word '{number_word}' found by regex but not in dict.")
 
-    # --- DEBUG START ---
-    logger.debug(f"Final found_numbers: {found_numbers}")
-    logger.debug(f"--- extract_numbers_from_text END ---")
-    # --- DEBUG END ---
     return found_numbers
 
 
@@ -1042,7 +946,6 @@ def make_number_validator(
             # If the number is a direct operand, current result, or current intermediate sum, it's NOT a violation here.
             if num_in_question in current_beat_explicitly_allowed_numbers:
                 continue 
-            
             # Otherwise, it's a number from a past step, found in the text, and not allowed in current beat's explicit set.
             violations_of_forbidden_rule.add(num_in_question)
 
@@ -1059,13 +962,6 @@ def make_number_validator(
         # These are candidates for being "truly disallowed extras" unless they are operand_count or allowed small_numbers.
         unexpected_found = found_numbers - current_beat_explicitly_allowed_numbers
         logger.debug(f"Validator: initial unexpected_found (found_numbers - current_beat_explicitly_allowed_numbers)={unexpected_found}")
-
-        # The specific removal of intermediate_sum_allowed from unexpected_found is now redundant
-        # as it's already excluded by subtracting current_beat_explicitly_allowed_numbers above.
-        # if intermediate_sum_allowed is not None and intermediate_sum_allowed in unexpected_found:
-        #     logger.debug(f"Validator INFO: Allowing explicitly permitted intermediate sum: {intermediate_sum_allowed}")
-        #     unexpected_found.remove(intermediate_sum_allowed) # This block can be removed or commented out.
-
         truly_disallowed_extras = set()
         for extra_num in unexpected_found:
             is_allowed_one = (extra_num == 1)
@@ -1127,7 +1023,6 @@ def check_operand_presence(text: str, operand_val: int) -> bool:
 def get_atoms_in_subtree(node: Node) -> Set[int]:
     """Recursively find all atomic values (leaf nodes) in the subtree rooted at node."""
     if isinstance(node, Atom):
-
         return {node.n}
     atoms = set()
     for child in node.children:
@@ -1138,7 +1033,7 @@ def get_atoms_in_subtree(node: Node) -> Set[int]:
 def generate_narrative_anchor_with_llm(
     world_info: dict,
     op_node: OpNode,
-    all_previous_anchors: list[str],   # MODIFIED: Was child_narrative_anchors, now all_previous_anchors
+    all_previous_anchors: list[str],
     sample_index: int | None = None,
 ) -> str | None:
     """
@@ -1146,23 +1041,19 @@ def generate_narrative_anchor_with_llm(
     Focuses on reliability with a very simple prompt structure.
     """
 
-    op_label = OP_LABELS.get(op_node.op, op_node.op) # Still useful for fallback or logging
+    op_label = OP_LABELS.get(op_node.op, op_node.op)
     genre = world_info.get("genre", "unknown genre")
-    setting = world_info.get("setting", "a mysterious place") # ADDED: Get setting
+    setting = world_info.get("setting", "a mysterious place")
     primary_object = world_info.get("object", "items")
-
-    # --- NEW: Simplified Concept Keywords ---
     concept_keywords_map = {
         "MAX": "Pinpointing the most potent or largest element",
         "MIN": "Isolating the smallest or most fundamental essence",
         "SUM": "Amalgamating all components into a unified total",
         "MED": "Identifying the central balancing point in an ordered series",
         "AVG": "Discerning the common thread or typical measure across all items",
-        "SM":  "Unveiling a core symbolic digit through cyclical transformation", # Or "Coded Essence"
+        "SM":  "Unveiling a core symbolic digit through cyclical transformation",
     }
-    concept_keywords_for_prompt = concept_keywords_map.get(op_node.op, f"{op_label} Concept") # Fallback
-
-    # MODIFIED System Prompt's final instruction line
+    concept_keywords_for_prompt = concept_keywords_map.get(op_node.op, f"{op_label} Concept")
     system_prompt = """You are a master storyteller and creative naming expert. Your task is to generate a short, evocative, and thematic 'narrative anchor'.
 
 A narrative anchor is a creative, conceptual name that serves as a descriptive **label** or **stand-in** for the *result* (the outcome) of a specific event or calculation within the story. Its purpose is to allow the narrative to refer to this result conceptually in later parts of the story, *without* explicitly stating its numerical value. For example, if a calculation's outcome is 50, the anchor might be 'The Sunstone's Core.' The story would then mention 'The Sunstone's Core' (which implicitly represents the value 50) instead of the number itself, allowing the narrative to flow without revealing intermediate figures.
@@ -1182,7 +1073,6 @@ Examples of good anchors based on different inputs:
 
 You will be given the Genre, Setting, Item (Primary Object), and Concept/Operation Hint. Provide ONLY the generated anchor as your response."""
 
-    # MODIFIED User Prompt to include Setting and Previously Used Anchors
     user_prompt = (
         f"Genre: {genre}\\n"
         f"Setting: {setting}\\n"
@@ -1198,7 +1088,6 @@ You will be given the Genre, Setting, Item (Primary Object), and Concept/Operati
         prompt=prompt_content_for_log,
         sample_index=sample_index
     )
-    # --- End log prompt ---
     
     logger.debug(
         f"Attempting Narrative Anchor generation for {op_node.op} (Item: {primary_object}) with prompt:\\n{prompt_content_for_log}"
@@ -1214,7 +1103,7 @@ You will be given the Genre, Setting, Item (Primary Object), and Concept/Operati
             "temperature": 0.8,
         }
         logger.debug(f"--- LLM Anchor Gen: EXACT REQUEST PAYLOAD ---")
-        logger.debug(json.dumps(request_payload, indent=2)) # Make sure you have `import json` at the top of your file
+        logger.debug(json.dumps(request_payload, indent=2))
         logger.debug(f"--- END EXACT REQUEST PAYLOAD ---")
 
         # Modify the existing call to use the payload dictionary:
@@ -1248,20 +1137,18 @@ You will be given the Genre, Setting, Item (Primary Object), and Concept/Operati
 
         candidate = raw_candidate.strip()
 
-        # --- Strip surrounding quotes --- reinstated
+        # --- Strip surrounding quotes ---
         if candidate.startswith('"') and candidate.endswith('"'):
             candidate = candidate[1:-1].strip()
         if candidate.startswith("'") and candidate.endswith("'"):
             candidate = candidate[1:-1].strip()
-        # --- End strip surrounding quotes ---
 
-        # --- Remove boilerplate prefixes --- reinstated
+        # --- Remove boilerplate prefixes ---
         original_candidate_before_boilerplate_strip = candidate # Store for comparison
         candidate = re.sub(r"^(OUTPUT \(Phrase Only\):)\s*", "", candidate, flags=re.IGNORECASE).strip()
         candidate = re.sub(r"^(Okay, here's a noun phrase:|Noun Phrase:|Phrase:|Label:|Descriptor:|Designation:|Certainly:|Here it is:)\s*", "", candidate, flags=re.IGNORECASE).strip()
-        # --- End boilerplate removal ---
 
-        # --- Check if boilerplate was present or if string is now empty --- reinstated
+        # --- Check if boilerplate was present or if string is now empty ---
         boilerplate_indicators_lower = [
             "output (phrase only):", "okay, here's a noun phrase:", "noun phrase:", 
             "phrase:", "label:", "descriptor:", "designation:", "certainly:", "here it is:"
@@ -1278,26 +1165,23 @@ You will be given the Genre, Setting, Item (Primary Object), and Concept/Operati
                     f"Narrative Anchor Gen: Boilerplate detected in response (raw: '{raw_candidate}', processed: '{candidate}'). Triggering retry."
                 )
             return None # Fail this attempt to trigger retry
-        # --- End boilerplate check ---
 
-        # --- NEW: Aggressively remove echoed input preamble ---
+        # --- Aggressively remove echoed input preamble ---
         # Construct the expected preamble pattern based on current genre, item, concept
-        # MODIFIED: Preamble removal pattern
         preamble_pattern_str = (
             rf"Genre: {re.escape(genre)}\s*\\n"
             rf"Setting: {re.escape(setting)}\s*\\n"
             rf"Item: {re.escape(primary_object)}\s*\\n"
             rf"Concept/Operation Hint: {re.escape(concept_keywords_for_prompt)}\s*\\n"
         )
-        # Remove the preamble if found at the beginning of the candidate string
+        # Remove preamble if found at the beginning of the candidate string
         candidate = re.sub(f"^{preamble_pattern_str}", "", candidate, flags=re.IGNORECASE).strip()
-        # --- END NEW ---
 
-        # Remove potential "OUTPUT (Phrase Only):" if the model echoes it (keeping this as a fallback)
+        # Fallback: remove potential "OUTPUT (Phrase Only):"
         candidate = re.sub(r"^(OUTPUT \(Phrase Only\):)\s*", "", candidate, flags=re.IGNORECASE).strip()
         candidate = re.sub(r"^(Okay, here's a noun phrase:|Noun Phrase:|Phrase:|Label:|Descriptor:|Designation:|Certainly:|Here it is:)\s*", "", candidate, flags=re.IGNORECASE).strip()
 
-        # --- NEW: More robust check for guideline echoing ---
+        # --- More robust check for guideline echoing ---
         # Strip surrounding quotes, as models sometimes wrap short answers in them.
         if candidate.startswith('"') and candidate.endswith('"'):
             candidate = candidate[1:-1].strip()
@@ -1318,7 +1202,6 @@ You will be given the Genre, Setting, Item (Primary Object), and Concept/Operati
                 f"Narrative Anchor Gen: Response starts with a guideline phrase (raw: '{raw_candidate}', cleaned: '{candidate}')"
             )
             return None
-        # --- END NEW GUIDELINE CHECK ---
 
         num_words = len(candidate.split())
         if not candidate or num_words == 0 or num_words > 5: # Relaxed upper to 5, but hoping for 2-4
@@ -1348,15 +1231,12 @@ You will be given the Genre, Setting, Item (Primary Object), and Concept/Operati
 
 generate_narrative_anchor_with_llm = retry_api_call(generate_narrative_anchor_with_llm)
 
-# --- END PHASE 4b Function ---
-
 # --- Narrative Generation with Strict Checks ---
 class BeatGenerationError(Exception):
     """Raised when a story beat fails to generate, aborting entire narrative."""
     pass
 
 # --- Narrative Generation with Parent Operator Prompting ---
-
 def _generate_narrative_recursive(  # Line ~1315
     node: Node,
     context: "GenerationContext",
@@ -1431,8 +1311,7 @@ def _generate_narrative_recursive(  # Line ~1315
 
     must_include_list = []
     if required_atoms_for_beat:
-        # Changed from: items = [f"{num_to_words(x)} ({x})" for x in sorted(required_atoms_for_beat)]
-        items = [str(x) for x in sorted(required_atoms_for_beat)] # Use digits as strings
+        items = [str(x) for x in sorted(required_atoms_for_beat)]
         must_include_list.extend(items)
 
     if not must_include_list:
@@ -1445,8 +1324,7 @@ def _generate_narrative_recursive(  # Line ~1315
         must_include_combined_str = ", ".join(must_include_list[:-1]) + ", and " + must_include_list[-1]
 
     if truly_forbidden_for_prompt:
-        # Changed from: must_avoid_str = ", ".join(f"{num_to_words(x)} ({x})" for x in sorted(truly_forbidden_for_prompt))
-        must_avoid_str = ", ".join(str(x) for x in sorted(truly_forbidden_for_prompt)) # Use digits as strings
+        must_avoid_str = ", ".join(str(x) for x in sorted(truly_forbidden_for_prompt))
     else:
         must_avoid_str = "None"
 
@@ -1471,8 +1349,7 @@ def _generate_narrative_recursive(  # Line ~1315
 
     object_list_str_for_preamble = ""
     if direct_atom_values:
-        # Changed from: items = [f"{num_to_words(x)} ({x})" for x in sorted(direct_atom_values)]
-        items = [str(x) for x in sorted(direct_atom_values)] # Use digits as strings
+        items = [str(x) for x in sorted(direct_atom_values)]
         if len(items) == 1:
             object_list_str_for_preamble = items[0]
         elif len(items) == 2:
@@ -1532,9 +1409,7 @@ def _generate_narrative_recursive(  # Line ~1315
 
     formatted_direct_values_str = "None"
     if has_direct_atom_children:
-        # Changed from: direct_atom_words = [num_to_words(a) for a in sorted(direct_atom_values)]
-        # formatted_direct_values_list = [f"{w} ({v})" for w, v in zip(direct_atom_words, sorted(direct_atom_values))]
-        formatted_direct_values_list = [str(v) for v in sorted(direct_atom_values)] # Use digits as strings
+        formatted_direct_values_list = [str(v) for v in sorted(direct_atom_values)]
         formatted_direct_values_str = ', '.join(formatted_direct_values_list)
 
     input_description_parts = []
@@ -1641,15 +1516,12 @@ def _generate_narrative_recursive(  # Line ~1315
              + "\n\n---\n\n"
          )
 
-
-    # --- REFINED SYSTEM PROMPT ---
     system_prompt = (
         "You are a fiction writer creating sequential story scenes. Your ONLY task is to write the *next* narrative scene text based on the user's instructions and a snippet of the previous scene. "
         "ABSOLUTELY FORBIDDEN: Any text other than the story scene. NO analysis, NO checklists, NO rule explanations, NO calculations, NO meta-commentary, NO greetings. "
         "Study the few shot examples of what to do. Adhere STRICTLY to ALL instructions, especially the number rules for the current scene."
     )
 
-    # --- REFINED USER PROMPT ---
     cleaned_snippet = clean_snippet(context.last_scene_text, max_len=150)
 
     user_message_content = (
@@ -1659,7 +1531,7 @@ def _generate_narrative_recursive(  # Line ~1315
         f"Previous Scene Snippet: '...{cleaned_snippet}'\\n\\n"
     )
 
-    # --- Few-Shot Example Section (Remains the same logic) ---
+    # --- Few-Shot Example Section ---
     few_shot_section = ""
     num_shots = config.NUM_FEW_SHOT_EXAMPLES
     if num_shots == 1 and FEW_SHOT_EXAMPLES_STRICT:
@@ -1686,7 +1558,6 @@ def _generate_narrative_recursive(  # Line ~1315
              f"{example_prompt_text}"
              f"---\\n\\n"
          )
-    # --- End Few-Shot Section ---
 
     if few_shot_section:
         user_message_content += few_shot_section
@@ -1697,13 +1568,11 @@ def _generate_narrative_recursive(  # Line ~1315
     current_scene_instructions += f"Continue directly from the snippet: '...{cleaned_snippet}'\\n\\n"
 
     current_scene_instructions += f"**SCENE REQUIREMENTS ({task_header} for '{narrative_anchor}'):**\\n"
-    # Combine discovery preamble and operational instruction logic here
-    if scene_preamble: # scene_preamble describes the discovery
-        current_scene_instructions += f"*   Discovery: {scene_preamble}\\n" # Use bullet point
-    # Add the operational instruction (action_description + reminder)
-    current_scene_instructions += f"*   Action: {action_description}\\n" # Use bullet point
+    if scene_preamble:
+        current_scene_instructions += f"*   Discovery: {scene_preamble}\\n"
+    current_scene_instructions += f"*   Action: {action_description}\\n"
     if reminder:
-        current_scene_instructions += f"*   Reminder: {reminder.replace('**REMINDER:**','').strip()}\\n" # Integrate reminder
+        current_scene_instructions += f"*   Reminder: {reminder.replace('**REMINDER:**','').strip()}\\n"
 
     user_message_content += f"{current_scene_instructions}\\n" # Add the combined requirements
 
@@ -1750,7 +1619,6 @@ def _generate_narrative_recursive(  # Line ~1315
 
     if full_optional_statement_parts:
         user_message_content += f"- You may optionally use: { ' and '.join(full_optional_statement_parts) }.\n"
-    # --- END CORRECTION ---
     
     # Now, resume the original f-string concatenation for the remaining rules
     user_message_content += (        f"- NO OTHER NUMBERS ALLOWED.\n"
@@ -1759,7 +1627,6 @@ def _generate_narrative_recursive(  # Line ~1315
 
     # --- Final Reminder ---
     user_message_content += f"REMEMBER: OUTPUT ONLY THE NARRATIVE TEXT FOR THIS SCENE. NO EXTRA TEXT."
-    # --- END REFINED USER PROMPT ---
 
     log_prompt(
         f"{{'=== FINAL' if is_root else '=== Intermediate'}} Operator Beat Prompt (Op: {node.op}, Narrative Anchor: {narrative_anchor})",
@@ -1779,7 +1646,7 @@ def _generate_narrative_recursive(  # Line ~1315
 
     if would_exceed_budget(
         context.tokens_used,
-        estimated_prompt_tokens + current_max_beat_completion_tokens, # Use renamed variable
+        estimated_prompt_tokens + current_max_beat_completion_tokens,
         config.DEFAULT_MAX_TOTAL_TOKENS,
         SAFETY_MARGIN,
     ):
@@ -1816,7 +1683,7 @@ def _generate_narrative_recursive(  # Line ~1315
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": user_message_content},
                 ],
-                max_completion_tokens=current_max_beat_completion_tokens, # Use renamed variable and correct kwarg
+                max_completion_tokens=current_max_beat_completion_tokens,
                 temperature=0.6,
             )
 
@@ -1838,15 +1705,12 @@ def _generate_narrative_recursive(  # Line ~1315
                 sample_index=context.sample_index
             )
 
-            # --- NEW: Aggressive Cleaning Step ---
+            # --- Aggressive Cleaning Step ---
             # The cleaning process will take this raw content and perform its own stripping and filtering.
             # Start the cleaning process with the truly_raw_llm_content.
             # The variable 'cleaned_candidate_text' will be the result of this cleaning.
-            cleaned_candidate_text = truly_raw_llm_content # Pass the raw content to be cleaned
-
-            # ... [Your existing aggressive cleaning logic that operates on cleaned_candidate_text] ...
-            # Example:
-            lines = cleaned_candidate_text.splitlines() # This was 'raw_candidate_text.splitlines()'
+            cleaned_candidate_text = truly_raw_llm_content # Pass raw content to be cleaned
+            lines = cleaned_candidate_text.splitlines()
             filtered_lines = []
             prompt_echoing_fragments = (
                 'Imply the sum', 'reference to the previous', 'Narrate comparing', 'This scene resolves',
@@ -1896,7 +1760,6 @@ def _generate_narrative_recursive(  # Line ~1315
                 if not is_analysis_or_echo:
                     filtered_lines.append(line) # Append original line
             cleaned_candidate_text = "\\n".join(filtered_lines).strip() # Final strip is part of cleaning
-            # --- END NEW CLEANING ---
 
             log_prompt( # Log the cleaned version too
                 f"LLM Beat Generation Attempt {attempt} for operator {node.op} ({narrative_anchor}) - Cleaned",
@@ -1956,7 +1819,7 @@ def _generate_narrative_recursive(  # Line ~1315
 
         if would_exceed_budget(
             context.tokens_used,
-            estimated_pad_prompt_tokens + MAX_PAD_COMPLETION_TOKENS, # Use renamed global constant
+            estimated_pad_prompt_tokens + MAX_PAD_COMPLETION_TOKENS,
             config.DEFAULT_MAX_TOTAL_TOKENS,
             SAFETY_MARGIN,
         ):
@@ -1967,7 +1830,7 @@ def _generate_narrative_recursive(  # Line ~1315
         padding_text = generate_with_retry(
             system_prompt=padding_system_prompt,
             user_prompt=padding_user_prompt,
-            max_completion_tokens=MAX_PAD_COMPLETION_TOKENS, # Use renamed global constant and correct kwarg
+            max_completion_tokens=MAX_PAD_COMPLETION_TOKENS,
             validate_fn=validate_padding,
             retries=config.MAX_PAD_RETRIES,
             sample_index=context.sample_index
@@ -1988,13 +1851,6 @@ def _generate_narrative_recursive(  # Line ~1315
             logger.warning(f"Padding generation {pad_count} failed after retries. Stopping padding.")
             add_padding = False
             break
-
-    # --- No explicit return needed as context is modified in place ---
-
-
-
-# --- generate_narrative function remains largely the same ---
-
 
 def generate_narrative(
     ast: Node, world: dict, config: Config, encoder, p_inflect, logger, sample_index: int # <-- ADDED sample_index
@@ -2018,9 +1874,7 @@ def generate_narrative(
     if p_inflect is None:
         raise RuntimeError("Inflect engine not initialized.")
 
-    # --- Pre-calculate node values ---
-
-
+    # Pre-calculate node values
     logger.debug("Pre-calculating all AST node values...")
     try:
         eval_node(ast) # Evaluate the whole tree to populate .value attributes
@@ -2045,14 +1899,6 @@ def generate_narrative(
                 node_id = id(op_node)
                 narrative_anchor = None
                 if use_llm:
-                    # child_narrative_anchors = [] # This was for a different prompt design
-                    # for child in op_node.children:
-
-                    #     if isinstance(child, OpNode) and id(child) in narrative_anchor_map:
-                    #         child_narrative_anchors.append(narrative_anchor_map[id(child)])
-                    #     elif isinstance(child, OpNode):
-                    #         logger.warning(f"LLM Naming: Child OpNode {child.op} of parent {op_node.op} has no narrative anchor in map during parent naming.")
-                    
                     # Get all anchors generated so far for *this sample*
                     all_anchors_so_far = list(narrative_anchor_map.values()) # These are the anchors generated for previous ops in post-order
 
@@ -2060,7 +1906,7 @@ def generate_narrative(
                         narrative_anchor = generate_narrative_anchor_with_llm(
                             world_info=world, # Pass the whole world_info dict
                             op_node=op_node,
-                            all_previous_anchors=all_anchors_so_far, # MODIFIED: Pass all anchors generated so far
+                            all_previous_anchors=all_anchors_so_far,
                             sample_index=sample_index
                         )
                     except Exception as e:
@@ -2087,8 +1933,6 @@ def generate_narrative(
 
     scenes = []
     tokens_used = 0
-    
-    # --- SIMPLIFIED AND STRENGTHENED INTRO PROMPT ---
     intro_system_prompt = (
         f"You are a fiction writer specializing in writing opening scenes for {world.get('genre', 'Unknown')} novels. Your ONLY job is to produce an introductory scene for a story with the context I provide you. "
         "In your response, do not include ANY text other than the introductory scene. NO greetings, analysis, checklists, reasoning, or meta-commentary. "
@@ -2100,7 +1944,6 @@ def generate_narrative(
         f"{json.dumps(world.get('characters', []))}\\n"
         "REMEMBER: Output ONLY the narrative text for the scene. Nothing else."
     )
-    # --- END SIMPLIFIED INTRO PROMPT ---
 
     log_prompt( # Log the intro prompt
         "Intro Scene Generation Prompt",
@@ -2113,17 +1956,16 @@ def generate_narrative(
         user_prompt=intro_user_prompt,
         max_completion_tokens=250,
 
-        validate_fn=make_number_validator( # <<< UPDATE THIS CALL
+        validate_fn=make_number_validator(
             allowed_atoms=set(), 
             forbidden_atoms=set(), 
             operand_count=0, 
-            correct_result_for_beat=-999, # <<< ADDED PLACEHOLDER
+            correct_result_for_beat=-999,
             strict_zero=True 
         ),
         retries=3, 
         sample_index=sample_index
     )
-    # --- END SIMPLIFIED INTRO CALL ---
 
     # --- ADD EXPLICIT LOGGING FOR THE RESULT OF INTRO GENERATION ---
     log_prompt(
@@ -2131,14 +1973,8 @@ def generate_narrative(
         prompt=f"Final Generated Intro Text (after retries and validation):\n{intro_text if intro_text else 'None (generation failed, was invalid, or API returned no content)'}",
         sample_index=sample_index
     )
-    # --- END ADDED LOGGING ---
 
     if intro_text and len(encoder.encode(intro_text)) <= config.DEFAULT_MAX_TOTAL_TOKENS:
-        # --- REMOVE OLD VALIDATOR/RETRY LINES --- 
-
-
-
-        # --- END REMOVAL --- 
         scenes.append(intro_text)
         tokens_used += len(encoder.encode(intro_text))
         logger.info("Generated introductory scene.")
@@ -2183,7 +2019,7 @@ def generate_narrative(
         logger.error(f"Unexpected error during recursive narrative generation: {e}", exc_info=True)
         return None # Indicate failure
 
-    # --- Final Assembly (using the modified context) ---
+    # Final Assembly
     if not context.scenes: # Check if any scenes were generated (intro might have failed too)
         logger.error("Narrative generation resulted in no scenes.")
         return None
@@ -2223,7 +2059,6 @@ def generate_single_sample(sample_index: int) -> dict | None:
             return None
 
         logger.info(f"[Sample {sample_index + 1}] Building random AST...")
-        # Use config for build_random_ast parameters
         ast = build_random_ast(max_ops=config.DEFAULT_MAX_OPS, max_branch=config.DEFAULT_MAX_BRANCH)
         validate_ast(ast)
         ast_prefix_string = ast_to_prefix(ast)
@@ -2275,8 +2110,8 @@ def generate_single_sample(sample_index: int) -> dict | None:
             "metadata": {
                 "generation_timestamp": datetime.datetime.now().isoformat(),
                 "model_used": MODEL,
-                "max_ops": config.DEFAULT_MAX_OPS, # Use config
-                "max_branch": config.DEFAULT_MAX_BRANCH, # Use config
+                "max_ops": config.DEFAULT_MAX_OPS,
+                "max_branch": config.DEFAULT_MAX_BRANCH,
                 "atom_min_value": config.ATOM_MIN_VALUE,
                 "atom_max_value": config.ATOM_MAX_VALUE,
                 "max_beat_retries": config.MAX_BEAT_RETRIES,
@@ -2285,9 +2120,9 @@ def generate_single_sample(sample_index: int) -> dict | None:
                     "postorder_llm_anchor_v2_strict_validate"
                     if (config.USE_NARRATIVE_ANCHORS and config.USE_LLM_NAMING)
                     else (
-                        "postorder_thematic_anchors_v2_strict_validate" # Changed v1 to v2 or similar
+                        "postorder_thematic_anchors_v2_strict_validate"
                         if config.USE_NARRATIVE_ANCHORS
-                        else "postorder_strict_validation_v2_strict_validate" # Changed v1 to v2 or similar
+                        else "postorder_strict_validation_v2_strict_validate"
                     )
                 ),
                  "num_few_shot_examples": config.NUM_FEW_SHOT_EXAMPLES, # Add few-shot count
@@ -2338,7 +2173,7 @@ def main(
     logger.info(
         f"Script started. Generating {num_samples} samples using up to {max_workers} workers."
     )
-    logger.info(f"Using {config.NUM_FEW_SHOT_EXAMPLES} few-shot examples for narrative generation.") # Log few-shot count
+    logger.info(f"Using {config.NUM_FEW_SHOT_EXAMPLES} few-shot examples for narrative generation.")
 
     samples_generated_successfully = 0
     samples_failed = 0
@@ -2405,8 +2240,8 @@ def main(
     logger.info(f"Total samples attempted: {num_samples}")
     logger.info(f"Successfully generated and written: {samples_generated_successfully}")
     logger.info(f"Failed generations or writes: {samples_failed}")
-    total_count   = num_samples # Use the function argument
-    success_count = samples_generated_successfully # Use the counter for written samples
+    total_count   = num_samples
+    success_count = samples_generated_successfully
     success_rate  = (success_count / total_count * 100) if total_count else 0
     logger.info(f"Overall success rate (generated AND written): {success_rate:.2f}% ({success_count}/{total_count})")
     logger.info(f"Total time: {total_time:.2f} seconds")
@@ -2417,43 +2252,7 @@ def main(
     logging.shutdown()
 
 
-
-def clean_snippet(text: str, max_len: int = config.DEFAULT_SNIPPET_MAX_LEN) -> str: # Use config
-    """Removes common model analysis/checklist lines and takes the last part."""
-    if not text:
-        return "The story begins..."
-
-
-    lines = text.splitlines()
-    cleaned_lines = [
-        line for line in lines
-        if not re.match(
-            r"^\s*(-|\*|\d+\.|Critique|Checklist|Yes|No|Draft \d+|Option \d+|\[.*?\]:|MUST INCLUDE|MUST AVOID|Problem:|REASONING:|GOOD:|BAD:|Confidence Score:|Mental Sandbox:|Outcome is|Narrative:|Generation:|Rules:|System:|User:|Okay|Check\.|REMINDER:|Instructions:|Task:|^\?|^\s*$)", # Added more patterns
-            line.strip(),
-            re.IGNORECASE
-        )
-        # Add a check for lines that seem like prompt echoing
-        and not line.strip().startswith(('Imply the sum', 'reference to the previous', 'Narrate comparing', 'This scene resolves')) # Add more prompt fragments if needed
-    ]
-
-
-    cleaned_text = "\n".join(cleaned_lines).strip()
-    if not cleaned_text: # Handle case where cleaning removed everything
-
-        original_lines = [line for line in lines if line.strip()]
-        if original_lines:
-            cleaned_text = original_lines[-1].strip()
-        else: # If original was also effectively empty
-            return "Previously..." # Or some other placeholder
-
-
-    return cleaned_text[-max_len:]
-
-
 if __name__ == "__main__":
-
-
-
     main(
         config,
         num_samples=config.NUM_SAMPLES_TO_GENERATE,

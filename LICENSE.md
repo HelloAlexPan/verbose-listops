@@ -2,19 +2,22 @@
 
 **tl;dr (Too Long; Didn't Read) - Summary of RCCL 1.4:**
 
-*   **Free for Non-Commercial & Academic Use:** You can freely use, copy, modify, and share the software for any non-commercial or academic purposes.
+* **Free for Non-Commercial & Academic Use:** You can freely use, copy, modify, and share the software for any non-commercial or academic purposes.
 
-*   **Commercial Use (Not Hosting) - Unmodified Software:** If you use the software commercially (but not for hosting) *without making any changes to the code*, you can do so. You just need to notify the Original Licensor. No fee or code sharing is required.
+* **Commercial Use (Not Hosting) - Unmodified Software:** If you use the software commercially (but not for hosting) *without making any changes to the code*, you can do so. You just need to notify the Original Licensor. No fee or code sharing is required.
 
-*   **Commercial Use (Not Hosting) - Modified Software:** If you *modify the software's code* and then use it commercially (but not for hosting), you have two options:
-    1.  **Contribute Back:** Merge your modifications back to the Original Licensor's main repository.
-    2.  **Pay a Fee:** Alternatively, arrange a separate commercial license agreement and pay a fee to the Original Licensor.
+* **Commercial Use (Not Hosting) - Modified Software:** If you *modify the software's code* and then use it commercially (but not for hosting), you have two options:
 
-*   **Commercial Hosting by Others:** You **can** host the software commercially as a service.
-    *   If your hosting service involves *any modifications* to the software or uses service-specific code/configurations to run the hosted service, you **must** merge these modifications and service-specific elements back to the Original Licensor's main repository. The option to pay a fee instead is **not** available for hosting-related modifications.
-    *   If you host the software commercially completely unmodified and without any service-specific code/configurations that would be considered Modifications, you just need to notify the Original Licensor.
+  1. **Contribute Back:** Merge your modifications back to the Original Licensor's main repository.
+  2. **Pay a Fee:** Alternatively, arrange a separate commercial license agreement and pay a fee to the Original Licensor.
 
-*   **Modifications Always Trace Back:** If modifications are contributed, they must always go back to the Original Licensor's repository, no matter how many times the software has been forked and re-shared by others.
+* **Commercial Hosting by Others:** You **can** host the software commercially as a service.
+
+  * If your hosting service involves *any modifications* to the software or uses service-specific code/configurations to run the hosted service, you **must** merge these modifications and service-specific elements back to the Original Licensor's main repository. The option to pay a fee instead is **not** available for hosting-related modifications.
+  
+  * If you host the software commercially completely unmodified and without any service-specific code/configurations that would be considered Modifications, you just need to notify the Original Licensor.
+
+* **Modifications Always Trace Back:** If modifications are contributed, they must always go back to the Original Licensor's repository, no matter how many times the software has been forked and re-shared by others.
 
 ***This is a simplified summary and not a substitute for the full license text. The complete Reciprocal Commercial Contribution License (RCCL) Version 1.4 below is the legally binding document.***
 
@@ -28,102 +31,124 @@ This version removes the prohibition on third-party Commercial Hosting and expli
 
 ## 1. Definitions
 
-   a. **"Software"** means the source code, object code (if any), and associated documentation, in its original form as first distributed under this License by the Original Licensor, and any Modifications thereto.
+1. **"Software"** means the source code, object code (if any), and associated documentation, in its original form as first distributed under this License by the Original Licensor, and any Modifications thereto.
 
-   b. **"Original Licensor"** means the copyright holder(s) and/or entity(-ies) that first distribute(s) the Software under this Version of the License.
+2. **"Original Licensor"** means the copyright holder(s) and/or entity(-ies) that first distribute(s) the Software under this Version of the License.
 
-   c. **"Licensor"** means the Original Licensor or any subsequent entity that distributes the Software or Modifications under the terms of this License.
+3. **"Licensor"** means the Original Licensor or any subsequent entity that distributes the Software or Modifications under the terms of this License.
 
-   d. **"Licensee"** or **"You"** means an individual or entity exercising rights granted under this License.
+4. **"Licensee"** or **"You"** means an individual or entity exercising rights granted under this License.
 
-   e. **"Commercial Use"** means any use of the Software, or any part thereof, for direct or indirect commercial advantage or monetary compensation. This includes, but is not limited to:
-      i. Integrating the Software into a product or service that is sold, licensed, or otherwise monetized.
-      ii. Using the Software in a production environment for business operations that generate revenue.
-      iii. Providing paid support, consultancy, or services related to the Software.
-      iv. Using the Software to generate revenue through advertising or other means.
-      v. Engaging in Commercial Hosting.
+5. **"Commercial Use"** means any use of the Software, or any part thereof, for direct or indirect commercial advantage or monetary compensation.
+   This includes, but is not limited to:
 
-   f. **"Commercial Hosting"** means operating the Software, or making its functionality available, on any server, cloud infrastructure, or other computing environment, whether physical or virtual, to provide access or services to third parties over a network (e.g., internet, intranet) for Commercial Use.
+   * Integrating the Software into a product or service that is sold, licensed, or otherwise monetized.
+   
+   * Using the Software in a production environment for business operations that generate revenue.
+   
+   * Providing paid support, consultancy, or services related to the Software.
+   
+   * Using the Software to generate revenue through advertising or other means.
+   
+   * Engaging in Commercial Hosting.
 
-   g. **"Modifications"** means any changes, enhancements, bug fixes, patches, additions, deletions, or derivative works of the Software created by You or any other party, which are not part of the Software as originally distributed by the Original Licensor. This includes, in the context of Commercial Hosting, service-specific configurations, deployment scripts, or operational code directly related to providing the Software as a hosted service, to the extent they are based on or interact closely with the Software.
+6. **"Commercial Hosting"** means operating the Software, or making its functionality available, on any server, cloud infrastructure, or other computing environment, whether physical or virtual, to provide access or services to third parties over a network (e.g., internet, intranet) for Commercial Use.
 
-   h. **"Upstream Repository"** means the primary source code repository officially designated by the **Original Licensor** for the Software, where Contributions (as defined in Section 1i) are to be submitted. The Original Licensor shall make the location of the Upstream Repository known (e.g., in the Software's documentation or source files).
+7. **"Modifications"** means any changes, enhancements, bug fixes, patches, additions, deletions, or derivative works of the Software created by You or any other party, which are not part of the Software as originally distributed by the Original Licensor.
+   This includes, in the context of Commercial Hosting, service-specific configurations, deployment scripts, or operational code directly related to providing the Software as a hosted service, to the extent they are based on or interact closely with the Software.
 
-   i. **"Contribution"** means any Modifications submitted to the Upstream Repository pursuant to Section 4.
+8. **"Upstream Repository"** means the primary source code repository officially designated by the **Original Licensor** for the Software, where Contributions (as defined in Section 1i) are to be submitted.
+   The Original Licensor shall make the location of the Upstream Repository known (e.g., in the Software's documentation or source files).
+
+9. **"Contribution"** means any Modifications submitted to the Upstream Repository pursuant to Section 4.
 
 ## 2. Grant of Rights and Conditions of Distribution
 
-   a. **Non-Commercial and Academic Use:** Subject to the terms and conditions of this License, Licensor hereby grants You a worldwide, royalty-free, non-exclusive, non-transferable (except as expressly permitted herein) license to use, copy, and modify the Software solely for academic or non-commercial purposes.
+1. **Non-Commercial and Academic Use:** Subject to the terms and conditions of this License, Licensor hereby grants You a worldwide, royalty-free, non-exclusive, non-transferable (except as expressly permitted herein) license to use, copy, and modify the Software solely for academic or non-commercial purposes.
 
-   b. **Distribution for Non-Commercial and Academic Use:** You may distribute the Software (original or with Your Modifications) solely for academic or non-commercial purposes, provided that You comply with Section 2c.
+2. **Distribution for Non-Commercial and Academic Use:** You may distribute the Software (original or with Your Modifications) solely for academic or non-commercial purposes, provided that You comply with Section 2c.
 
-   c. **Conditions for All Distribution:** Any distribution of the Software by You, whether in its original form or with Modifications, and whether for commercial or non-commercial purposes (to the extent permitted by this License), must be made under the terms of this Reciprocal Commercial Contribution License (RCCL) Version 1.4 or a later version if authorized by the Original Licensor. You must include a complete copy of this License with any such distribution and retain all original copyright and license notices. You may not offer or impose any terms on the Software that alter or restrict the terms of this License or the recipients' rights hereunder.
+3. **Conditions for All Distribution:** Any distribution of the Software by You, whether in its original form or with Modifications, and whether for commercial or non-commercial purposes (to the extent permitted by this License), must be made under the terms of this Reciprocal Commercial Contribution License (RCCL) Version 1.4 or a later version if authorized by the Original Licensor.
+   You must include a complete copy of this License with any such distribution and retain all original copyright and license notices.
+   You may not offer or impose any terms on the Software that alter or restrict the terms of this License or the recipients' rights hereunder.
 
 ## 3. Conditions for Commercial Use
 
-   A. **General Commercial Use (Excluding Commercial Hosting):**
+1. **General Commercial Use (Excluding Commercial Hosting):**
 
-      i. **With Modifications:** If Your Commercial Use (excluding Commercial Hosting) involves the Software with Modifications (whether made by You or obtained from a third party), You must, within thirty (30) calendar days of the first instance of such Commercial Use, choose to comply with *either* the terms of Section 4 (Contribution-Back Option) *or* the terms of Section 5 (License-Fee Option).
+   * **With Modifications:** If Your Commercial Use (excluding Commercial Hosting) involves the Software with Modifications (whether made by You or obtained from a third party), You must, within thirty (30) calendar days of the first instance of such Commercial Use, choose to comply with *either* the terms of Section 4 (Contribution-Back Option) *or* the terms of Section 5 (License-Fee Option).
 
-      ii. **Without Modifications:** If Your Commercial Use (excluding Commercial Hosting) involves the Software without any Modifications, the obligations set forth in Section 4 (Contribution-Back Option) and Section 5 (License-Fee Option) shall not apply. In this scenario, Your right to such Commercial Use is granted provided You comply with Section 6 (Notification Requirement).
+   * **Without Modifications:** If Your Commercial Use (excluding Commercial Hosting) involves the Software without any Modifications, the obligations set forth in Section 4 (Contribution-Back Option) and Section 5 (License-Fee Option) shall not apply.
+       In this scenario, Your right to such Commercial Use is granted provided You comply with Section 6 (Notification Requirement).
 
-   B. **Commercial Hosting:**
+2. **Commercial Hosting:**
 
-      You are permitted to engage in Commercial Hosting of the Software subject to the following conditions:
+   You are permitted to engage in Commercial Hosting of the Software subject to the following conditions:
 
-      i. If Your Commercial Hosting involves Modifications (as defined in Section 1g, including but not limited to service-specific configurations, deployment scripts, or operational code directly related to providing the Software as a hosted service), You **must** comply with the terms of Section 4 (Contribution-Back Option) within thirty (30) calendar days of the first instance of such Commercial Hosting. For clarity, the License-Fee Option (Section 5) is **not** available as an alternative for Modifications in the context of Commercial Hosting.
+   * If Your Commercial Hosting involves Modifications (as defined in Section 1g, including but not limited to service-specific configurations, deployment scripts, or operational code directly related to providing the Software as a hosted service), You **must** comply with the terms of Section 4 (Contribution-Back Option) within thirty (30) calendar days of the first instance of such Commercial Hosting.
+      For clarity, the License-Fee Option (Section 5) is **not** available as an alternative for Modifications in the context of Commercial Hosting.
 
-      ii. If Your Commercial Hosting involves the Software without any Modifications (meaning no service-specific configurations, deployment scripts, or operational code related to the service that would be considered Modifications as per Section 1g), You must comply with Section 6 (Notification Requirement).
+   * If Your Commercial Hosting involves the Software without any Modifications (meaning no service-specific configurations, deployment scripts, or operational code related to the service that would be considered Modifications as per Section 1g), You must comply with Section 6 (Notification Requirement).
 
-   C. **Notification Requirement for All Commercial Use:** In all instances of Commercial Use (including Commercial Hosting), You must comply with the Notification Requirement as set forth in Section 6.
+3. **Notification Requirement for All Commercial Use:** In all instances of Commercial Use (including Commercial Hosting), You must comply with the Notification Requirement as set forth in Section 6.
 
-   D. **Permitted Use:** Commercial Use is only permitted if You comply with the applicable conditions outlined in this Section 3. No rights for Commercial Use are granted beyond those in Section 2a if these conditions are not met.
+4. **Permitted Use:** Commercial Use is only permitted if You comply with the applicable conditions outlined in this Section 3.
+   No rights for Commercial Use are granted beyond those in Section 2a if these conditions are not met.
 
 ## 4. Contribution-Back Option for Commercial Use (Applicable if Modifications are involved)
 
-   If You engage in Commercial Use involving Modifications to the Software, and You are required or choose to comply with this Section 4, You must, within thirty (30) calendar days of the first instance of such Commercial Use:
+If You engage in Commercial Use involving Modifications to the Software, and You are required or choose to comply with this Section 4, You must, within thirty (30) calendar days of the first instance of such Commercial Use:
 
-   a. Submit all Modifications that You have made or are using (if not already present in the Upstream Repository) to a specific branch (as may be designated by the **Original Licensor**) in the **Upstream Repository** (which is the repository designated by the **Original Licensor**). This obligation applies to Modifications created by You. If the Software You are using commercially already contains Modifications made by others that have not yet been contributed to the Upstream Repository, You are strongly encouraged, though not strictly obligated under this clause for *those specific pre-existing third-party modifications*, to facilitate their contribution or notify the Original Licensor. Your primary obligation is for *Your* Modifications.
+1. Submit all Modifications that You have made or are using (if not already present in the Upstream Repository) to a specific branch (as may be designated by the **Original Licensor**) in the **Upstream Repository** (which is the repository designated by the **Original Licensor**).
+   This obligation applies to Modifications created by You.
+   If the Software You are using commercially already contains Modifications made by others that have not yet been contributed to the Upstream Repository, You are strongly encouraged, though not strictly obligated under this clause for *those specific pre-existing third-party modifications*, to facilitate their contribution or notify the Original Licensor.
+   Your primary obligation is for *Your* Modifications.
 
-   b. These Contributions must be submitted in a form and format reasonably acceptable for review and potential integration by the Original Licensor (e.g., as a pull request or patch series).
+2. These Contributions must be submitted in a form and format reasonably acceptable for review and potential integration by the Original Licensor (e.g., as a pull request or patch series).
 
-   c. By submitting Contributions, You grant the Original Licensor a perpetual, worldwide, non-exclusive, royalty-free, irrevocable, sublicensable license to use, reproduce, modify, prepare derivative works of, distribute, publicly perform, publicly display, and sublicense such Contributions as part of the Software or any other products or services of the Original Licensor, under this License or any other license terms chosen by the Original Licensor. You represent that You have the right to grant these rights for all submitted Contributions.
+3. By submitting Contributions, You grant the Original Licensor a perpetual, worldwide, non-exclusive, royalty-free, irrevocable, sublicensable license to use, reproduce, modify, prepare derivative works of, distribute, publicly perform, publicly display, and sublicense such Contributions as part of the Software or any other products or services of the Original Licensor, under this License or any other license terms chosen by the Original Licensor.
+   You represent that You have the right to grant these rights for all submitted Contributions.
 
-   d. The Contributions You submit will, upon submission, be licensed to all other parties under the terms of this Reciprocal Commercial Contribution License (RCCL).
+4. The Contributions You submit will, upon submission, be licensed to all other parties under the terms of this Reciprocal Commercial Contribution License (RCCL).
 
-   e. The Original Licensor has the right, but not the obligation, to review, accept, reject, or request further changes to any submitted Contributions. The act of submission fulfills Your obligation under this Section 4, provided it is made in good faith and meets the requirements herein, regardless of the Original Licensor's decision to integrate the Contributions.
+5. The Original Licensor has the right, but not the obligation, to review, accept, reject, or request further changes to any submitted Contributions.
+   The act of submission fulfills Your obligation under this Section 4, provided it is made in good faith and meets the requirements herein, regardless of the Original Licensor's decision to integrate the Contributions.
 
 ## 5. License-Fee Option for Commercial Use (Applicable if Modifications are involved and NOT for Commercial Hosting Modifications)
 
-   In lieu of fulfilling the obligations set forth in Section 4 (Contribution-Back Option), if You engage in Commercial Use (excluding Commercial Hosting involving Modifications) that involves Modifications to the Software, and You choose to comply with this Section 5, You must:
+In lieu of fulfilling the obligations set forth in Section 4 (Contribution-Back Option), if You engage in Commercial Use (excluding Commercial Hosting involving Modifications) that involves Modifications to the Software, and You choose to comply with this Section 5, You must:
 
-   a. Enter into a separate written commercial license agreement with the **Original Licensor**.
+1. Enter into a separate written commercial license agreement with the **Original Licensor**.
 
-   b. Pay the **Original Licensor** a license fee, the amount, currency, and payment terms of which shall be mutually agreed upon in said separate written commercial license agreement.
+2. Pay the **Original Licensor** a license fee, the amount, currency, and payment terms of which shall be mutually agreed upon in said separate written commercial license agreement.
 
-   c. This fee shall be due within thirty (30) calendar days of the first instance of the applicable Commercial Use involving Modifications, unless otherwise stipulated in the separate commercial license agreement.
+3. This fee shall be due within thirty (30) calendar days of the first instance of the applicable Commercial Use involving Modifications, unless otherwise stipulated in the separate commercial license agreement.
 
-   d. Compliance with this Section 5 is contingent upon the full execution of the separate commercial license agreement with the Original Licensor and timely payment of the agreed-upon fees.
+4. Compliance with this Section 5 is contingent upon the full execution of the separate commercial license agreement with the Original Licensor and timely payment of the agreed-upon fees.
 
 ## 6. Notification Requirement for Commercial Use
 
-   Irrespective of whether Your Commercial Use involves Modifications or does not involve Modifications, You shall notify the **Original Licensor** in writing (e.g., via email to a designated address provided by Original Licensor) within thirty (30) calendar days of the first instance of any Commercial Use. This notification must include:
+Irrespective of whether Your Commercial Use involves Modifications or does not involve Modifications, You shall notify the **Original Licensor** in writing (e.g., via email to a designated address provided by Original Licensor) within thirty (30) calendar days of the first instance of any Commercial Use.
 
-   a. The specific version(s) of the Software being used.
+This notification must include:
 
-   b. If Modifications were made and You are opting for Section 5, or if no Modifications were made, a summary of such Modifications (or a statement that no Modifications were made). If opting for Section 4, the submission of Contributions serves this purpose for the modifications themselves.
+1. The specific version(s) of the Software being used.
 
-   c. A brief description of the nature of the Commercial Use (including if it is Commercial Hosting).
+2. If Modifications were made and You are opting for Section 5, or if no Modifications were made, a summary of such Modifications (or a statement that no Modifications were made).
+   If opting for Section 4, the submission of Contributions serves this purpose for the modifications themselves.
 
-   d. If applicable (i.e., if Modifications were made for non-hosting commercial use), an indication of whether You intend to comply via Section 4 or Section 5.
+3. A brief description of the nature of the Commercial Use (including if it is Commercial Hosting).
+
+4. If applicable (i.e., if Modifications were made for non-hosting commercial use), an indication of whether You intend to comply via Section 4 or Section 5.
 
 ## 7. Compliance, Termination, and Effect of Termination
 
-   a. This License and the rights granted hereunder will terminate automatically and immediately without notice if You fail to comply with any of its terms and conditions, particularly Sections 3 (Conditions for Commercial Use), 4 (Contribution-Back Option, if applicable or chosen), 5 (License-Fee Option, if applicable or chosen), or 6 (Notification Requirement).
+1. This License and the rights granted hereunder will terminate automatically and immediately without notice if You fail to comply with any of its terms and conditions, particularly Sections 3 (Conditions for Commercial Use), 4 (Contribution-Back Option, if applicable or chosen), 5 (License-Fee Option, if applicable or chosen), or 6 (Notification Requirement).
 
-   b. Upon termination, You must immediately cease all use, copying, modification, and distribution of the Software. You must also destroy all copies of the Software and Modifications in Your possession or control.
+2. Upon termination, You must immediately cease all use, copying, modification, and distribution of the Software.
+   You must also destroy all copies of the Software and Modifications in Your possession or control.
 
-   c. Provisions that, by their nature, are intended to survive termination (including, but not limited to, Sections 1, 4c, 7c, 8, 9, 10, 11, 12, and 13) shall survive any termination of this License.
+3. Provisions that, by their nature, are intended to survive termination (including, but not limited to, Sections 1, 4c, 7c, 8, 9, 10, 11, 12, and 13) shall survive any termination of this License.
 
 ## 8. Disclaimer of Warranty
 
@@ -135,9 +160,9 @@ IN NO EVENT SHALL THE ORIGINAL LICENSOR, ANY OTHER LICENSOR, OR ANY COPYRIGHT HO
 
 ## 10. Copyright and Trademarks
 
-a. You must not remove or alter any copyright, patent, trademark, or attribution notices in the Software.
+1. You must not remove or alter any copyright, patent, trademark, or attribution notices in the Software.
 
-b. This License does not grant You any rights to use the Original Licensor's (or any other Licensor's) names, logos, or trademarks, except as may be necessary to comply with notice requirements.
+2. This License does not grant You any rights to use the Original Licensor's (or any other Licensor's) names, logos, or trademarks, except as may be necessary to comply with notice requirements.
 
 ## 11. Governing Law and Jurisdiction
 
@@ -145,9 +170,9 @@ This License shall be governed by and construed in accordance with the laws of *
 
 ## 12. Entire Agreement and Severability
 
-a. This License constitutes the entire agreement between You and the Licensor(s) concerning the subject matter hereof.
+1. This License constitutes the entire agreement between You and the Licensor(s) concerning the subject matter hereof.
 
-b. If any provision of this License is held to be unenforceable or invalid, such provision shall be reformed to the minimum extent necessary to make it enforceable, and the remaining provisions shall continue in full force and effect.
+2. If any provision of this License is held to be unenforceable or invalid, such provision shall be reformed to the minimum extent necessary to make it enforceable, and the remaining provisions shall continue in full force and effect.
 
 ## 13. No Waiver
 

@@ -1,25 +1,22 @@
 # Reciprocal Commercial Contribution License (RCCL) Version 1.5
 
-**tl;dr (Too Long; Didn't Read) - Summary of RCCL 1.5:**
+**Quick Guide to RCCL 1.5:**
 
-*   **Free for Non-Commercial & Academic Use:** You can freely use, copy, modify, and share the software for any non-commercial or academic purposes, *but always under this RCCL license*.
+*   **For Personal & Academic Projects:** Feel free to use, adapt, and share the software however you'd like, as long as you keep it under this RCCL license.
 
-*   **Commercial Use (Not Hosting) - Unmodified Software:** Permitted with notification.
+*   **For Business Use (Not a Hosting Service):** 
+    * Using the software as-is? Just drop us a quick note!
+    * Making changes to the code? You have two friendly options:
+        1. Share your improvements with the community by contributing them back
+        2. Support the project by purchasing a commercial license
 
-*   **Commercial Use (Not Hosting) - Modified Software:** If you *modify the software's code* and then use it commercially (but not for hosting), you have two options:
+*   **For Hosting Services:** You're welcome to host the software commercially!
+    * If you customize the software for your hosting service, share your improvements with the community by contributing them back
+    * If you're hosting the software exactly as-is, just drop us a quick note
 
-    1. **Contribute Back:** Merge your modifications back to the Original Licensor's main repository.
-    2. **Pay a Fee:** Alternatively, arrange a separate commercial license agreement and pay a fee to the Original Licensor.
+*   **Community First:** Any improvements made to the software, unless under a commercial license, should find their way back to the original project, helping everyone benefit from shared progress.
 
-*   **Commercial Hosting by Others:** You **can** host the software commercially as a service.
-
-    * If your hosting service involves *any modifications* to the software or uses service-specific code/configurations to run the hosted service, you **must** merge these modifications and service-specific elements back to the Original Licensor's main repository. The option to pay a fee instead is **not** available for hosting-related modifications.
-    
-    * If you host the software commercially completely unmodified and without any service-specific code/configurations that would be considered Modifications, you just need to notify the Original Licensor.
-
-*   **Modifications Always Trace Back:** If modifications are contributed, they must always go back to the Original Licensor's repository, no matter how many times the software has been forked and re-shared by others.
-
-***This is a simplified summary and not a substitute for the full license text. The complete Reciprocal Commercial Contribution License (RCCL) Version 1.5 below is the legally binding document.***
+***Note: This is a friendly overview - the full license text below contains all the legal details.***
 
 ---
 

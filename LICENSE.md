@@ -1,6 +1,6 @@
 # Reciprocal Commercial Contribution License (RCCL) Version 1.5
 
-**Quick Guide to RCCL 1.5:**
+**tl;dr (Too Long; Didn't Read) - Summary of RCCL 1.5:**
 
 *   **For Personal & Academic Projects:** Feel free to use, adapt, and share the software however you'd like, as long as you keep it under this RCCL license.
 

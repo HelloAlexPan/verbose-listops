@@ -7,6 +7,9 @@ from openai import OpenAI
 from dotenv import load_dotenv
 import re
 import argparse
+import random
+import threading
+import requests
 
 # --- Initial configuration logging ---
 # Replace lines 9-31 with more concise setup info
@@ -20,12 +23,19 @@ else:
     print("⚠️ WARNING: OpenRouter API key not found!")
 
 # Recommended to use a fast and capable model for validation.
-MODEL_FOR_VALIDATION = os.environ.get("VALIDATION_MODEL", "google/gemini-2.5-pro-preview-03-25") 
-MAX_WORKERS = int(os.environ.get("VALIDATION_MAX_WORKERS", 100))  # Increased to better use 1k RPS capability
+MODEL_FOR_VALIDATION = os.environ.get("VALIDATION_MODEL", "google/gemini-2.5-pro-preview-03-25")
+MAX_WORKERS = int(os.environ.get("VALIDATION_MAX_WORKERS", 100))
 LOG_LEVEL = logging.DEBUG
 # Default dataset path, can be overridden by command-line argument
 DEFAULT_DATASET_FILE_PATH = "datasets/DATASET_10000tok_8-mxops_3-arity_6-mxbrch_google_gemini-2.5-pro-preview-03-25_20250508-1414.jsonl"
 # This default is now handled by argparse
+
+# --- Rate Limiter Configuration (for validator.py) ---
+VALIDATION_MAX_REQUESTS_PER_SECOND = 900.0
+VALIDATION_MIN_REQUEST_INTERVAL = 0.001
+VALIDATION_BUCKET_CAPACITY = 100
+VALIDATION_LIMITS_CHECK_INTERVAL = 5  # seconds
+VALIDATION_JITTER = 0.01
 
 # --- Logging Setup ---
 logging.basicConfig(level=LOG_LEVEL, format='%(asctime)s - %(levelname)s - [%(threadName)s] - %(message)s')
@@ -44,6 +54,122 @@ else:
     except Exception as e:
         logger.error(f"Failed to initialize client: {e}")
         print(f"⚠️ ERROR initializing client: {e}")
+
+# --- Rate Limiter Class (copied from verbose-listops.py and adapted) ---
+class RateLimiter:
+    """
+    Thread-safe rate limiter that implements a token bucket algorithm.
+    Allows for bursts of requests while maintaining a long-term rate limit.
+    """
+    def __init__(self, max_requests_per_second: float = 40.0,
+                min_interval: float = 0.05,
+                bucket_capacity: int = 5,
+                jitter: float = 0.1):
+        self.max_requests_per_second = max_requests_per_second
+        self.min_interval = min_interval
+        self.bucket_capacity = bucket_capacity
+        self.jitter = jitter
+        self.tokens = float(bucket_capacity) # Ensure tokens is float
+        self.last_refill_time = time.time()
+        self.lock = threading.Lock()
+        self.last_limits_check_time = 0.0 # Ensure float
+        self.limits_check_interval = VALIDATION_LIMITS_CHECK_INTERVAL # Use constant
+
+        logger.info(f"Rate limiter initialized for validator: {self.max_requests_per_second} req/s, "
+                    f"{self.min_interval}s min interval, bucket capacity {self.bucket_capacity}, jitter {self.jitter}")
+
+    def wait_if_needed(self):
+        current_time = time.time()
+        if current_time - self.last_limits_check_time > self.limits_check_interval:
+            self.update_limits_from_api()
+
+        with self.lock:
+            current_time = time.time()
+            elapsed = current_time - self.last_refill_time
+            new_tokens = elapsed * self.max_requests_per_second
+            self.tokens = min(float(self.bucket_capacity), self.tokens + new_tokens)
+            self.last_refill_time = current_time
+
+            if self.tokens >= 1.0:
+                self.tokens -= 1.0
+                return 0.0
+
+            wait_time = (1.0 - self.tokens) / self.max_requests_per_second
+            wait_time = max(wait_time, self.min_interval)
+            if self.jitter > 0:
+                wait_time += random.uniform(0, self.jitter)
+            
+            time.sleep(wait_time)
+            self.tokens = 0.0
+            self.last_refill_time = time.time()
+            return wait_time
+
+    def update_limits_from_api(self):
+        if not OPENROUTER_API_KEY or OPENROUTER_API_KEY == "YOUR_OPENROUTER_API_KEY_HERE":
+            logger.warning("[ValidatorRateLimiter] Cannot check OpenRouter limits: No valid API key")
+            return
+
+        try:
+            logger.info("[ValidatorRateLimiter] Checking OpenRouter rate limits and remaining credits...")
+            response = requests.get(
+                url="https://openrouter.ai/api/v1/auth/key",
+                headers={"Authorization": f"Bearer {OPENROUTER_API_KEY}"},
+                timeout=10
+            )
+
+            if response.status_code == 200:
+                data = response.json()
+                account_data = data.get("data", {})
+                rate_limit_info = account_data.get("rate_limit", {})
+                current_rate_for_log = self.max_requests_per_second
+                limit_adjusted = False
+
+                if rate_limit_info:
+                    requests_limit = rate_limit_info.get("requests")
+                    interval_str = rate_limit_info.get("interval", "") # Renamed to avoid conflict
+
+                    if requests_limit and interval_str:
+                        if interval_str.endswith("s") and interval_str[:-1].isdigit():
+                            interval_seconds = int(interval_str[:-1])
+                            if interval_seconds > 0:
+                                rps = requests_limit / interval_seconds
+                                # Use VALIDATION_MAX_REQUESTS_PER_SECOND for capping
+                                new_rate = min(float(rps) * 0.8, VALIDATION_MAX_REQUESTS_PER_SECOND)
+                                if new_rate != self.max_requests_per_second:
+                                    self.max_requests_per_second = new_rate
+                                    limit_adjusted = True
+                                    current_rate_for_log = new_rate
+                
+                usage = account_data.get("usage")
+                limit_val = account_data.get("limit") # Renamed to avoid conflict
+                limit_remaining = account_data.get("limit_remaining")
+                
+                log_message_parts = [f"OR Limits (Validator): Current RPS: {current_rate_for_log:.1f}"]
+                if limit_adjusted: log_message_parts.append("(Adjusted)")
+                if usage is not None: log_message_parts.append(f"Usage: ${usage:.4f}")
+                if limit_val is not None and limit_remaining is not None:
+                    log_message_parts.append(f"Credits: Rem ${limit_remaining:.4f} of ${limit_val:.4f}")
+                    if limit_val and limit_remaining and (limit_remaining / limit_val < 0.2):
+                        old_self_rate = self.max_requests_per_second
+                        self.max_requests_per_second = min(self.max_requests_per_second, 10.0)
+                        if old_self_rate != self.max_requests_per_second:
+                            log_message_parts.append(f"LOW CREDITS - RPS reduced to {self.max_requests_per_second:.1f}!")
+                
+                logger.info(", ".join(log_message_parts))
+            else:
+                logger.warning(f"[ValidatorRateLimiter] Failed to get OpenRouter account status: HTTP {response.status_code}")
+        except Exception as e:
+            logger.error(f"[ValidatorRateLimiter] Error checking OpenRouter limits: {e}")
+        
+        self.last_limits_check_time = time.time()
+
+# Instantiate the RateLimiter for the validator
+rate_limiter = RateLimiter(
+    max_requests_per_second=VALIDATION_MAX_REQUESTS_PER_SECOND,
+    min_interval=VALIDATION_MIN_REQUEST_INTERVAL,
+    bucket_capacity=VALIDATION_BUCKET_CAPACITY,
+    jitter=VALIDATION_JITTER
+)
 
 # --- System prompt for validation ---
 # Template-based JSON approach to force proper formatting
@@ -270,6 +396,8 @@ def get_llm_response(sample: dict, sample_id: str) -> str | None:
             if attempt > 0:
                 print(f"Sample {sample_id}: Retry {attempt+1}/3")
             
+            rate_limiter.wait_if_needed() # Added rate limiter call
+            
             # Try to use json_schema response format if available
             try:
                 response = client.chat.completions.create(
@@ -278,7 +406,7 @@ def get_llm_response(sample: dict, sample_id: str) -> str | None:
                         {"role": "system", "content": VALIDATION_SYSTEM_PROMPT},
                         {"role": "user", "content": user_prompt}
                     ],
-                    max_tokens=65000,  # Use maximum output token limit
+                    max_tokens=65000,
                     temperature=0.0,
                     response_format={
                         "type": "json_schema",
@@ -293,26 +421,28 @@ def get_llm_response(sample: dict, sample_id: str) -> str | None:
                 logger.debug(f"[{sample_id}] json_schema format not supported: {schema_error}")
                 try:
                     # Try simple json_object if json_schema is not supported
+                    rate_limiter.wait_if_needed() # Added rate limiter call
                     response = client.chat.completions.create(
                         model=MODEL_FOR_VALIDATION,
                         messages=[
                             {"role": "system", "content": VALIDATION_SYSTEM_PROMPT},
                             {"role": "user", "content": user_prompt}
                         ],
-                        max_tokens=65000,  # Use maximum output token limit
+                        max_tokens=65000,
                         temperature=0.0,
                         response_format={"type": "json_object"}
                     )
                 except Exception as object_error:
                     logger.debug(f"[{sample_id}] json_object format not supported: {object_error}")
                     # Fall back to standard format with no response_format parameter
+                    rate_limiter.wait_if_needed() # Added rate limiter call
                     response = client.chat.completions.create(
                         model=MODEL_FOR_VALIDATION,
                         messages=[
                             {"role": "system", "content": VALIDATION_SYSTEM_PROMPT},
                             {"role": "user", "content": user_prompt}
                         ],
-                        max_tokens=65000,  # Use maximum output token limit
+                        max_tokens=65000,
                         temperature=0.0
                     )
                 
@@ -739,4 +869,13 @@ if __name__ == "__main__":
     elif not client:
         print("❌ ERROR: Client not initialized. Check API key.")
     else:
+        # Perform initial limits check if client is available
+        if rate_limiter and OPENROUTER_API_KEY and OPENROUTER_API_KEY != "YOUR_OPENROUTER_API_KEY_HERE":
+            try:
+                logger.info("[Validator] Performing initial OpenRouter limits check before starting validation...")
+                rate_limiter.update_limits_from_api()
+            except Exception as e_limits: # Renamed to avoid conflict
+                logger.error(f"[Validator] Initial OpenRouter limits check failed: {e_limits}")
+        else:
+            logger.warning("[Validator] Skipping initial OpenRouter limits check: RateLimiter not init, client not init, or API key missing/placeholder.")
         run_validation_process(args.dataset_file_path, args.output_results)

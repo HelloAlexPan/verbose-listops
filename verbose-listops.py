@@ -30,8 +30,8 @@ from dotenv import load_dotenv
 load_dotenv()
 
 # --- Batch Settings ---
-NUM_SAMPLES_TO_GENERATE = 1100  # How many samples to generate in one run
-DEFAULT_MAX_WORKERS = 900   # Number of parallel threads for batch generation
+NUM_SAMPLES_TO_GENERATE = 800  # How many samples to generate in one run
+DEFAULT_MAX_WORKERS = 300   # Number of parallel threads for batch generation
 MODEL = "google/gemini-2.5-pro-preview-03-25"  # OpenRouter model
 DATASETS_DIR = "datasets"    # Directory for saving generated datasets
 PROD_RUN: bool = True       # If True, run validator and clean dataset post-generation
@@ -2232,9 +2232,9 @@ def _generate_narrative_recursive(  # Line ~1315
     narrative_anchor = narrative_anchor_map.get(
         node_id, f"the_unnamed_{node.op}_entity" if isinstance(node, OpNode) else "atom"
     )
-    logger.debug(
-        f"_generate_narrative_recursive (POST-ORDER): processing node {getattr(node, 'op', 'Atom')} with narrative anchor '{narrative_anchor}'"
-    )
+    # logger.debug(
+    #     f"_generate_narrative_recursive (POST-ORDER): processing node {getattr(node, 'op', 'Atom')} with narrative anchor '{narrative_anchor}'"
+    # ) # Replaced by more specific log below for OpNodes
 
     # Log token budget at the start of processing this node
     token_percentage = (context.tokens_used / config.MAX_TOTAL_TOKENS) * 100
@@ -2248,6 +2248,21 @@ def _generate_narrative_recursive(  # Line ~1315
     if isinstance(node, Atom):
         logger.debug(f"Node is Atom ({node.n}), returning.")
         return
+
+    # --- Add detailed OpNode processing log here ---
+    if isinstance(node, OpNode):
+        # This log replaces the one from the removed _generate_narrative_recursive_with_tracking
+        # and provides context for the current operation being processed by this function instance.
+        node_id_for_log = id(node)
+        op_for_log = getattr(node, 'op', 'OpNode_No_Op_Attr') # More robust getattr
+        # The narrative_anchor variable defined a few lines above can be reused if its scope is appropriate,
+        # otherwise, re-fetch or ensure it's correctly representing the current node's anchor.
+        # Using the 'narrative_anchor' defined at the start of this function for consistency:
+        logger.debug(
+            f"[Sample {context.sample_index + 1}] _generate_narrative_recursive: "
+            f"Processing OpNode: {op_for_log}, Anchor: '{narrative_anchor}', Root: {is_root}, "
+            f"Beat: {context.beat_counter['current'] + 1}/{context.beat_counter['total']}" # +1 as beat_counter increments after this
+        )
 
     child_narrative_anchors = []
     for child_index, child in enumerate(node.children):
@@ -3569,8 +3584,11 @@ def generate_single_sample(sample_index: int) -> dict | None:
     original_log_path = os.path.join(llm_turns_log_specific_dir, log_filename_base)
     
     # Track current operation and narrative anchor for more informative log filenames
-    current_op = "unknown"
-    current_anchor = "unknown"
+    # REMOVED: These are no longer reliably tracked at this level due to wrapper removal
+    # nonlocal current_op, current_anchor # Not needed here
+    # current_op = "unknown_setup"
+    # current_anchor = "unknown_setup"
+
 
     try:
         if encoder is None or p_inflect is None:
@@ -3611,38 +3629,36 @@ def generate_single_sample(sample_index: int) -> dict | None:
         logger.debug(f"[Sample {sample_index + 1}] World Info: {world_info}")
 
         # Store the original function reference
-        original_function = _generate_narrative_recursive
+        # original_function = _generate_narrative_recursive
         
         # Create tracking wrapper
-        def _generate_narrative_recursive_with_tracking(node: Node, context: "GenerationContext", is_root: bool):
-            nonlocal current_op, current_anchor
-            node_id = id(node)
-            current_op = getattr(node, 'op', 'UNKNOWN_OP')
-            current_anchor = context.narrative_anchor_map.get(node_id, f"unnamed_{current_op}")
-            # Use sanitized anchor name for logs
-            sanitized_anchor = str(current_anchor).replace(" ", "_").replace("'", "").replace('"', "")
-            logger.debug(f"[Sample {sample_index + 1}] Now processing: OP={current_op}, Anchor={sanitized_anchor}")
-            return original_function(node, context, is_root)
+        # def _generate_narrative_recursive_with_tracking(node: Node, context: "GenerationContext", is_root: bool):
+        #     nonlocal current_op, current_anchor
+        #     node_id = id(node)
+        #     current_op = getattr(node, 'op', 'UNKNOWN_OP')
+        #     current_anchor = context.narrative_anchor_map.get(node_id, f"unnamed_{current_op}")
+        #     # Use sanitized anchor name for logs
+        #     sanitized_anchor = str(current_anchor).replace(" ", "_").replace("'", "").replace('"', "")
+        #     logger.debug(f"[Sample {sample_index + 1}] Now processing: OP={current_op}, Anchor={sanitized_anchor}")
+        #     return original_function(node, context, is_root)
         
         # Replace the global function temporarily
-        _generate_narrative_recursive = _generate_narrative_recursive_with_tracking
+        # _generate_narrative_recursive = _generate_narrative_recursive_with_tracking
 
         logger.info(
             f"[Sample {sample_index + 1}] Starting narrative rendering with post-order strict validation..."
         )
-        try:
-            narrative_prompt = generate_narrative(
-                ast,
-                world_info,
-                config,
-                encoder,
-                p_inflect,
-                logger,
-                sample_index,
-            )
-        finally:
-            # Restore the original function
-            _generate_narrative_recursive = original_function
+        # The try/finally directly around generate_narrative was for the global pointer restoration,
+        # which is no longer needed. The call will now be part of the outer try/except.
+        narrative_prompt = generate_narrative(
+            ast,
+            world_info,
+            config,
+            encoder,
+            p_inflect,
+            logger,
+            sample_index,
+        )
             
         if not narrative_prompt:
             logger.error(
@@ -3650,7 +3666,8 @@ def generate_single_sample(sample_index: int) -> dict | None:
             )
             # Rename log for narrative failure
             if os.path.exists(original_log_path):
-                failed_log_path = os.path.join(llm_turns_log_specific_dir, f"[FAIL_NARRATIVE_GEN_{current_op}_{current_anchor}] {log_filename_base}")
+                # Simplified filename: removed current_op and current_anchor
+                failed_log_path = os.path.join(llm_turns_log_specific_dir, f"[FAIL_NARRATIVE_GEN] {log_filename_base}")
                 try:
                     os.rename(original_log_path, failed_log_path)
                     logger.info(f"Renamed LLM turn log for failed sample {sample_index + 1} to: {failed_log_path} (narrative gen failed)")
@@ -3715,14 +3732,14 @@ def generate_single_sample(sample_index: int) -> dict | None:
 
         # Your custom summary log
         logger.error(
-            f"--- Failed sample {sample_index + 1} after {sample_end_time - sample_start_time:.2f}s (Exception: {actual_error_type} at {current_op}/{current_anchor}) ---"
+            f"--- Failed sample {sample_index + 1} after {sample_end_time - sample_start_time:.2f}s (Exception: {actual_error_type}) ---"
         )
 
         # Log renaming logic with the actual error type
         if os.path.exists(original_log_path):
-            safe_anchor = str(current_anchor).replace(" ", "_").replace("'", "").replace('"', "")
-            # Use actual_error_type in the filename
-            failed_log_path = os.path.join(llm_turns_log_specific_dir, f"[FAIL_{actual_error_type}_{current_op}_{safe_anchor}] {log_filename_base}")
+            # safe_anchor = str(current_anchor).replace(" ", "_").replace("'", "").replace('"', "") # REMOVED
+            # Use actual_error_type in the filename - simplified
+            failed_log_path = os.path.join(llm_turns_log_specific_dir, f"[FAIL_{actual_error_type}] {log_filename_base}")
             try:
                 os.rename(original_log_path, failed_log_path)
                 logger.info(f"Renamed LLM turn log for failed sample {sample_index + 1} to: {failed_log_path} (due to exception: {actual_error_type})")
@@ -3931,11 +3948,18 @@ def main(
                                 except json.JSONDecodeError:
                                     logger.warning(f"Could not parse line {line_num} in original dataset '{output_file}' during filtering: {dataset_line.strip()}. Discarding this line.")
                         
-                        # Replace original file with cleaned one
-                        shutil.move(temp_cleaned_output_file, output_file)
+                        # Construct the new filename with [CLEAN] prefix
+                        output_dir = os.path.dirname(output_file)
+                        base_filename = os.path.basename(output_file)
+                        new_base_filename = f"[CLEAN]{base_filename}"
+                        new_output_file_path = os.path.join(output_dir, new_base_filename)
+                        
+                        # Move the temporary cleaned file to the new path instead of overwriting
+                        shutil.move(temp_cleaned_output_file, new_output_file_path)
                         deleted_count = original_sample_count - good_samples_written
-                        logger.info(f"Removed {deleted_count} bad samples. {good_samples_written} samples remain in {output_file}.")
-                        print(f"PROD_RUN: After validation and cleaning, {good_samples_written} samples remain in {output_file}.")
+                        logger.info(f"Removed {deleted_count} bad samples. {good_samples_written} cleaned samples saved to {new_output_file_path}.")
+                        logger.info(f"(Original dataset with all generated samples remains at: {output_file})") # Add note about original file
+                        print(f"PROD_RUN: After validation and cleaning, {good_samples_written} samples saved to {new_output_file_path}.")
                         # Update samples_generated_successfully for any final tally if needed, though new print is clearer
                         # samples_generated_successfully = good_samples_written
                     else:

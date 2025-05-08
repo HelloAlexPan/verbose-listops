@@ -29,26 +29,26 @@ load_dotenv()
 
 # --- Batch Settings ---
 NUM_SAMPLES_TO_GENERATE = 5  # How many samples to generate in one run
-DEFAULT_MAX_WORKERS = 20  # Default number of parallel threads for batch generation
+DEFAULT_MAX_WORKERS = 1000   # Number of parallel threads for batch generation
 MODEL = "google/gemini-2.5-pro-preview-03-25"  # OpenRouter model
+DATASETS_DIR = "datasets"    # Directory for saving generated datasets
 
 # --- Generation Settings ---
 """
 Modify the difficulty of the generated problems by changing the parameters below.
 """
 
-
 @dataclass
 class Config:
     # === Core Experiment Variables ===
     # --- 1. ListOps Problem Difficulty  ---
-    MAX_OPS: int = 10                               # Max ListOps operations
+    MAX_OPS: int = 8                                # Max ListOps operations
+    MAX_BRANCH: int = 6                             # Max numbers/sub-ops per operation
     MIN_ARITY: int = 3                              # Min numbers/sub-ops per operation
-    MAX_BRANCH: int = 8                             # Max numbers/sub-ops per operation
     MIN_ATOM_VAL: int = 1                           # Min value for atomic numbers
     MAX_ATOM_VAL: int = 100                         # Max value for atomic numbers
     MAX_TOTAL_TOKENS: int = 10000                   # Cleaned sample token budget
-    EARLY_TERMINATION_PROBABILITY: float = 0.2      # Chance to end AST branch early
+    EARLY_TERMINATION_PROBABILITY: float = 0.0      # Chance to end AST branch early
 
     # --- 2. Narrative Context Generation & Style ---
     USE_NARRATIVE_ANCHORS: bool = True              # Conceptual placeholders for intermediate results
@@ -59,16 +59,16 @@ class Config:
     MAX_WORLD_CONCEPTS: int = 10                    # Max concepts for randomized world gen
     BEAT_CONTEXT: int = 200                         # Max previous scene chars for beat gen prompt
     PADDING_CONTEXT: int = 150                      # Tokens of context for padding
-    MAX_PAD_PARAGRAPHS: int = 3                      # Max padding segments per-beat
-    PADDING_MAX_TOK_PERCENT: float = 0.60            # How much total tok budget can be padding
+    MAX_PAD_PARAGRAPHS: int = 20                     # Max padding segments per-beat
+    PADDING_MAX_TOK_PERCENT: float = 0.8            # How much total tok budget can be padding
 
     # --- 3. Temperature ---
     WORLD_GEN_TEMP:  float = 0.9                    # Temp. for world gen
-    BEAT_GEN_TEMP: float = 0.2                      # Temp. for generating narrative beats
-    CREATIVE_NARRATIVE_TEMP: float = 0.75           # Temp. for creative parts (intro, padding)
+    BEAT_GEN_TEMP: float = 0.1                      # Temp. for generating narrative beats
+    CREATIVE_NARRATIVE_TEMP: float = 0.5            # Temp. for creative parts (intro, padding)
     ANCHOR_GEN_TEMP: float = 0.75                   # Temp. for narrative anchor generation
 
-    # === Other ===
+    # === Other: Probably don't touch the below unless you know what you're doing ===
     # LLM Interaction & Prompting
     MAX_ANCHOR_WORDS: int = 4                       # Max words allowed in a narrative anchor name
     FEW_SHOT_EXAMPLES: int = 1                      # Few-shot examples for beat generation
@@ -77,19 +77,20 @@ class Config:
     FALLBACK_MIN_NUM_WORD: int = 0                  # Fallback range for num_to_words
     FALLBACK_MAX_NUM_WORD: int = 20                 # Fallback range for num_to_words
     MIN_ALLOWED_SMALL_NUMBER: int = 0               # Validator setting: min implicitly allowed small number
-    MAX_ALLOWED_SMALL_NUMBER: int = 2               # Validator: max implicitly allowed small numbers
+    MAX_ALLOWED_SMALL_NUMBER: int = 10              # Validator: max implicitly allowed small numbers
     INVALID_RESULT_PLACEHOLDER: int = -999          # Validator: placeholder for specific error cases
+    PROBLEM_SMALL_NUMBERS_TO_CHECK: Set[int] = field(default_factory=lambda: {0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10}) # Numbers that get special attention if forbidden
 
     #  API Configuration & Retries
     RETRY_MAX_ATTEMPTS: int = 5                     # Max retries for API calls
-    RETRY_INITIAL_DELAY: float = 0.5                # Initial delay for exponential backoff
+    RETRY_INITIAL_DELAY: float = 0.25                # Initial delay for exponential backoff
     MAX_BEAT_RETRIES: int = 5                       # Max retries for beat generation
     MAX_PAD_RETRIES: int = 5                        # Max retries for padding generation
     INTRO_MAX_RETRIES: int = 3                      # Max retries for intro scene generation
     WORLDGEN_MAX_RETRIES: int = 3                   # Max retries for world generation
     INITIAL_WORLD_RETRY_DELAY: float = 0.5          # Initial retry delay for world gen
-    MAX_REQUESTS_PER_SECOND: float = 500.0          # Max requests per second to OpenRouter
-    MIN_REQUEST_INTERVAL: float = 0.015             # Min time (seconds) between requests
+    MAX_REQUESTS_PER_SECOND: float = 1000.0          # Max requests/s to OpenRouter
+    MIN_REQUEST_INTERVAL: float = 0.001             # Min time (seconds) between requests
 
     # Logging Configuration
     LOG_MAX_BYTES: int = 5 * 1024 * 1024            # Maximum log file size (5MB)
@@ -98,14 +99,16 @@ class Config:
 
     # Token & Budget Management !!! DONT FUCKING TOUCH THIS !!!
     MAX_TOKENS_BUFFER: int = 500                    # Safety buffer for overall budget
-    INTRO_MAX_TOKENS: int = 10000                   # Intro scene max tok
-    WORLD_GEN_MAX_TOKENS: int = 10000               # World gen .json max tok
-    ANCHOR_MAX_TOKENS: int = 10000                  # Anchor gen max tok
-    MAX_BEAT_TOKENS: int = 10000                    # Tok limit narrativized ListOps 'beat' output + reasoning
-    MAX_PADDING_TOKENS: int = 10000                 # Tok limit padding paragraph output + reasoning
-
-
-
+    
+    # API Token limits - Set high values to avoid truncation due to reasoning tokens
+    MAX_API_TOKEN_LIMIT: int = 32000                # High tok limit for reasoning tokens
+    
+    # Internal token budget tracking (these just track, not limit API calls)
+    WORLD_GEN_MAX_TOKENS: int = 200                # World gen .json max tok (for tracking) 
+    ANCHOR_MAX_TOKENS: int = 100                   # Anchor gen max tok (for tracking)
+    INTRO_MAX_TOKENS: int = 100                    # Intro scene max tok (for tracking)
+    BEAT_MAX_TOKENS: int = 400                     # Beat max tok (for tracking)
+    PADDING_MAX_TOKENS: int = 200                  # Padding max tok (for tracking)
 
 config = Config()
 
@@ -272,26 +275,28 @@ if config.CLEAR_LOGS_ON_START:
 logger = logging.getLogger("verbose_listops")
 logger.setLevel(logging.DEBUG)
 
-if not logger.handlers:
-    # Ensure LOG_DIR exists before setting up file handler
-    # This os.makedirs is now done above, but an extra check here is fine.
-    os.makedirs(LOG_DIR, exist_ok=True) 
-    log_file_path = os.path.join(LOG_DIR, "verbose_listops.log")
+# Remove existing handlers to avoid duplicates and force new handlers
+for handler in logger.handlers[:]:
+    logger.removeHandler(handler)
     
-    handler = logging.handlers.RotatingFileHandler(
-        filename=log_file_path,
-        maxBytes=config.LOG_MAX_BYTES,
-        backupCount=config.LOG_BACKUP_COUNT,
-        encoding="utf-8",
-    )
-    formatter = logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s")
-    handler.setFormatter(formatter)
-    logger.addHandler(handler)
+# Ensure the log file handler exists
+os.makedirs(LOG_DIR, exist_ok=True)
+handler = logging.handlers.RotatingFileHandler(
+    filename=os.path.join(LOG_DIR, "verbose_listops.log"),
+    maxBytes=config.LOG_MAX_BYTES,
+    backupCount=config.LOG_BACKUP_COUNT,
+    encoding="utf-8",
+)
+formatter = logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s")
+handler.setFormatter(formatter)
+logger.addHandler(handler)
 
-    console_handler = logging.StreamHandler()
-    console_handler.setLevel(logging.INFO)
-    console_handler.setFormatter(formatter)
-    logger.addHandler(console_handler)
+console_handler = logging.StreamHandler()
+console_handler.setLevel(logging.INFO)
+console_handler.setFormatter(formatter)
+logger.addHandler(console_handler)
+
+print(f"Logger initialized with {len(logger.handlers)} handlers. Log file will be created at: {os.path.join(LOG_DIR, 'verbose_listops.log')}")
 
 # Now that logger is configured, we can safely log messages if clearing happened earlier.
 if config.CLEAR_LOGS_ON_START and os.path.exists(LOG_DIR):
@@ -325,13 +330,10 @@ def log_prompt(
     header: str,
     prompt: str,
     sample_index: int | None = None,
-    # path: str = os.path.join(LOG_DIR, "llm_turns.log"), # Removed path parameter
 ):
     """Append a timestamped prompt header and text to a sample-specific prompts log."""
     try:
         # Define the target directory for these specific LLM turn logs
-        # LOG_DIR is WORKSPACE/logs
-        # New structure: WORKSPACE/logs/llm_turns/log/
         llm_turns_main_dir = os.path.join(LOG_DIR, "llm_turns")
         llm_turns_log_specific_dir = os.path.join(llm_turns_main_dir, "log")
 
@@ -396,12 +398,18 @@ class GenerationContext:
     last_scene_text: str
     beat_counter: dict
     sample_index: int
-    max_pad_paragraphs: int = config.MAX_PAD_PARAGRAPHS
+    max_pad_paragraphs: int  # No default value, must be set explicitly during instantiation
+    # Add tracking for padding token statistics
+    padding_stats: dict = field(default_factory=lambda: {
+        "total_padding_tokens": 0,
+        "padding_segments_added": 0,
+        "max_padding_allowed": 0,  # Will be calculated during initialization
+    })
 
 
 SAFETY_MARGIN = config.MAX_TOKENS_BUFFER
-MAX_BEAT_COMPLETION_TOKENS = config.MAX_BEAT_TOKENS
-MAX_PAD_COMPLETION_TOKENS = config.MAX_PADDING_TOKENS
+MAX_BEAT_COMPLETION_TOKENS = config.BEAT_MAX_TOKENS
+MAX_PAD_COMPLETION_TOKENS = config.PADDING_MAX_TOKENS
 
 # --- Setup Logging ---
 
@@ -416,21 +424,28 @@ if config.CLEAR_LOGS_ON_START:
 logger = logging.getLogger("verbose_listops")
 logger.setLevel(logging.DEBUG)
 
-if not logger.handlers:
-    handler = logging.handlers.RotatingFileHandler(
-        filename=os.path.join(LOG_DIR, "verbose_listops.log"),
-        maxBytes=config.LOG_MAX_BYTES,
-        backupCount=config.LOG_BACKUP_COUNT,
-        encoding="utf-8",
-    )
-    formatter = logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s")
-    handler.setFormatter(formatter)
-    logger.addHandler(handler)
+# Remove existing handlers to avoid duplicates and force new handlers
+for handler in logger.handlers[:]:
+    logger.removeHandler(handler)
+    
+# Ensure the log file handler exists
+os.makedirs(LOG_DIR, exist_ok=True)
+handler = logging.handlers.RotatingFileHandler(
+    filename=os.path.join(LOG_DIR, "verbose_listops.log"),
+    maxBytes=config.LOG_MAX_BYTES,
+    backupCount=config.LOG_BACKUP_COUNT,
+    encoding="utf-8",
+)
+formatter = logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s")
+handler.setFormatter(formatter)
+logger.addHandler(handler)
 
-    console_handler = logging.StreamHandler()
-    console_handler.setLevel(logging.INFO)
-    console_handler.setFormatter(formatter)
-    logger.addHandler(console_handler)
+console_handler = logging.StreamHandler()
+console_handler.setLevel(logging.INFO)
+console_handler.setFormatter(formatter)
+logger.addHandler(console_handler)
+
+print(f"Logger initialized with {len(logger.handlers)} handlers. Log file will be created at: {os.path.join(LOG_DIR, 'verbose_listops.log')}")
 
 # --- Instantiate OpenAI Client for OpenRouter Endpoint ---
 client = None
@@ -549,9 +564,9 @@ class RateLimiter:
                             rps = requests_limit / interval_seconds
 
                             # Set to 80% of the allowed rate limit as a safety buffer
-                            new_rate = min(float(rps) * 0.8, 50.0)
+                            new_rate = min(float(rps) * 0.8, config.MAX_REQUESTS_PER_SECOND)
 
-                            logger.info(f"Adjusting rate limiter based on OpenRouter limit: {rps} req/s → {new_rate} req/s (80% safety)")
+                            logger.info(f"Adjusting rate limiter based on OpenRouter limit: {rps} req/s → {new_rate} req/s (80% safety, capped at config.MAX_REQUESTS_PER_SECOND)")
                             self.max_requests_per_second = new_rate
 
                 # Log credits/usage if available
@@ -584,8 +599,8 @@ class RateLimiter:
 rate_limiter = RateLimiter(
     max_requests_per_second=config.MAX_REQUESTS_PER_SECOND,
     min_interval=config.MIN_REQUEST_INTERVAL,
-    bucket_capacity=10,  # Allow bursts of up to 10 requests
-    jitter=0.1  # Add up to 100ms of random jitter to prevent synchronization
+    bucket_capacity=1000, # Allow bursts of up to 10 requests
+    jitter=0.01  # Add up to 100ms of random jitter to prevent synchronization
 )
 
 # Check OpenRouter limits when starting up
@@ -729,7 +744,24 @@ def would_exceed_budget(
     current: int, upcoming: int, max_total: int, margin: int
 ) -> bool:
     """Return True if adding upcoming tokens would exceed max_total minus margin."""
-    return current + upcoming + margin > max_total
+    would_exceed = current + upcoming + margin > max_total
+    remaining = max_total - current - margin
+    percentage_used = (current / max_total) * 100
+    
+    if would_exceed:
+        logger.warning(
+            f"TOKEN LIMIT CHECK: WOULD EXCEED - Current: {current} tokens ({percentage_used:.1f}%), "
+            f"Upcoming: +{upcoming}, Safety Margin: {margin}, Remaining: {remaining}, "
+            f"Budget: {max_total}, Total After: {current + upcoming + margin}/{max_total}"
+        )
+    else:
+        logger.debug(
+            f"TOKEN LIMIT CHECK: WITHIN BUDGET - Current: {current} tokens ({percentage_used:.1f}%), "
+            f"Upcoming: +{upcoming}, Safety Margin: {margin}, Remaining: {remaining}, "
+            f"Budget: {max_total}, Will use: {current + upcoming + margin}/{max_total}"
+        )
+    
+    return would_exceed
 
 
 # --- Helper for future consolidation of retry loops ---
@@ -749,15 +781,25 @@ def generate_with_retry(
     Passes sample_index to log_prompt if provided.
     """
     candidate = None
+    validation_failure_reasons = []
+    
     for attempt in range(1, retries + 1):
         try:
+            # Use the API token limit instead of the provided max_completion_tokens
+            # This prevents truncation due to reasoning tokens being counted against max_tokens
+            actual_max_tokens = config.MAX_API_TOKEN_LIMIT
+            
+            logger.debug(
+                f"API Call: Using {actual_max_tokens} tokens for API (vs {max_completion_tokens} for internal tracking)"
+            )
+            
             api_params = {
                 "model": MODEL,
                 "messages": [
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": user_prompt},
                 ],
-                "max_completion_tokens": max_completion_tokens,
+                "max_completion_tokens": actual_max_tokens,  # Use the higher limit
                 "temperature": temperature,
             }
             if reasoning_settings:
@@ -790,11 +832,14 @@ def generate_with_retry(
                 logger.warning(
                     f"API call in generate_with_retry attempt {attempt} returned None content. Response object: {resp}"
                 )
+                validation_failure_reasons.append("API returned None content")
+                continue
 
             if candidate_for_validation_and_return is None:
                 logger.warning(
                     f"generate_with_retry attempt {attempt} resulted in None candidate_for_validation_and_return (possibly after stripping None)."
                 )
+                validation_failure_reasons.append("Empty content after stripping")
             elif (
                 not candidate_for_validation_and_return
                 or candidate_for_validation_and_return.lower().startswith(
@@ -802,16 +847,48 @@ def generate_with_retry(
                 )
             ):
                 logger.warning(f"API refusal on generate_with_retry attempt {attempt}.")
+                validation_failure_reasons.append("API refusal detected")
             elif validate_fn(candidate_for_validation_and_return):
+                logger.info(f"Validation PASSED on attempt {attempt}")
                 return candidate_for_validation_and_return
+            else:
+                # If we got here, validation failed - look for most recent failed validation file
+                failed_validations_dir = os.path.join(LOG_DIR, "failed_validations")
+                if os.path.exists(failed_validations_dir):
+                    try:
+                        # Get the most recent validation failure file (should be the one just created)
+                        files = [f for f in os.listdir(failed_validations_dir) if f.startswith("validation_fail_")]
+                        if files:
+                            files.sort(reverse=True)  # Most recent first
+                            latest_file = os.path.join(failed_validations_dir, files[0])
+                            with open(latest_file, 'r', encoding='utf-8') as f:
+                                failure_data = json.load(f)
+                                reason = failure_data.get("validation_report", {}).get("reason", "Unknown")
+                                validation_failure_reasons.append(f"Validation failed: {reason}")
+                                
+                                # Add more detailed debugging info
+                                logger.warning(f"Validation failed on attempt {attempt}: {reason}")
+                                logger.warning(f"Found numbers: {failure_data.get('validation_report', {}).get('found_numbers', [])}")
+                                logger.warning(f"Required numbers: {failure_data.get('validation_report', {}).get('allowed_atoms', [])}")
+                                logger.warning(f"Missing required: {failure_data.get('validation_report', {}).get('missing_required', [])}")
+                                logger.warning(f"Forbidden extras: {failure_data.get('validation_report', {}).get('forbidden_extras', [])}")
+                    except Exception as e:
+                        logger.error(f"Error reading validation failure data: {e}")
+                        validation_failure_reasons.append(f"Validation failed (error reading details)")
+                else:
+                    validation_failure_reasons.append("Validation failed (no details available)")
 
         except Exception as e:
             logger.warning(f"Error on generate_with_retry attempt {attempt}: {e}")
+            validation_failure_reasons.append(f"Exception: {str(e)}")
 
         if attempt < retries:
             time.sleep(config.RETRY_INITIAL_DELAY * (2 ** (attempt - 1)))
 
-    logger.warning(f"generate_with_retry failed after {retries} attempts.")
+    if validation_failure_reasons:
+        logger.warning(f"generate_with_retry failed after {retries} attempts. Failure reasons: {validation_failure_reasons}")
+    else:
+        logger.warning(f"generate_with_retry failed after {retries} attempts with no specific reasons recorded.")
     return None
 
 
@@ -961,10 +1038,16 @@ def eval_node(node: Node) -> int:
     if isinstance(node, Atom):
         if node.value is None:
             node.value = node.n
+        logger.debug(f"eval_node: Atom node, value = {node.value}")
         return node.value
+
     vals = [eval_node(c) for c in node.children]
+    logger.debug(f"eval_node: OpNode {node.op}, child values = {vals}")
+
     if not vals:
+        logger.error(f"eval_node: Operator node {node.op} has no children values.")
         raise ValueError(f"Operator node {node.op} has no children values.")
+
     func_map = {
         "MAX": max,
         "MIN": min,
@@ -977,19 +1060,48 @@ def eval_node(node: Node) -> int:
         func = func_map[node.op]
         if node.op == "MED" and len(vals) % 2 == 0:
             logger.warning(
-                f"MED operator with even children ({len(vals)}). Using lower middle."
+                f"eval_node: MED operator for node {node.op} with even children ({len(vals)}). Using lower middle."
             )
         if node.op == "AVG" and not vals:
+            logger.error(f"eval_node: Cannot calculate average of zero values for node {node.op}.")
             raise ValueError("Cannot calculate average of zero values.")
-        node.value = func(vals)
+
+        calculated_value = func(vals)
+        
+        # Additional validation for SUM operations to catch calculation errors
+        if node.op == "SUM":
+            expected_sum = sum(vals)
+            if calculated_value != expected_sum:
+                logger.error(f"eval_node: SUM validation error - func(vals)={calculated_value} != sum(vals)={expected_sum}")
+                # Use the manually calculated sum as a fallback
+                calculated_value = expected_sum
+                
+        # Enhanced logging for all operations    
+        logger.debug(f"eval_node: OpNode {node.op}, inputs {vals}, result = {calculated_value}")
+        
+        # Operation-specific detailed logging
+        if node.op == "SUM":
+            logger.info(f"SUM Operation - Node ID: {id(node)}, Input values: {vals}, Sum: {calculated_value}")
+        elif node.op == "AVG":
+            total = sum(vals)
+            logger.info(f"AVG Operation - Node ID: {id(node)}, Input values: {vals}, Sum: {total}, Count: {len(vals)}, Result: {calculated_value}")
+        elif node.op in ["MAX", "MIN", "MED"]:
+            logger.info(f"{node.op} Operation - Node ID: {id(node)}, Input values: {vals}, Result: {calculated_value}")
+        
+        node.value = calculated_value
         return node.value
     except KeyError:
+        logger.error(f"eval_node: Unsupported operator: {node.op}")
         raise ValueError(f"Unsupported operator: {node.op}")
     except IndexError as e:
-        logger.error(f"Indexing error eval {node.op} with {vals}: {e}")
+        logger.error(f"eval_node: Indexing error evaluating {node.op} with child values {vals}: {e}")
         raise
     except ZeroDivisionError:
+        logger.error(f"eval_node: Division by zero during AVG for {node.op} with child values {vals}")
         raise ValueError(f"Division by zero during AVG for {node.op}")
+    except Exception as e:
+        logger.error(f"eval_node: Unexpected error evaluating {node.op} with values {vals}: {e}")
+        raise
 
 
 def postorder(node: Node):
@@ -1042,7 +1154,13 @@ def _chat_completion_call(*args, **kwargs):
         # else: # You could log other unexpected kwargs if needed
             # logger.warning(f"DEBUG: Unexpected kwarg '{k}' in _chat_completion_call, may be ignored or cause error if not for extra_body.")
 
-
+    # --- Check if we need to modify the max_tokens to prevent truncation ---
+    if "max_tokens" in api_call_standard_kwargs:
+        original_max_tokens = api_call_standard_kwargs["max_tokens"]
+        # Always use the higher limit to prevent truncation due to reasoning tokens
+        api_call_standard_kwargs["max_tokens"] = config.MAX_API_TOKEN_LIMIT
+        logger.debug(f"Modified max_tokens for API call: {original_max_tokens} → {config.MAX_API_TOKEN_LIMIT} (to handle reasoning tokens)")
+        
     # --- REFINED REASONING LOGIC for openrouter_specific_params ---
     current_model_name = api_call_standard_kwargs.get("model", "").lower()
     is_openai_o_series = ("openai/" in current_model_name and
@@ -1183,10 +1301,12 @@ def generate_world(
                 sample_index=sample_index,
             )
 
+            # Use config.MAX_API_TOKEN_LIMIT instead of config.WORLD_GEN_MAX_TOKENS
+            # to avoid truncation due to reasoning tokens
             resp = _chat_completion_call(
                 model=MODEL,
                 messages=[{"role": "user", "content": prompt}],
-                max_completion_tokens=config.WORLD_GEN_MAX_TOKENS,
+                max_completion_tokens=config.MAX_API_TOKEN_LIMIT,  # Use higher limit
                 temperature=0.5,
                 reasoning={"exclude": True}
             )
@@ -1392,33 +1512,106 @@ def make_number_validator(
 
     def validate(text: str) -> bool:
         found_numbers = extract_numbers_from_text(text)
+        
+        # Get text for logging (truncated to avoid huge logs)
+        text_preview = text[:100].replace("\n", " ")
+        if len(text) > 100:
+            text_preview += "..."
+            
         logger.debug(
-            f'Validator Input Text: "' + text[:100].replace("\n", " ") + '..."'
+            f'Validator Input Text: "' + text_preview + '"'
         )
         logger.debug(f"Validator Found Numbers: {found_numbers}")
 
+        # Create a detailed validation report
+        validation_report = {
+            "status": "PASS",
+            "reason": "All validation checks passed",
+            "operation_type": operation_type,
+            "text_preview": text_preview,
+            "found_numbers": list(found_numbers),
+            "allowed_atoms": list(allowed_atoms),
+            "operand_count": operand_count,
+            "correct_result": correct_result_for_beat,
+            "intermediate_sum": intermediate_sum_allowed,
+            "missing_required": [],
+            "forbidden_extras": [],
+            "details": []
+        }
+
         if strict_zero:
+            # Check if numbers were found
             if found_numbers:
-                log_reason = f"Validation FAIL (Strict Zero): Found numbers {found_numbers} when ZERO were allowed."
-                logger.debug(log_reason)
-                return False
+                # If numbers are found, check if it's ONLY the number 1
+                if found_numbers == {1}:
+                    logger.debug(f"Validation PASS (Strict Zero context, but only '1' found, which is tolerated for padding/intro). Found: {found_numbers}")
+                    # Even though it's a "pass" for this specific rule,
+                    # we don't return True yet, as other rules might apply if strict_zero was False.
+                    # However, for padding/intro, strict_zero IS True, and this is the only number check we care about.
+                    # So, if we reach here, it means for padding/intro, finding only "1" is acceptable.
+                    # The rest of the validator logic for non-strict_zero (operand checks etc.) is not relevant here.
+                    # BUT, we need to ensure this doesn't bypass other checks if strict_zero was meant to be part of a larger validation.
+                    # Given the current structure, if strict_zero is true, this is the primary gate.
+                    # Let's refine: if strict_zero is true, we ONLY care if non-{1} numbers are present.
+                else:
+                    # Numbers other than just {1} were found, or a mix including 1. This is a failure.
+                    validation_report["status"] = "FAIL"
+                    validation_report["reason"] = "STRICT_ZERO_VIOLATION"
+                    validation_report["details"].append(f"Found numbers {found_numbers} when only '1' (or zero numbers) were allowed in this strict context.")
+                    log_reason = f"Validation FAIL (Strict Zero context): Found numbers {found_numbers}. Expected zero numbers or only '1'."
+                    logger.debug(log_reason)
+                    _log_failed_validation(text, validation_report)
+                    return False # Fail because numbers other than just '1' were found
+            # If found_numbers is empty, it's a pass for strict_zero
+            logger.debug(f"Validation PASS (Strict Zero context: No numbers found).")
+            # If we are in strict_zero mode and passed (either empty or just {1}),
+            # for padding/intro, this is the end of validation.
+            # We need to ensure this doesn't incorrectly proceed to other checks.
+            # The original logic for strict_zero was to return True if no numbers.
+            # Now, it should return True if no numbers OR only {1}.
+
+            # Corrected logic for strict_zero:
+            if not found_numbers or found_numbers == {1}:
+                logger.debug(f"Validation PASS (Strict Zero context): Found numbers: {found_numbers} (empty or only '1' is acceptable).")
+                return True # This is the definitive pass for strict_zero sections (padding/intro)
             else:
-                logger.debug(f"Validation PASS (Strict Zero)")
-                return True
+                # This 'else' handles cases where found_numbers is not empty AND not equal to {1}
+                validation_report["status"] = "FAIL"
+                validation_report["reason"] = "STRICT_ZERO_VIOLATION"
+                validation_report["details"].append(f"Found numbers {found_numbers} when only '1' (or zero numbers) were allowed in this strict context.")
+                log_reason = f"Validation FAIL (Strict Zero context): Found numbers {found_numbers}. Expected zero numbers or only '1'."
+                logger.debug(log_reason)
+                _log_failed_validation(text, validation_report)
+                return False
 
         # Check if result is required and present
         if enforce_result_presence and correct_result_for_beat is not None:
             # Always check for result presence when enforce_result_presence is True
             if correct_result_for_beat not in found_numbers:
+                validation_report["status"] = "FAIL"
+                validation_report["reason"] = "MISSING_REQUIRED_RESULT"
+                validation_report["details"].append(f"Result {correct_result_for_beat} must be present. Found: {found_numbers}, Op: {operation_type}")
+                
                 log_reason = f"Validation FAIL (Missing Required Result): Result {correct_result_for_beat} must be present. Found: {found_numbers}, Op: {operation_type}"
                 logger.debug(log_reason)
+                
+                # Log the failed attempt with error code
+                _log_failed_validation(text, validation_report)
                 return False
             logger.debug(f"Validation INFO: Required result {correct_result_for_beat} is present for {operation_type if operation_type else 'unspecified'} operation")
 
         missing_expected = allowed_atoms - found_numbers
         if missing_expected:
+            validation_report["status"] = "FAIL"
+            validation_report["reason"] = "MISSING_REQUIRED_OPERANDS"
+            validation_report["missing_required"] = list(missing_expected)
+            validation_report["details"].append(f"RequiredOperands={allowed_atoms}, Missing={missing_expected}, FoundInText={found_numbers}.")
+            
             log_reason = f"Validation FAIL (Rule 1: Missing Required Operands): RequiredOperands={allowed_atoms}, Missing={missing_expected}, FoundInText={found_numbers}."
             logger.debug(log_reason)
+            
+            # Log the failed attempt with error code
+            _log_failed_validation(text, validation_report)
             return False
 
         # Rule 2: Check for numbers that are on the forbidden_atoms list (from prior beats)
@@ -1434,12 +1627,23 @@ def make_number_validator(
             violations_of_forbidden_rule.add(num_in_question)
 
         if violations_of_forbidden_rule:
+            validation_report["status"] = "FAIL"
+            validation_report["reason"] = "FORBIDDEN_NUMBERS_FOUND"
+            validation_report["forbidden_extras"] = list(violations_of_forbidden_rule)
+            validation_report["details"].append(
+                f"ForbiddenSetFromPriorBeats={forbidden_atoms}, Violations={violations_of_forbidden_rule}, "
+                f"CurrentBeatExplicitlyAllowed={current_beat_explicitly_allowed_numbers}, FoundAllInText={found_numbers}."
+            )
+            
             log_reason = (
                 f"Validation FAIL (Rule 2: Found Forbidden Violation): "
                 f"ForbiddenSetFromPriorBeats={forbidden_atoms}, Violations={violations_of_forbidden_rule}, "
                 f"CurrentBeatExplicitlyAllowed={current_beat_explicitly_allowed_numbers}, FoundAllInText={found_numbers}."
             )
             logger.debug(log_reason)
+            
+            # Log the failed attempt with error code
+            _log_failed_validation(text, validation_report)
             return False
         else:
             logger.debug(
@@ -1512,12 +1716,24 @@ def make_number_validator(
             formatted_disallowed = ", ".join(
                 [f"{n}({reason})" for n, reason in truly_disallowed_extras]
             )
+            
+            validation_report["status"] = "FAIL"
+            validation_report["reason"] = "EXTRANEOUS_NUMBERS"
+            validation_report["details"].append(
+                f"Disallowed_Extras={{ {formatted_disallowed} }}. "
+                f"CurrentBeatExplicitlyAllowed={current_beat_explicitly_allowed_numbers}, ForbiddenSet={forbidden_atoms}, "
+                f"OperandCount={operand_count}, FoundInText={found_numbers}, UnexpectedRawAfterExplicit={unexpected_found}"
+            )
+            
             log_reason = (
                 f"Validation FAIL (Strict Rule: Extraneous Numbers): Disallowed_Extras={{ {formatted_disallowed} }}. "
                 f"CurrentBeatExplicitlyAllowed={current_beat_explicitly_allowed_numbers}, ForbiddenSet={forbidden_atoms}, "
                 f"OperandCount={operand_count}, FoundInText={found_numbers}, UnexpectedRawAfterExplicit={unexpected_found}"
             )
             logger.debug(log_reason)
+            
+            # Log the failed attempt with error code
+            _log_failed_validation(text, validation_report)
             return False
 
         logger.debug(f"Validation PASS (Strict)")
@@ -1527,6 +1743,139 @@ def make_number_validator(
         return True
 
     return validate
+
+# Add a helper function to save failed validation attempts
+def _log_failed_validation(text: str, validation_report: dict):
+    """
+    Save failed validation attempts for diagnostic purposes.
+    This provides a detailed record of why each beat was rejected.
+    Additionally writes to the LLM turns log to keep all information in one place.
+    """
+    try:
+        # Ensure log directory exists
+        failed_validations_dir = os.path.join(LOG_DIR, "failed_validations")
+        os.makedirs(failed_validations_dir, exist_ok=True)
+        
+        # Create a unique filename for this validation failure
+        timestamp = datetime.datetime.now().strftime("%Y%m%d-%H%M%S-%f")
+        operation = validation_report.get("operation_type", "unknown_op")
+        reason = validation_report.get("reason", "unknown_reason")
+        
+        # Generate the filename using significant information for easy identification
+        filename = f"validation_fail_{operation}_{reason}_{timestamp}.json"
+        filepath = os.path.join(failed_validations_dir, filename)
+        
+        # Create the full record to save
+        full_report = {
+            "validation_report": validation_report,
+            "full_text": text,
+            "timestamp": timestamp
+        }
+        
+        # Save the record
+        with open(filepath, "w", encoding="utf-8") as f:
+            json.dump(full_report, f, indent=2, ensure_ascii=False)
+            
+        logger.debug(f"Saved failed validation record to {filepath}")
+        
+        # --- NEW SECTION: Also write validation failure to LLM turns log ---
+        # Extract sample_index from the calling frame's context if available
+        sample_index = None
+        import inspect
+        try:
+            # Look for context.sample_index in the stack frames
+            frames = inspect.stack()
+            for frame in frames:
+                if 'context' in frame.frame.f_locals:
+                    ctx = frame.frame.f_locals['context']
+                    if hasattr(ctx, 'sample_index'):
+                        sample_index = ctx.sample_index
+                        break
+        except Exception as e:
+            logger.error(f"Error extracting sample_index from stack: {e}")
+        
+        # Format validation failure details in a way useful for LLM analysis
+        found_nums = validation_report.get("found_numbers", [])
+        allowed_atoms = validation_report.get("allowed_atoms", [])
+        missing = validation_report.get("missing_required", [])
+        forbidden = validation_report.get("forbidden_extras", [])
+        operation = validation_report.get("operation_type", "unknown")
+        correct_result = validation_report.get("correct_result", None)
+        intermediate_sum = validation_report.get("intermediate_sum", None)
+        operand_count = validation_report.get("operand_count", None)
+        
+        # Enhanced header with more diagnostic information
+        # Try to extract narrative anchor information from stack
+        narrative_anchor = None
+        beat_counter = None
+        for frame in frames:
+            frame_locals = frame.frame.f_locals
+            if 'narrative_anchor' in frame_locals:
+                narrative_anchor = frame_locals['narrative_anchor']
+            if 'context' in frame_locals:
+                ctx = frame_locals['context']
+                if hasattr(ctx, 'beat_counter'):
+                    beat_counter = ctx.beat_counter
+            if narrative_anchor and beat_counter:
+                break
+                
+        # Create a more descriptive header with beat and narrative context when available
+        beat_info = ""
+        if beat_counter:
+            beat_info = f", Beat {beat_counter.get('current', '?')}/{beat_counter.get('total', '?')}"
+            
+        anchor_info = ""
+        if narrative_anchor:
+            anchor_info = f", Anchor: '{narrative_anchor}'"
+            
+        validation_header = (
+            f"VALIDATION FAILURE: Op={operation}{beat_info}{anchor_info}, Reason={reason} "
+            f"[Consolidated log for LLM analysis]"
+        )
+        
+        # Create a more detailed validation summary
+        validation_details = f"{'='*80}\n"  # Clear visual separator
+        validation_details += f"=== VALIDATION FAILURE REPORT ===\n"
+        validation_details += f"{'='*80}\n\n"
+        validation_details += f"Operation type: {operation}\n"
+        validation_details += f"Failure reason: {reason}\n"
+        validation_details += f"Operand count: {operand_count}\n"
+        
+        if correct_result is not None:
+            validation_details += f"Correct result (should be mentioned): {correct_result}\n"
+        
+        if intermediate_sum is not None:
+            validation_details += f"Intermediate sum (may be mentioned for AVG/SM): {intermediate_sum}\n"
+            
+        validation_details += f"\n--- Number Analysis ---\n"
+        validation_details += f"Found numbers in text: {found_nums}\n"
+        validation_details += f"Required numbers: {allowed_atoms}\n"
+        validation_details += f"Missing required: {missing}\n"
+        validation_details += f"Forbidden extras: {forbidden}\n"
+        
+        # Include any additional detailed failure information
+        details = validation_report.get("details", [])
+        if details:
+            validation_details += f"\n--- Detailed Analysis ---\n"
+            for detail in details:
+                validation_details += f"- {detail}\n"
+        
+        validation_details += f"\n--- Generated Text That Failed Validation ---\n{text}"
+        
+        # Add clear ending separator
+        validation_details += f"\n\n{'='*80}\n"
+        validation_details += f"=== END OF VALIDATION FAILURE REPORT ===\n"
+        validation_details += f"{'='*80}\n"
+        
+        # Write to LLM turns log using the existing log_prompt function
+        log_prompt(
+            validation_header,
+            validation_details,
+            sample_index=sample_index
+        )
+        
+    except Exception as e:
+        logger.error(f"Error saving failed validation record: {e}")
 
 
 def check_operand_presence(text: str, operand_val: int) -> bool:
@@ -1857,12 +2206,25 @@ def _generate_narrative_recursive(  # Line ~1315
         f"_generate_narrative_recursive (POST-ORDER): processing node {getattr(node, 'op', 'Atom')} with narrative anchor '{narrative_anchor}'"
     )
 
+    # Log token budget at the start of processing this node
+    token_percentage = (context.tokens_used / config.MAX_TOTAL_TOKENS) * 100
+    token_remaining = config.MAX_TOTAL_TOKENS - context.tokens_used - SAFETY_MARGIN
+    logger.debug(
+        f"TOKEN BUDGET START [{getattr(node, 'op', 'Atom')}/{narrative_anchor}]: "
+        f"{context.tokens_used}/{config.MAX_TOTAL_TOKENS} tokens used ({token_percentage:.1f}%), "
+        f"Remaining: {token_remaining} (with {SAFETY_MARGIN} margin)"
+    )
+
     if isinstance(node, Atom):
         logger.debug(f"Node is Atom ({node.n}), returning.")
         return
 
     child_narrative_anchors = []
-    for child in node.children:
+    for child_index, child in enumerate(node.children):
+        logger.debug(
+            f"Processing child {child_index+1}/{len(node.children)} of {node.op} ({narrative_anchor})"
+        )
+        
         _generate_narrative_recursive(
             child,
             context,
@@ -1874,19 +2236,35 @@ def _generate_narrative_recursive(  # Line ~1315
             logger.warning(
                 f"OpNode child {child.op} of parent {node.op} has no narrative anchor in map."
             )
+        
+        # Check token budget after processing each child
+        token_percentage = (context.tokens_used / config.MAX_TOTAL_TOKENS) * 100
+        token_remaining = config.MAX_TOTAL_TOKENS - context.tokens_used - SAFETY_MARGIN
+        
         if context.tokens_used >= config.MAX_TOTAL_TOKENS - SAFETY_MARGIN:
             logger.warning(
-                f"Token limit reached after processing child of operator {getattr(node, 'op', 'Atom')}. Stopping further generation for this branch."
+                f"⚠️ TOKEN LIMIT REACHED after child {child_index+1}/{len(node.children)} "
+                f"of {node.op} ({narrative_anchor}) - Used: {context.tokens_used}/{config.MAX_TOTAL_TOKENS} "
+                f"tokens ({token_percentage:.1f}%), Safety margin: {SAFETY_MARGIN}, "
+                f"Remaining: {token_remaining}. HALTING GENERATION FOR THIS BRANCH."
             )
-
             return
+        else:
+            logger.debug(
+                f"TOKEN BUDGET AFTER CHILD {child_index+1}/{len(node.children)} of {node.op} ({narrative_anchor}): "
+                f"{context.tokens_used}/{config.MAX_TOTAL_TOKENS} tokens ({token_percentage:.1f}%), "
+                f"Remaining: {token_remaining} (with {SAFETY_MARGIN} margin)"
+            )
 
     logger.debug(
         f"Finished processing children for operator {getattr(node, 'op', 'Atom')} ({narrative_anchor}). Now processing node itself."
     )
     if is_root:
+        token_percentage = (context.tokens_used / config.MAX_TOTAL_TOKENS) * 100
         logger.info(
-            f"ROOT NODE ({node.op}): Starting beat generation. Current tokens: {context.tokens_used}/{config.MAX_TOTAL_TOKENS}"
+            f"ROOT NODE ({node.op}): Starting beat generation. Current tokens: {context.tokens_used}/{config.MAX_TOTAL_TOKENS} "
+            f"({token_percentage:.1f}%), Remaining: {config.MAX_TOTAL_TOKENS - context.tokens_used - SAFETY_MARGIN} "
+            f"(with {SAFETY_MARGIN} margin)"
         )
 
     context.beat_counter["current"] += 1
@@ -1967,6 +2345,7 @@ def _generate_narrative_recursive(  # Line ~1315
         must_avoid_str = "None"
 
     may_use_parts = []
+    operand_count_is_forbidden_for_prompt = operand_count in truly_forbidden_for_prompt
     if operand_count > 0 and operand_count not in truly_forbidden_for_prompt:
         operand_count_word = num_to_words(operand_count)
         may_use_parts.append(
@@ -2136,11 +2515,13 @@ def _generate_narrative_recursive(  # Line ~1315
         must_mention_str = (
             formatted_direct_values_str
             if has_direct_atom_children
-            else "None for this step"
+            else "(none for this step, as it only involves prior conceptual results)"
         )
         reminder = (
-            f"\n**REMINDER:** Do NOT mention the actual numeric results associated with previous conceptual steps ({reminder_names_str}) in your text. Refer to them by name or conceptually only. "
-            f"However, you MUST explicitly mention the newly discovered quantities for *this* step: {must_mention_str}."
+            f"\n**REMINDER:** Do NOT mention the actual numeric results associated with previous conceptual steps ({reminder_names_str}) in your text. "
+            f"Refer to them by their conceptual names (e.g., '{random.choice(child_narrative_anchors) if child_narrative_anchors else "a previous finding"}') ONLY. "
+            f"This is crucial for maintaining narrative suspense and focusing the reader on the current step's numbers. "
+            f"However, you MUST explicitly mention the newly discovered quantities for *this* step: {must_mention_str} (as words)."
         )
 
     operational_instruction = (
@@ -2264,15 +2645,28 @@ def _generate_narrative_recursive(  # Line ~1315
         f"--- Current Step's Numbers ---\\n"
         f"- MUST INCLUDE: {must_include_combined_str} (as written words)\\n"
     )
-
+    
     # New explicit construction for "You may optionally use..."
     optional_use_parts_list = []
-    if operand_count > 0 and operand_count not in truly_forbidden_for_prompt:
+    # Special instruction if operand_count itself is forbidden
+    if operand_count > 0 and operand_count_is_forbidden_for_prompt:
+        operand_count_word = num_to_words(operand_count)
+        user_message_content += (
+            f"- **SPECIAL NARRATIVE CHALLENGE FOR THIS SCENE:** While there are {operand_count_word} new groups of {primary_object} to be described, "
+            f"the number '{operand_count_word}' itself was critically important in a previous event and is now TEMPORARILY FORBIDDEN for direct mention as a count. "
+            f"Therefore, for THIS SCENE ONLY, you MUST describe the discovery of these {operand_count_word} groups "
+            f"WITHOUT using the word '{operand_count_word}' to state their count. "
+            f"Instead, use phrasing like 'They found several new caches...' or 'Another set of discoveries was made...' or 'The next locations revealed...' "
+            f"and then proceed to list their contents (which are in the 'MUST INCLUDE' list: {must_include_combined_str}). "
+            f"This tests your ability to narrate around a specific, temporarily forbidden number while still conveying all necessary new information.\n"
+        )
+    elif operand_count > 0: # operand_count is not forbidden, so it can be optionally used
         operand_count_word = num_to_words(operand_count)
         # primary_object is defined earlier in this function scope
         optional_use_parts_list.append(
             f"{operand_count_word}, as this is the number of groups of {primary_object}s the characters will find"
         )
+
     if 1 not in truly_forbidden_for_prompt:
         optional_use_parts_list.append(
             f"'one' to let you use more natural phrasing in your narrative (e.g. \"He picked up one more...\")"
@@ -2310,9 +2704,61 @@ def _generate_narrative_recursive(  # Line ~1315
         user_message_content += f"- You may optionally use: { ' and '.join(full_optional_statement_parts) }.\n"
 
     # Now, resume the original f-string concatenation for the remaining rules
+    # --- Refined "NO OTHER NUMBERS ALLOWED" instruction with narrative context ---
+    # `numbers_to_mention_in_prompt` is the set of current beat's direct operands + its result
+    # `truly_forbidden_for_prompt` is (all_previously_introduced_atoms - current_beat_direct_operands)
+
+    primary_object = world.get("object", "items") # Get the primary object name
+
+    # Use dynamic problematic numbers: base set from config + current operand_count if it's forbidden
+    dynamic_problematic_numbers_to_check = config.PROBLEM_SMALL_NUMBERS_TO_CHECK.copy()
+    if operand_count_is_forbidden_for_prompt: # If the operand count itself is forbidden
+        dynamic_problematic_numbers_to_check.add(operand_count)
+
+    special_attention_clauses = []
+
+    for num_val in sorted(list(dynamic_problematic_numbers_to_check)): # Sort for consistent prompt order
+        # Condition:
+        # 1. The number `num_val` was introduced in a previous step (is in `truly_forbidden_for_prompt`).
+        # 2. The number `num_val` is NOT a required operand or the result for the CURRENT step (not in `numbers_to_mention_in_prompt`).
+        if (num_val in truly_forbidden_for_prompt) and \
+           (num_val not in numbers_to_mention_in_prompt):
+            
+            num_word = num_to_words(num_val) # Assumes num_to_words is available in scope
+            
+            # Determine singular or plural form of the object for natural language
+            # Assumes p_inflect is available in scope (from context.p_inflect)
+            object_form = p_inflect.singular_noun(primary_object) if num_val == 1 and p_inflect else primary_object
+            
+            # Special clarification if this forbidden number is also the current operand_count
+            is_current_operand_count_clause = ""
+            if num_val == operand_count and operand_count_is_forbidden_for_prompt: # Check if this num_val is the operand_count that's also forbidden
+                is_current_operand_count_clause = (f" (Note: even though there are {num_word} new groups of {object_form} in *this* scene, "
+                                                   f"the word '{num_word}' is forbidden due to its prior significance - see SPECIAL NARRATIVE CHALLENGE above if provided)")
+
+            # Construct a specific warning for this number and object
+            clause = (
+                f"The number **'{num_word}'** (referring to '{num_word} {object_form}' or just the quantity '{num_word}') "
+                f"was significant in a prior event. For THIS SCENE, you MUST NOT use the word '{num_word}'{is_current_operand_count_clause}, unless '{num_word}' is explicitly in 'MUST INCLUDE' for this step."
+            )
+            special_attention_clauses.append(clause)
+
+    # Start with the general rule
+    no_other_numbers_instruction = "- NO OTHER NUMBERS ALLOWED.\n"
+
+    if special_attention_clauses:
+        # If there are specific warnings, add a header and then list them.
+        # This makes the prompt structure clearer.
+        no_other_numbers_instruction += (
+            "  **ADDITIONAL CLARIFICATIONS ON PREVIOUSLY MENTIONED QUANTITIES (VERY IMPORTANT FOR THIS SCENE):**\n"
+        )
+        for clause_text in special_attention_clauses:
+            no_other_numbers_instruction += f"    *   {clause_text}\n"
+
+    user_message_content += no_other_numbers_instruction
+    # The "Adherence to these number rules is MANDATORY" line should follow immediately
     user_message_content += (
-        f"- NO OTHER NUMBERS ALLOWED.\n"
-        f"**Adherence to these number rules is MANDATORY.**\n\n"  # Added mandatory note
+        f"**Adherence to these number rules is MANDATORY.**\n\n"
     )
 
     # --- Final Reminder ---
@@ -2335,13 +2781,30 @@ def _generate_narrative_recursive(  # Line ~1315
         logger.error(f"Error encoding prompt for token estimation: {e}")
 
     current_max_beat_completion_tokens = (
-        config.MAX_BEAT_TOKENS
+        config.BEAT_MAX_TOKENS
     )  # Renamed variable
 
+    # Enhanced logging for token budget before API call
+    token_percentage = (context.tokens_used / config.MAX_TOTAL_TOKENS) * 100
+    expected_after_call = context.tokens_used + estimated_prompt_tokens + current_max_beat_completion_tokens
+    expected_percentage = (expected_after_call / config.MAX_TOTAL_TOKENS) * 100
+    will_exceed = would_exceed_budget(
+        context.tokens_used,
+        estimated_prompt_tokens + current_max_beat_completion_tokens,
+        config.MAX_TOTAL_TOKENS,
+        SAFETY_MARGIN,
+    )
+    
     logger.info(
-        f"Beat Gen Pre-Call Tokens: Prompt Est={estimated_prompt_tokens}, Max Comp={current_max_beat_completion_tokens}, Current Total={context.tokens_used}, Budget={config.MAX_TOTAL_TOKENS}"
+        f"TOKEN BUDGET PRE-CALL [{node.op}/{narrative_anchor}]: "
+        f"Current: {context.tokens_used} ({token_percentage:.1f}%), "
+        f"This call: +{estimated_prompt_tokens} prompt, +{current_max_beat_completion_tokens} max completion = "
+        f"+{estimated_prompt_tokens + current_max_beat_completion_tokens} total, "
+        f"Expected after: {expected_after_call}/{config.MAX_TOTAL_TOKENS} ({expected_percentage:.1f}%), "
+        f"Will exceed: {will_exceed}"
     )
 
+    # Original token budget check with enhanced error message
     if would_exceed_budget(
         context.tokens_used,
         estimated_prompt_tokens + current_max_beat_completion_tokens,
@@ -2349,7 +2812,12 @@ def _generate_narrative_recursive(  # Line ~1315
         SAFETY_MARGIN,
     ):
         logger.warning(
-            f"Approaching token limit BEFORE generating operator {node.op} ({narrative_anchor}). Est Prompt {estimated_prompt_tokens} + Max Comp {current_max_beat_completion_tokens} vs Remaining {config.MAX_TOTAL_TOKENS - context.tokens_used}. Stopping."
+            f"❌ TOKEN LIMIT ABORT: Cannot generate beat for {node.op} ({narrative_anchor}). "
+            f"Current: {context.tokens_used}/{config.MAX_TOTAL_TOKENS} ({token_percentage:.1f}%), "
+            f"Required: +{estimated_prompt_tokens} prompt, +{current_max_beat_completion_tokens} completion, "
+            f"Total needed: {context.tokens_used + estimated_prompt_tokens + current_max_beat_completion_tokens}, "
+            f"Max allowed: {config.MAX_TOTAL_TOKENS - SAFETY_MARGIN} (with margin). "
+            f"STOPPING GENERATION."
         )
         raise BeatGenerationError(
             f"Token budget exceeded before generating beat for {node.op}"
@@ -2375,7 +2843,7 @@ def _generate_narrative_recursive(  # Line ~1315
         allowed_atoms=set(),
         forbidden_atoms=forbidden_for_padding,
         operand_count=0,
-        correct_result_for_beat=-999,
+        correct_result_for_beat=config.INVALID_RESULT_PLACEHOLDER,
         strict_zero=True,
     )
 
@@ -2556,11 +3024,15 @@ def _generate_narrative_recursive(  # Line ~1315
         context.tokens_used += btoks
         context.last_scene_text = beat_text
         context.introduced_atoms.update(required_atoms_for_beat)
+        
+        token_percentage = (context.tokens_used / config.MAX_TOTAL_TOKENS) * 100
         logger.debug(
             f"Beat {context.beat_counter['current']} successful. Introduced atoms updated: {context.introduced_atoms}"
         )
         logger.info(
-            f"Beat {context.beat_counter['current']} successful. Tokens used this beat: {btoks}. Total tokens: {context.tokens_used}"
+            f"Beat {context.beat_counter['current']} successful. Tokens used this beat: {btoks}, "
+            f"Total tokens: {context.tokens_used}/{config.MAX_TOTAL_TOKENS} ({token_percentage:.1f}%), "
+            f"Remaining: {config.MAX_TOTAL_TOKENS - context.tokens_used - SAFETY_MARGIN} (with {SAFETY_MARGIN} margin)"
         )
     else:
         logger.error(
@@ -2571,13 +3043,25 @@ def _generate_narrative_recursive(  # Line ~1315
         )
 
     # --- Enhanced Intelligent Padding Loop ---
-    # No padding after the root node's beat processing is complete.
-    # The padding loop attempts to fill the token budget more aggressively
-    # after each non-root beat, up to a local cap per beat.
     if not is_root:
+        # Calculate current padding statistics
+        current_padding_total = context.padding_stats["total_padding_tokens"]
+        max_padding_allowed = context.padding_stats["max_padding_allowed"]
+        padding_budget_remaining = max_padding_allowed - current_padding_total
+        padding_usage_percent = (current_padding_total / max_padding_allowed * 100) if max_padding_allowed > 0 else 0
+        
+        token_percentage_before_padding = (context.tokens_used / config.MAX_TOTAL_TOKENS) * 100
+        logger.info(
+            f"PADDING BUDGET CHECK [{node.op}/{narrative_anchor}]: "
+            f"Current tokens: {context.tokens_used}/{config.MAX_TOTAL_TOKENS} ({token_percentage_before_padding:.1f}%), "
+            f"Padding used so far: {current_padding_total}/{max_padding_allowed} tokens ({padding_usage_percent:.1f}%), "
+            f"Padding budget remaining: {padding_budget_remaining} tokens, "
+            f"Segments added so far: {context.padding_stats['padding_segments_added']}"
+        )
+        
         local_padding_segments_added = 0
         
-        # Loop to add padding segments after the current beat
+        # Modified loop conditions to include padding budget check
         while (
             # Condition 1: Global token budget allows for more content
             context.tokens_used < config.MAX_TOTAL_TOKENS - SAFETY_MARGIN
@@ -2585,18 +3069,34 @@ def _generate_narrative_recursive(  # Line ~1315
             # Condition 2: We haven't added too many padding segments *locally* for this beat.
             # context.max_pad_paragraphs (from config.MAX_PAD_PARAGRAPHS) acts as the per-beat cap.
             and local_padding_segments_added < context.max_pad_paragraphs
+            
+            # Condition 3: Check if we have padding budget remaining
+            and current_padding_total < max_padding_allowed
         ):
             # Estimate the cost of the next padding segment (prompt + completion)
-            # Prompt tokens for padding are generally small; estimate ~100.
-            # MAX_PAD_COMPLETION_TOKENS is config.MAX_PADDING_TOKENS.
-            estimated_next_padding_segment_cost = MAX_PAD_COMPLETION_TOKENS + 100 
+            estimated_next_padding_segment_cost = MAX_PAD_COMPLETION_TOKENS + 100
+            
+            # Check if adding this segment would exceed padding budget
+            if current_padding_total + estimated_next_padding_segment_cost > max_padding_allowed:
+                logger.warning(
+                    f"PADDING BUDGET LIMIT [{node.op}/{narrative_anchor}]: "
+                    f"Current padding: {current_padding_total}/{max_padding_allowed} tokens ({padding_usage_percent:.1f}%), "
+                    f"Next segment est. cost: +{estimated_next_padding_segment_cost}, "
+                    f"Would exceed max padding budget. Stopping padding for this beat."
+                )
+                break
+            
+            token_percentage = (context.tokens_used / config.MAX_TOTAL_TOKENS) * 100
+            estimated_after_padding = context.tokens_used + estimated_next_padding_segment_cost
+            estimated_percentage_after_padding = (estimated_after_padding / config.MAX_TOTAL_TOKENS) * 100
             
             if context.tokens_used + estimated_next_padding_segment_cost > config.MAX_TOTAL_TOKENS - SAFETY_MARGIN:
                 logger.debug(
-                    f"Padding after beat for {node.op} ({narrative_anchor}): "
-                    f"Adding another full padding segment (est. {estimated_next_padding_segment_cost} tokens) might exceed budget "
-                    f"(current tokens: {context.tokens_used}, target max: {config.MAX_TOTAL_TOKENS - SAFETY_MARGIN}). "
-                    f"Stopping padding here for this beat."
+                    f"PADDING ABORT [{node.op}/{narrative_anchor}]: "
+                    f"Current: {context.tokens_used}/{config.MAX_TOTAL_TOKENS} ({token_percentage:.1f}%), "
+                    f"Next padding est. cost: +{estimated_next_padding_segment_cost}, "
+                    f"Would reach: {estimated_after_padding}/{config.MAX_TOTAL_TOKENS} ({estimated_percentage_after_padding:.1f}%), "
+                    f"Max allowed: {config.MAX_TOTAL_TOKENS - SAFETY_MARGIN}. Stopping padding for this beat."
                 )
                 break # Break from this beat's padding loop if next segment likely too costly
 
@@ -2604,9 +3104,9 @@ def _generate_narrative_recursive(  # Line ~1315
             local_padding_segments_added += 1
             
             logger.debug(
-                f"Attempting padding segment {local_padding_segments_added}/{context.max_pad_paragraphs} "
-                f"after beat for {node.op} ({narrative_anchor}). "
-                f"Current tokens: {context.tokens_used}, Target Max (excluding safety margin): {config.MAX_TOTAL_TOKENS - SAFETY_MARGIN}"
+                f"PADDING ATTEMPT [{node.op}/{narrative_anchor}]: Segment {local_padding_segments_added}/{context.max_pad_paragraphs}, "
+                f"Current tokens: {context.tokens_used}/{config.MAX_TOTAL_TOKENS} ({token_percentage:.1f}%), "
+                f"Current padding: {current_padding_total}/{max_padding_allowed} tokens ({padding_usage_percent:.1f}%)"
             )
 
             padding_system_prompt = "You are a concise storyteller adding descriptive filler. FOLLOW THE USER'S RULES EXACTLY."
@@ -2659,6 +3159,15 @@ def _generate_narrative_recursive(  # Line ~1315
 
             if padding_text:
                 ptoks = len(encoder.encode(padding_text))
+                
+                # Check if this would exceed padding budget
+                if current_padding_total + ptoks > max_padding_allowed:
+                    logger.warning(
+                        f"PADDING BUDGET EXCEEDED [{node.op}/{narrative_anchor}]: Generated padding segment ({ptoks} tokens) would "
+                        f"exceed total padding budget ({current_padding_total + ptoks}/{max_padding_allowed}). Discarding."
+                    )
+                    break
+                
                 # Re-check budget with actual token count before adding, though prior checks should catch most overflows
                 if (
                     context.tokens_used + ptoks
@@ -2667,21 +3176,56 @@ def _generate_narrative_recursive(  # Line ~1315
                     context.scenes.append(padding_text)
                     context.tokens_used += ptoks
                     context.last_scene_text = padding_text
-                    logger.debug(f"Padding segment {local_padding_segments_added} successful after {node.op} ({narrative_anchor}). Tokens used: {ptoks}. Total: {context.tokens_used}")
+                    
+                    # Update padding tracking
+                    context.padding_stats["total_padding_tokens"] += ptoks
+                    current_padding_total = context.padding_stats["total_padding_tokens"] # Update local var
+                    context.padding_stats["padding_segments_added"] += 1
+                    
+                    # Calculate new percentages
+                    token_percentage_after = (context.tokens_used / config.MAX_TOTAL_TOKENS) * 100
+                    padding_percentage_after = (current_padding_total / max_padding_allowed * 100)
+                    
+                    logger.debug(
+                        f"PADDING SUCCESS [{node.op}/{narrative_anchor}]: Segment {local_padding_segments_added} added. "
+                        f"Size: {ptoks} tokens. Total now: {context.tokens_used}/{config.MAX_TOTAL_TOKENS} ({token_percentage_after:.1f}%), "
+                        f"Padding total: {current_padding_total}/{max_padding_allowed} ({padding_percentage_after:.1f}%), "
+                        f"Total padding segments: {context.padding_stats['padding_segments_added']}"
+                    )
                 else:
+                    token_percentage_would_be = ((context.tokens_used + ptoks) / config.MAX_TOTAL_TOKENS) * 100
                     logger.warning(
-                        f"Generated padding segment {local_padding_segments_added} ({ptoks} tokens) "
-                        f"after {node.op} ({narrative_anchor}) would exceed token limit. Discarding."
+                        f"PADDING DISCARD [{node.op}/{narrative_anchor}]: Generated padding segment {local_padding_segments_added} "
+                        f"({ptoks} tokens) would exceed limit. Current: {context.tokens_used}/{config.MAX_TOTAL_TOKENS} ({token_percentage:.1f}%), "
+                        f"With padding: {context.tokens_used + ptoks}/{config.MAX_TOTAL_TOKENS} ({token_percentage_would_be:.1f}%). Discarding."
                     )
                     # Even if we discard, we should break as we are at the budget limit.
                     break 
             else:
                 logger.warning(
-                    f"Padding segment generation {local_padding_segments_added} failed after beat for {node.op} ({narrative_anchor}) "
-                    f"(validator failed or API error after retries). Stopping further padding attempts for this beat."
+                    f"PADDING FAIL [{node.op}/{narrative_anchor}]: Segment {local_padding_segments_added} generation failed "
+                    f"(validator failed or API error after retries). Current tokens: {context.tokens_used}/{config.MAX_TOTAL_TOKENS} "
+                    f"({token_percentage:.1f}%). Stopping further padding attempts for this beat."
                 )
                 break # Break from this beat's padding loop if generation fails
-    # --- End of Enhanced Intelligent Padding Loop ---
+        
+        # Log summary if no padding was added
+        if local_padding_segments_added == 0:
+            logger.debug(
+                f"NO PADDING ADDED [{node.op}/{narrative_anchor}]: Either token limit reached, "
+                f"padding budget exceeded ({current_padding_total}/{max_padding_allowed} tokens), "
+                f"or max segments per beat ({context.max_pad_paragraphs}) reached."
+            )
+    
+    # End of function token budget summary
+    token_percentage_end = (context.tokens_used / config.MAX_TOTAL_TOKENS) * 100
+    padding_percentage = (context.padding_stats["total_padding_tokens"] / context.padding_stats["max_padding_allowed"] * 100) if context.padding_stats["max_padding_allowed"] > 0 else 0
+    logger.debug(
+        f"TOKEN BUDGET END [{getattr(node, 'op', 'Atom')}/{narrative_anchor}]: "
+        f"{context.tokens_used}/{config.MAX_TOTAL_TOKENS} tokens ({token_percentage_end:.1f}%), "
+        f"Padding: {context.padding_stats['total_padding_tokens']}/{context.padding_stats['max_padding_allowed']} ({padding_percentage:.1f}%), "
+        f"Remaining: {config.MAX_TOTAL_TOKENS - context.tokens_used - SAFETY_MARGIN} (with {SAFETY_MARGIN} margin)"
+    )
 
 
 def generate_narrative(
@@ -2691,7 +3235,7 @@ def generate_narrative(
     encoder,
     p_inflect,
     logger,
-    sample_index: int,  # <-- ADDED sample_index
+    sample_index: int,
 ) -> str | None:
     """
     Post-Order Strict Validation: Generate a narrative for a ListOps AST, ensuring
@@ -2725,62 +3269,77 @@ def generate_narrative(
 
     operator_nodes = [n for n in postorder(ast) if not isinstance(n, Atom)]
     narrative_anchor_map = {}
-    if config.USE_NARRATIVE_ANCHORS:
-        if operator_nodes:
-            use_llm = config.USE_LLM_NAMING
-            characters = world.get("characters", [])
-
-            for (
-                op_node
-            ) in (
-                operator_nodes
-            ):  # Already in post-order thanks to postorder() generator
-                if not isinstance(op_node, OpNode):
-                    continue
-                node_id = id(op_node)
-                narrative_anchor = None
-                if use_llm:
-                    # Get all anchors generated so far for *this sample*
-                    all_anchors_so_far = list(
-                        narrative_anchor_map.values()
-                    )  # These are the anchors generated for previous ops in post-order
-
-                    try:
-                        narrative_anchor = generate_narrative_anchor_with_llm(
-                            world_info=world,  # Pass the whole world_info dict
-                            op_node=op_node,
-                            all_previous_anchors=all_anchors_so_far,
-                            sample_index=sample_index,
-                        )
-                    except Exception as e:
-                        logger.error(f"LLM Naming failed for OpNode {op_node.op}: {e}")
-                        narrative_anchor = None  # Fallback handled below
-
-                if not narrative_anchor:  # Fallback naming
-                    primary_object = world["object"]
-                    op_index = operator_nodes.index(
-                        op_node
-                    )  # Find index for fallback naming
-                    if characters:
-                        char_name = random.choice(characters).get("name", "Someone")
-                        possessive = (
-                            f"{char_name}'"
-                            if char_name.endswith("s")
-                            else f"{char_name}'s"
-                        )
-
-                        narrative_anchor = (
-                            f"{possessive} {op_node.op} Result ({op_index+1})"
-                        )
-                    else:
-                        narrative_anchor = (
-                            f"the {primary_object} ({op_node.op} #{op_index+1})"
-                        )
-                narrative_anchor_map[node_id] = narrative_anchor
-                logger.debug(
-                    f"Mapped narrative anchor for node {op_node.op}: '{narrative_anchor}'"
-                )
-
+    
+    if config.USE_NARRATIVE_ANCHORS and operator_nodes:
+        use_llm = config.USE_LLM_NAMING
+        characters = world.get("characters", [])
+        
+        # Create a function for ThreadPoolExecutor to run
+        def generate_anchor_for_node(op_node):
+            if not isinstance(op_node, OpNode):
+                return (id(op_node), None)
+                
+            node_id = id(op_node)
+            narrative_anchor = None
+            
+            if use_llm:
+                # Note: We're no longer using all_anchors_so_far as that would 
+                # create a dependency between parallel executions
+                try:
+                    narrative_anchor = generate_narrative_anchor_with_llm(
+                        world_info=world,
+                        op_node=op_node,
+                        all_previous_anchors=[],  # Empty list since we're parallelizing
+                        sample_index=sample_index,
+                    )
+                except Exception as e:
+                    logger.error(f"LLM Naming failed for OpNode {op_node.op}: {e}")
+            
+            # Return the node_id and anchor (or None if failed)
+            return (node_id, narrative_anchor)
+        
+        # Submit all jobs to ThreadPoolExecutor
+        with concurrent.futures.ThreadPoolExecutor() as executor:
+            # Submit all jobs
+            future_to_node = {
+                executor.submit(generate_anchor_for_node, op_node): op_node 
+                for op_node in operator_nodes
+            }
+            
+            # Process results as they complete
+            for future in concurrent.futures.as_completed(future_to_node):
+                op_node = future_to_node[future]
+                try:
+                    node_id, narrative_anchor = future.result()
+                    
+                    # Apply fallback naming if needed
+                    if not narrative_anchor:
+                        primary_object = world["object"]
+                        op_index = operator_nodes.index(op_node)
+                        
+                        if characters:
+                            char_name = random.choice(characters).get("name", "Someone")
+                            possessive = (
+                                f"{char_name}'"
+                                if char_name.endswith("s")
+                                else f"{char_name}'s"
+                            )
+                            narrative_anchor = f"{possessive} {op_node.op} Result ({op_index+1})"
+                        else:
+                            narrative_anchor = f"the {primary_object} ({op_node.op} #{op_index+1})"
+                    
+                    # Update the map
+                    narrative_anchor_map[node_id] = narrative_anchor
+                    logger.debug(f"Mapped narrative anchor for node {op_node.op}: '{narrative_anchor}'")
+                    
+                except Exception as e:
+                    logger.error(f"Error in parallel anchor generation for {getattr(op_node, 'op', 'unknown')}: {e}")
+                    # Apply emergency fallback
+                    node_id = id(op_node)
+                    narrative_anchor_map[node_id] = f"emergency_fallback_{getattr(op_node, 'op', 'node')}_{node_id}"
+        
+        logger.info(f"Generated {len(narrative_anchor_map)} narrative anchors in parallel")
+    
     scenes = []
     tokens_used = 0
     intro_system_prompt = (
@@ -2808,7 +3367,7 @@ def generate_narrative(
             allowed_atoms=set(),
             forbidden_atoms=set(),
             operand_count=0,
-            correct_result_for_beat=-999,
+            correct_result_for_beat=config.INVALID_RESULT_PLACEHOLDER,
             strict_zero=True,
         ),
         retries=config.INTRO_MAX_RETRIES,
@@ -2859,6 +3418,17 @@ def generate_narrative(
         sample_index=sample_index,
         max_pad_paragraphs=config.MAX_PAD_PARAGRAPHS,  # Or get from config
     )
+    
+    # Initialize padding budget tracking
+    max_padding_allowed = int(config.MAX_TOTAL_TOKENS * config.PADDING_MAX_TOK_PERCENT)
+    context.padding_stats["max_padding_allowed"] = max_padding_allowed
+    logger.info(
+        f"PADDING BUDGET INITIALIZED: Max total tokens: {config.MAX_TOTAL_TOKENS}, "
+        f"Max padding %: {config.PADDING_MAX_TOK_PERCENT*100:.1f}%, "
+        f"Max padding tokens allowed: {max_padding_allowed}, "
+        f"Max padding segments per beat: {config.MAX_PAD_PARAGRAPHS}"
+    )
+    
     # --- Start the POST-ORDER recursive generation ---
     try:
 
@@ -2895,6 +3465,51 @@ def generate_narrative(
             f"Final generated prompt ({final_token_count} tokens) exceeds MAX_TOTAL_TOKENS ({config.MAX_TOTAL_TOKENS}). Truncation might occur."
         )
 
+    # Add padding statistics summary
+    total_padding_tokens = context.padding_stats["total_padding_tokens"]
+    max_padding_allowed = context.padding_stats["max_padding_allowed"]
+    padding_segments_added = context.padding_stats["padding_segments_added"]
+    
+    padding_percentage_of_max = (total_padding_tokens / max_padding_allowed * 100) if max_padding_allowed > 0 else 0
+    padding_percentage_of_total = (total_padding_tokens / context.tokens_used * 100) if context.tokens_used > 0 else 0
+    
+    logger.info(
+        f"PADDING FINAL SUMMARY: "
+        f"Padding tokens: {total_padding_tokens}/{max_padding_allowed} ({padding_percentage_of_max:.1f}% of max allowed), "
+        f"Padding percentage of total tokens: {padding_percentage_of_total:.1f}%, "
+        f"Padding segments added: {padding_segments_added}, "
+        f"Config max padding: {config.PADDING_MAX_TOK_PERCENT*100:.1f}% of total tokens"
+    )
+    
+    # Add validation diagnostic summary
+    failed_validations_dir = os.path.join(LOG_DIR, "failed_validations")
+    if os.path.exists(failed_validations_dir):
+        validation_files = [f for f in os.listdir(failed_validations_dir) if f.startswith("validation_fail_")]
+        if validation_files:
+            # Count failures by reason and operation
+            failures_by_reason = {}
+            failures_by_op = {}
+            
+            for file in validation_files:
+                parts = file.split('_')
+                if len(parts) >= 4:
+                    op = parts[2]
+                    reason = parts[3]
+                    
+                    failures_by_reason[reason] = failures_by_reason.get(reason, 0) + 1
+                    failures_by_op[op] = failures_by_op.get(op, 0) + 1
+            
+            logger.info(f"VALIDATION FAILURES SUMMARY:")
+            logger.info(f"Total validation failures: {len(validation_files)}")
+            logger.info(f"Failures by reason: {failures_by_reason}")
+            logger.info(f"Failures by operation: {failures_by_op}")
+            
+            # List the most recent failures for quick reference
+            recent_files = sorted(validation_files, reverse=True)[:5]  # Get 5 most recent
+            logger.info(f"Most recent validation failures:")
+            for file in recent_files:
+                logger.info(f"  - {file}")
+    
     logger.info(
         f"Successfully generated narrative prompt. Final estimated tokens: {context.tokens_used} (body), {final_token_count} (full prompt)"
     )
@@ -2912,6 +3527,9 @@ def ast_to_prefix(node: Node) -> str:
 # --- HELPER FOR SINGLE SAMPLE GENERATION ---
 def generate_single_sample(sample_index: int) -> dict | None:
     """Generate one sample with strict validation."""
+    # Properly declare as global to modify it
+    global _generate_narrative_recursive
+    
     logger.info(f"--- Starting generation for sample {sample_index + 1} ---")
     sample_start_time = time.time()
 
@@ -2920,7 +3538,10 @@ def generate_single_sample(sample_index: int) -> dict | None:
     llm_turns_log_specific_dir = os.path.join(llm_turns_main_dir, "log")
     log_filename_base = f"llm_turns_sample_{sample_index + 1}.log"
     original_log_path = os.path.join(llm_turns_log_specific_dir, log_filename_base)
-    failed_log_path = os.path.join(llm_turns_log_specific_dir, f"[FAIL] {log_filename_base}")
+    
+    # Track current operation and narrative anchor for more informative log filenames
+    current_op = "unknown"
+    current_anchor = "unknown"
 
     try:
         if encoder is None or p_inflect is None:
@@ -2929,6 +3550,7 @@ def generate_single_sample(sample_index: int) -> dict | None:
             )
             # Attempt to rename log even for this early failure, though few LLM turns might exist
             if os.path.exists(original_log_path):
+                failed_log_path = os.path.join(llm_turns_log_specific_dir, f"[FAIL_INIT] {log_filename_base}")
                 try:
                     os.rename(original_log_path, failed_log_path)
                     logger.info(f"Renamed LLM turn log for (early) failed sample {sample_index + 1} to: {failed_log_path}")
@@ -2959,94 +3581,125 @@ def generate_single_sample(sample_index: int) -> dict | None:
         logger.info(f"[Sample {sample_index + 1}] World metadata generated.")
         logger.debug(f"[Sample {sample_index + 1}] World Info: {world_info}")
 
+        # Store the original function reference
+        original_function = _generate_narrative_recursive
+        
+        # Create tracking wrapper
+        def _generate_narrative_recursive_with_tracking(node: Node, context: "GenerationContext", is_root: bool):
+            nonlocal current_op, current_anchor
+            node_id = id(node)
+            current_op = getattr(node, 'op', 'UNKNOWN_OP')
+            current_anchor = context.narrative_anchor_map.get(node_id, f"unnamed_{current_op}")
+            # Use sanitized anchor name for logs
+            sanitized_anchor = str(current_anchor).replace(" ", "_").replace("'", "").replace('"', "")
+            logger.debug(f"[Sample {sample_index + 1}] Now processing: OP={current_op}, Anchor={sanitized_anchor}")
+            return original_function(node, context, is_root)
+        
+        # Replace the global function temporarily
+        _generate_narrative_recursive = _generate_narrative_recursive_with_tracking
+
         logger.info(
-            f"[Sample {sample_index + 1}] Starting narrative rendering with post-order strict validation..."  # Updated log message
+            f"[Sample {sample_index + 1}] Starting narrative rendering with post-order strict validation..."
         )
-        narrative_prompt = generate_narrative(
-            ast,
-            world_info,
-            config,
-            encoder,
-            p_inflect,
-            logger,
-            sample_index,  # <-- PASS sample_index here
-        )
-        if narrative_prompt is None:
-            logger.error(
-                f"[Sample {sample_index + 1}] Narrative generation failed post-order strict validation. Skipping."  # Updated log message
+        try:
+            narrative_prompt = generate_narrative(
+                ast,
+                world_info,
+                config,
+                encoder,
+                p_inflect,
+                logger,
+                sample_index,
             )
-            sample_end_time = time.time()
+        finally:
+            # Restore the original function
+            _generate_narrative_recursive = original_function
+            
+        if not narrative_prompt:
             logger.error(
-                f"--- Failed sample {sample_index + 1} after {sample_end_time - sample_start_time:.2f}s (Narrative Validation Failure) ---"
+                f"[Sample {sample_index + 1}] Narrative generation failed or returned None. Aborting sample."
             )
+            # Rename log for narrative failure
             if os.path.exists(original_log_path):
+                failed_log_path = os.path.join(llm_turns_log_specific_dir, f"[FAIL_NARRATIVE_GEN_{current_op}_{current_anchor}] {log_filename_base}")
                 try:
                     os.rename(original_log_path, failed_log_path)
-                    logger.info(f"Renamed LLM turn log for failed sample {sample_index + 1} to: {failed_log_path}")
-                except OSError as e:
-                    logger.error(f"Error renaming log file {original_log_path} to {failed_log_path}: {e}")
+                    logger.info(f"Renamed LLM turn log for failed sample {sample_index + 1} to: {failed_log_path} (narrative gen failed)")
+                except OSError as e_rename:
+                    logger.error(f"Error renaming log file {original_log_path} to {failed_log_path}: {e_rename}")
             return None
-        logger.info(
-            f"[Sample {sample_index + 1}] Narrative rendering and validation complete."
-        )
 
-        all_atoms = get_atoms_in_subtree(ast)
-        found_in_final_body = extract_numbers_from_text(narrative_prompt)
-        introduced_atoms = found_in_final_body - all_atoms
-        missing = all_atoms - found_in_final_body
+        # Construct the final sample dictionary
+        # Create a serializable version of config
+        config_dict_to_store = {}
+        try:
+            # Attempt to create a serializable version of config
+            for field_name, field_value in config.__dict__.items():
+                if isinstance(field_value, (int, float, str, bool, list, dict, tuple)) or field_value is None:
+                    config_dict_to_store[field_name] = field_value
+                else:
+                    config_dict_to_store[field_name] = str(field_value)  # Convert non-basic types to string
+            logger.debug(f"[Sample {sample_index + 1}] Successfully created config_dict_to_store.")
+        except Exception as config_err:
+            logger.error(f"[Sample {sample_index + 1}] Error converting config to dict: {config_err}", exc_info=True)
+            # Raise a new error to be caught by the outer exception handler
+            raise RuntimeError(f"Failed to serialize config for sample {sample_index + 1}: {config_err}")
 
         sample_data = {
-            "id": f"verbose_listop_{datetime.datetime.now().strftime('%Y%m%d%H%M%S')}_{sample_index + 1}",
+            "id": f"verbose_listops_sample_{sample_index + 1}_{datetime.datetime.now().strftime('%Y%m%d%H%M%S%f')}",
             "ast_prefix": ast_prefix_string,
-            "ground_truth": ground_truth_answer,
-            "world_info": world_info,
+            "ground_truth_answer": ground_truth_answer,
+            "world_metadata": world_info,
             "narrative_prompt": narrative_prompt,
-            "metadata": {
-                "generation_timestamp": datetime.datetime.now().isoformat(),
-                "model_used": MODEL,
-                "max_ops": config.MAX_OPS,
-                "max_branch": config.MAX_BRANCH,
-                "atom_min_value": config.MIN_ATOM_VAL,
-                "atom_max_value": config.MAX_ATOM_VAL,
-                "max_beat_retries": config.MAX_BEAT_RETRIES,
-                "max_pad_retries": config.MAX_PAD_RETRIES,
-                "validation_mode": (  # Updated validation mode string
-                    "postorder_llm_anchor_v2_strict_validate"
-                    if (config.USE_NARRATIVE_ANCHORS and config.USE_LLM_NAMING)
-                    else (
-                        "postorder_thematic_anchors_v2_strict_validate"
-                        if config.USE_NARRATIVE_ANCHORS
-                        else "postorder_strict_validation_v2_strict_validate"
-                    )
-                ),
-                "FEW_SHOT_EXAMPLES": config.FEW_SHOT_EXAMPLES,  # Add few-shot count
-            },
+            "model_used": MODEL,
+            "generation_timestamp": datetime.datetime.now().isoformat(),
+            "config_params": config_dict_to_store,  # Use the sanitized version
         }
+
         sample_end_time = time.time()
         logger.info(
-            f"--- Successfully generated sample {sample_index + 1} in {sample_end_time - sample_start_time:.2f} seconds ---"
+            f"--- Successfully generated sample {sample_index + 1} in {sample_end_time - sample_start_time:.2f}s ---"
         )
+        # Rename log for success
+        if os.path.exists(original_log_path):
+            success_log_path = os.path.join(llm_turns_log_specific_dir, f"[SUCCESS] {log_filename_base}")
+            try:
+                os.rename(original_log_path, success_log_path)
+                logger.info(f"Renamed LLM turn log for successful sample {sample_index + 1} to: {success_log_path}")
+            except OSError as e_rename:
+                logger.error(f"Error renaming log file {original_log_path} to {success_log_path}: {e_rename}")
         return sample_data
 
-    except ValueError as e:
-        logger.error(f"[Sample {sample_index + 1}] Data validation error: {e}")
-    except RuntimeError as e:
-        logger.error(f"[Sample {sample_index + 1}] Runtime error: {e}")
-    except Exception as e:
-        logger.exception(f"[Sample {sample_index + 1}] Unexpected error: {e}")
+    except Exception as e_caught:  # Catch any exception from the try block with a distinct variable name
+        sample_end_time = time.time()  # Calculate time early
+        actual_error_type = type(e_caught).__name__
 
-    # Common failure path for exceptions
-    sample_end_time = time.time()
-    logger.error(
-        f"--- Failed sample {sample_index + 1} after {sample_end_time - sample_start_time:.2f}s (Exception) ---"
-    )
-    if os.path.exists(original_log_path):
-        try:
-            os.rename(original_log_path, failed_log_path)
-            logger.info(f"Renamed LLM turn log for failed sample {sample_index + 1} to: {failed_log_path} (due to exception)")
-        except OSError as e:
-            logger.error(f"Error renaming log file {original_log_path} to {failed_log_path}: {e}")
-    return None
+        # Log with logger.exception FIRST to maximize chance of getting stack trace
+        logger.exception(
+            f"[Sample {sample_index + 1}] Unexpected error during sample data construction or finalization. Type: {actual_error_type}, Error: {e_caught}"
+        )
+
+        # Also capture error details for inspection as an additional backup
+        import traceback
+        error_stack = traceback.format_exc()
+        logger.error(f"[Sample {sample_index + 1}] Stack trace:\n{error_stack}")
+
+        # Your custom summary log
+        logger.error(
+            f"--- Failed sample {sample_index + 1} after {sample_end_time - sample_start_time:.2f}s (Exception: {actual_error_type} at {current_op}/{current_anchor}) ---"
+        )
+
+        # Log renaming logic with the actual error type
+        if os.path.exists(original_log_path):
+            safe_anchor = str(current_anchor).replace(" ", "_").replace("'", "").replace('"', "")
+            # Use actual_error_type in the filename
+            failed_log_path = os.path.join(llm_turns_log_specific_dir, f"[FAIL_{actual_error_type}_{current_op}_{safe_anchor}] {log_filename_base}")
+            try:
+                os.rename(original_log_path, failed_log_path)
+                logger.info(f"Renamed LLM turn log for failed sample {sample_index + 1} to: {failed_log_path} (due to exception: {actual_error_type})")
+            except OSError as e_rename_fail:
+                logger.error(f"Error renaming log file {original_log_path} to {failed_log_path}: {e_rename_fail}")
+        return None
 
 
 def main(
@@ -3055,10 +3708,17 @@ def main(
     max_workers: int = DEFAULT_MAX_WORKERS,      # Use global constant instead
 ):
     """Generate samples with strict validation."""
+    # Test log output to ensure logger is working properly
+    logger.info("START OF MAIN FUNCTION - THIS LOG SHOULD APPEAR IN verbose_listops.log")
+    
     # --- Dynamic Filename Generation ---
     sanitized_model_name = MODEL.replace("/", "_").replace(":", "-")
 
-    output_file = (
+    # Ensure datasets directory exists
+    os.makedirs(DATASETS_DIR, exist_ok=True)
+    
+    output_file = os.path.join(
+        DATASETS_DIR,
         f"DATASET_"
         f"{config.MAX_TOTAL_TOKENS}tok_"
         f"{config.MAX_OPS}-mxops_"
@@ -3078,11 +3738,6 @@ def main(
 
     samples_generated_successfully = 0
     samples_failed = 0
-    output_dir = os.path.dirname(output_file)
-    if output_dir and not os.path.exists(
-        output_dir
-    ):  # Create dir only if it doesn't exist
-        os.makedirs(output_dir, exist_ok=True)
     start_time = time.time()
     results = []
     with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
@@ -3160,10 +3815,28 @@ def main(
     logger.info(f"Total time: {total_time:.2f} seconds")
     if samples_generated_successfully > 0:
         logger.info(f"Dataset output file: {output_file}")
+        print(f"\nDataset saved to: {output_file}")
     else:
         logger.warning(
             f"No samples were successfully generated and written. Output file '{output_file}' may be empty or non-existent."
         )
+        
+    # Print datasets directory location for user reference
+    print(f"\nDatasets are saved in: {os.path.abspath(DATASETS_DIR)}")
+    
+    # Add a clear console output showing total execution time
+    hours, remainder = divmod(total_time, 3600)
+    minutes, seconds = divmod(remainder, 60)
+    
+    if hours > 0:
+        time_str = f"{int(hours)}h {int(minutes)}m {seconds:.2f}s"
+    elif minutes > 0:
+        time_str = f"{int(minutes)}m {seconds:.2f}s"
+    else:
+        time_str = f"{seconds:.2f}s"
+        
+    print(f"\n✅ Total execution time: {time_str} ({total_time:.2f} seconds)")
+    
     logging.shutdown()
 
 

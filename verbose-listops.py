@@ -22,16 +22,19 @@ from openai import OpenAI
 import shutil # Add shutil for rmtree
 import threading # Added for RateLimiter
 import requests # Added for RateLimiter
+import subprocess # Added for PROD_RUN
+import sys # Added for PROD_RUN
 
 from dotenv import load_dotenv
 
 load_dotenv()
 
 # --- Batch Settings ---
-NUM_SAMPLES_TO_GENERATE = 5  # How many samples to generate in one run
-DEFAULT_MAX_WORKERS = 1000   # Number of parallel threads for batch generation
+NUM_SAMPLES_TO_GENERATE = 1100  # How many samples to generate in one run
+DEFAULT_MAX_WORKERS = 900   # Number of parallel threads for batch generation
 MODEL = "google/gemini-2.5-pro-preview-03-25"  # OpenRouter model
 DATASETS_DIR = "datasets"    # Directory for saving generated datasets
+PROD_RUN: bool = True       # If True, run validator and clean dataset post-generation
 
 # --- Generation Settings ---
 """
@@ -49,7 +52,7 @@ class Config:
     MAX_ATOM_VAL: int = 100                         # Max value for atomic numbers
     MAX_TOTAL_TOKENS: int = 10000                   # Cleaned sample token budget
     EARLY_TERMINATION_PROBABILITY: float = 0.0      # Chance to end AST branch early
-    PADDING_MAX_TOK_PERCENT: float = 0.75           # How much total tok budget can be padding
+    PADDING_MAX_TOK_PERCENT: float = 0.60           # How much total tok budget can be padding
 
     # --- 2. Narrative Context Generation & Style ---
     USE_NARRATIVE_ANCHORS: bool = True              # Conceptual placeholders for intermediate results
@@ -89,7 +92,7 @@ class Config:
     INTRO_MAX_RETRIES: int = 3                      # Max retries for intro scene generation
     WORLDGEN_MAX_RETRIES: int = 3                   # Max retries for world generation
     INITIAL_WORLD_RETRY_DELAY: float = 0.5          # Initial retry delay for world gen
-    MAX_REQUESTS_PER_SECOND: float = 1000.0          # Max requests/s to OpenRouter
+    MAX_REQUESTS_PER_SECOND: float = 900.0          # Max requests/s to OpenRouter
     MIN_REQUEST_INTERVAL: float = 0.001             # Min time (seconds) between requests
 
     # Logging Configuration
@@ -110,6 +113,9 @@ class Config:
     BEAT_MAX_TOKENS: int = 400                     # Beat max tok (for tracking)
     PADDING_MAX_TOKENS: int = 200                  # Padding max tok (for tracking)
 
+    # Production Mode
+    # PROD_RUN: bool = False # Moved to Batch Settings
+
 config = Config()
 
 
@@ -118,25 +124,25 @@ ORDINAL_WORDS_TO_IGNORE = {
     "second",
     "third",
     "fourth",
-#    "fifth",
-#    "sixth",
-#    "seventh",
-#    "eighth",
-#    "ninth",
-#    "tenth",
-#    "eleventh",
-#    "twelfth",
-#    "thirteenth",
-#    "fourteenth",
-#    "fifteenth",
-#    "twentieth",
-#    "thirtieth",
-#    "fortieth",
-#    "fiftieth",
-#    "sixtieth",
-#    "seventieth",
-#    "eightieth",
-#    "ninetieth",
+    "fifth",
+    "sixth",
+    "seventh",
+    "eighth",
+    "ninth",
+    "tenth",
+    "eleventh",
+    "twelfth",
+    "thirteenth",
+    "fourteenth",
+    "fifteenth",
+    "twentieth",
+    "thirtieth",
+    "fortieth",
+    "fiftieth",
+    "sixtieth",
+    "seventieth",
+    "eightieth",
+    "ninetieth",
     "hundredth",
     "last",
     "final"
@@ -478,7 +484,7 @@ class RateLimiter:
         self.last_refill_time = time.time()  # Last token refill timestamp
         self.lock = threading.Lock()  # Thread lock for concurrent access
         self.last_limits_check_time = 0  # Last time we checked account limits
-        self.limits_check_interval = 30  # Check limits every 5 minutes (300 seconds)
+        self.limits_check_interval = 5  # Check limits every 5 seconds
 
         # Log configuration
         logger.info(f"Rate limiter initialized: {max_requests_per_second} req/s, "
@@ -546,13 +552,16 @@ class RateLimiter:
 
             if response.status_code == 200:
                 data = response.json()
-                logger.info(f"OpenRouter account status: {json.dumps(data, indent=2)}")
+                # logger.info(f"OpenRouter account status: {json.dumps(data, indent=2)}") # Made more concise
 
                 # Extract the main data object from the nested response
                 account_data = data.get("data", {})
 
                 # Update rate limiter settings based on the nested rate_limit structure
                 rate_limit_info = account_data.get("rate_limit", {})
+                current_rate_for_log = self.max_requests_per_second
+                limit_adjusted = False
+
                 if rate_limit_info:
                     requests_limit = rate_limit_info.get("requests")
                     interval = rate_limit_info.get("interval", "")
@@ -565,26 +574,38 @@ class RateLimiter:
 
                             # Set to 80% of the allowed rate limit as a safety buffer
                             new_rate = min(float(rps) * 0.8, config.MAX_REQUESTS_PER_SECOND)
-
-                            logger.info(f"Adjusting rate limiter based on OpenRouter limit: {rps} req/s → {new_rate} req/s (80% safety, capped at config.MAX_REQUESTS_PER_SECOND)")
-                            self.max_requests_per_second = new_rate
+                            
+                            if new_rate != self.max_requests_per_second:
+                                # logger.info(f"Adjusting rate limiter based on OpenRouter limit: {rps} req/s → {new_rate} req/s (80% safety, capped at config.MAX_REQUESTS_PER_SECOND)")
+                                self.max_requests_per_second = new_rate
+                                limit_adjusted = True
+                                current_rate_for_log = new_rate # Update for the concise log
 
                 # Log credits/usage if available
                 usage = account_data.get("usage")
                 limit = account_data.get("limit")
                 limit_remaining = account_data.get("limit_remaining")
+                
+                log_message_parts = [f"OR Limits: Current RPS: {current_rate_for_log:.1f}"]
+                if limit_adjusted:
+                    log_message_parts.append("(Adjusted)")
 
                 if usage is not None:
-                    logger.info(f"OpenRouter usage: {usage}")
+                    log_message_parts.append(f"Usage: ${usage:.4f}")
 
                 if limit is not None and limit_remaining is not None:
-                    logger.info(f"OpenRouter limit: {limit}, remaining: {limit_remaining}")
+                    log_message_parts.append(f"Credits: Rem ${limit_remaining:.4f} of ${limit:.4f}")
 
                     # If very low on remaining limit, be more conservative with request rate
                     if limit and limit_remaining and limit_remaining / limit < 0.2:
-                        logger.warning(f"Low limit remaining ({limit_remaining}/{limit}). Reducing request rate.")
+                        # logger.warning(f"Low limit remaining ({limit_remaining}/{limit}). Reducing request rate.")
+                        old_self_rate = self.max_requests_per_second
                         self.max_requests_per_second = min(self.max_requests_per_second, 10.0)
+                        if old_self_rate != self.max_requests_per_second:
+                             log_message_parts.append(f"LOW CREDITS - RPS reduced to {self.max_requests_per_second:.1f}!")
 
+
+                logger.info(", ".join(log_message_parts))
                 self.last_limits_check_time = time.time()
             else:
                 logger.warning(f"Failed to get OpenRouter account status: HTTP {response.status_code}")
@@ -599,8 +620,8 @@ class RateLimiter:
 rate_limiter = RateLimiter(
     max_requests_per_second=config.MAX_REQUESTS_PER_SECOND,
     min_interval=config.MIN_REQUEST_INTERVAL,
-    bucket_capacity=1000, # Allow bursts of up to 10 requests
-    jitter=0.01  # Add up to 100ms of random jitter to prevent synchronization
+    bucket_capacity=100, # Allow bursts of up to 100 requests
+    jitter=0.01  # Add up to 10ms of random jitter to prevent synchronization
 )
 
 # Check OpenRouter limits when starting up
@@ -1658,7 +1679,16 @@ def make_number_validator(
         )
         truly_disallowed_extras = set()
         for extra_num in unexpected_found:
-            is_allowed_one = extra_num == 1
+            # --- START MODIFICATION ---
+            # If the extra number is 1, 2, or 3, consider it allowed for general phrasing
+            # and skip further checks for it as a "truly disallowed extra".
+            # This means even if 1, 2, or 3 were on the forbidden_atoms list (from a previous beat's result),
+            # their use for general phrasing in the current beat is now tolerated.
+            if extra_num in [1, 2, 3]:
+                logger.debug(f"Validator: Allowing {extra_num} as it's 1, 2, or 3, considered general phrasing. Skipping further checks for this number as an 'extra'.")
+                continue 
+            # --- END MODIFICATION ---
+
             is_allowed_count = (
                 extra_num == operand_count and extra_num not in forbidden_atoms
             )
@@ -1667,7 +1697,7 @@ def make_number_validator(
                 and extra_num not in forbidden_atoms
             )
 
-            if not (is_allowed_one or is_allowed_count or is_allowed_small):
+            if not (is_allowed_count or is_allowed_small): # Adjusted condition
                 fail_reason_detail = []
                 
                 # Primary check - if it's in forbidden_atoms, that's a key reason
@@ -2667,10 +2697,9 @@ def _generate_narrative_recursive(  # Line ~1315
             f"{operand_count_word}, as this is the number of groups of {primary_object}s the characters will find"
         )
 
-    if 1 not in truly_forbidden_for_prompt:
-        optional_use_parts_list.append(
-            f"'one' to let you use more natural phrasing in your narrative (e.g. \"He picked up one more...\")"
-        )
+    # No longer explicitly mentioning 'one' as optionally usable
+    # The numbers 'one', 'two', 'three', as well as common ordinals are now generally allowed for narrative fluency
+    # as indicated in the no_other_numbers_instruction
 
     # --- CORRECTED LOGIC for mentioning intermediate sum in "optional use" ---
     # This `direct_atom_sum` is the sum of direct atomic children of the current node.
@@ -2716,27 +2745,23 @@ def _generate_narrative_recursive(  # Line ~1315
         dynamic_problematic_numbers_to_check.add(operand_count)
 
     special_attention_clauses = []
+    
+    for num_val in sorted(list(dynamic_problematic_numbers_to_check)):
+        # Do not create special warnings for 1, 2, 3 as they are now generally allowed by validator for fluency
+        if num_val in [1, 2, 3]:
+            continue 
 
-    for num_val in sorted(list(dynamic_problematic_numbers_to_check)): # Sort for consistent prompt order
-        # Condition:
-        # 1. The number `num_val` was introduced in a previous step (is in `truly_forbidden_for_prompt`).
-        # 2. The number `num_val` is NOT a required operand or the result for the CURRENT step (not in `numbers_to_mention_in_prompt`).
         if (num_val in truly_forbidden_for_prompt) and \
            (num_val not in numbers_to_mention_in_prompt):
             
-            num_word = num_to_words(num_val) # Assumes num_to_words is available in scope
-            
-            # Determine singular or plural form of the object for natural language
-            # Assumes p_inflect is available in scope (from context.p_inflect)
+            num_word = num_to_words(num_val)
             object_form = p_inflect.singular_noun(primary_object) if num_val == 1 and p_inflect else primary_object
             
-            # Special clarification if this forbidden number is also the current operand_count
             is_current_operand_count_clause = ""
-            if num_val == operand_count and operand_count_is_forbidden_for_prompt: # Check if this num_val is the operand_count that's also forbidden
+            if num_val == operand_count and operand_count_is_forbidden_for_prompt:
                 is_current_operand_count_clause = (f" (Note: even though there are {num_word} new groups of {object_form} in *this* scene, "
                                                    f"the word '{num_word}' is forbidden due to its prior significance - see SPECIAL NARRATIVE CHALLENGE above if provided)")
 
-            # Construct a specific warning for this number and object
             clause = (
                 f"The number **'{num_word}'** (referring to '{num_word} {object_form}' or just the quantity '{num_word}') "
                 f"was significant in a prior event. For THIS SCENE, you MUST NOT use the word '{num_word}'{is_current_operand_count_clause}, unless '{num_word}' is explicitly in 'MUST INCLUDE' for this step."
@@ -2744,7 +2769,11 @@ def _generate_narrative_recursive(  # Line ~1315
             special_attention_clauses.append(clause)
 
     # Start with the general rule
-    no_other_numbers_instruction = "- NO OTHER NUMBERS ALLOWED.\n"
+    no_other_numbers_instruction = (
+        "- **NO OTHER NUMBERS ALLOWED** beyond those in 'MUST INCLUDE' or 'You may optionally use' (if any are listed).\n"
+        "  This means you should avoid introducing other numerical quantities (e.g., 'seven items', 'after twelve minutes') unless they are part of the core calculation for this scene.\n"
+        "  The numbers 'one', 'two', and 'three', as well as common ordinal numbers (first, second, third, etc.), are generally acceptable for natural narrative flow and are not considered part of this restriction, even if not explicitly listed as 'optional'.\n"
+    )
 
     if special_attention_clauses:
         # If there are specific warnings, add a header and then list them.
@@ -3836,7 +3865,109 @@ def main(
         time_str = f"{seconds:.2f}s"
         
     print(f"\n✅ Total execution time: {time_str} ({total_time:.2f} seconds)")
-    
+
+    # --- PROD_RUN: Validation and Cleaning Step ---
+    if PROD_RUN and samples_generated_successfully > 0 and output_file and os.path.exists(output_file):
+        logger.info(f"--- Starting PROD_RUN validation and cleaning for {output_file} ---")
+        # Assuming validator.py is in the same directory as verbose-listops.py
+        current_script_dir = os.path.dirname(os.path.abspath(__file__))
+        validator_script_path = os.path.join(current_script_dir, "validator.py")
+        validator_results_path = output_file + ".validation_results.jsonl"
+
+        if not os.path.exists(validator_script_path):
+            logger.error(f"Validator script not found at {validator_script_path}. Cannot perform cleaning.")
+        else:
+            cmd = [
+                sys.executable, 
+                validator_script_path, 
+                output_file, 
+                "--output-results", 
+                validator_results_path
+            ]
+            try:
+                logger.info(f"Running validator command: {' '.join(cmd)}")
+                run_result = subprocess.run(cmd, check=True, capture_output=True, text=True, encoding='utf-8')
+                logger.info("Validator process stdout:")
+                for line in run_result.stdout.splitlines():
+                    logger.info(f"VALIDATOR_STDOUT: {line}")
+                if run_result.stderr:
+                    logger.warning("Validator process stderr:")
+                    for line in run_result.stderr.splitlines():
+                        logger.warning(f"VALIDATOR_STDERR: {line}")
+                logger.info(f"Validator finished. Results expected in {validator_results_path}")
+
+                bad_sample_ids = set()
+                if os.path.exists(validator_results_path):
+                    with open(validator_results_path, 'r', encoding='utf-8') as f_results:
+                        for line_num, res_line in enumerate(f_results, 1):
+                            try:
+                                val_res = json.loads(res_line)
+                                if val_res.get("status") != "correct":
+                                    sample_id_to_remove = val_res.get("id")
+                                    if sample_id_to_remove:
+                                        bad_sample_ids.add(sample_id_to_remove)
+                                    else:
+                                        logger.warning(f"Validator result line {line_num} missing 'id': {res_line.strip()}")
+                            except json.JSONDecodeError:
+                                logger.warning(f"Could not parse validator result line {line_num}: {res_line.strip()}")
+                    logger.info(f"Identified {len(bad_sample_ids)} samples to remove based on validator results.")
+
+                    if bad_sample_ids:
+                        temp_cleaned_output_file = output_file + ".cleaned.tmp"
+                        good_samples_written = 0
+                        original_sample_count = 0
+                        
+                        with open(output_file, 'r', encoding='utf-8') as f_orig, \
+                             open(temp_cleaned_output_file, 'w', encoding='utf-8') as f_temp:
+                            for line_num, dataset_line in enumerate(f_orig, 1):
+                                original_sample_count += 1
+                                try:
+                                    sample_in_dataset = json.loads(dataset_line)
+                                    if sample_in_dataset.get("id") not in bad_sample_ids:
+                                        f_temp.write(dataset_line) # Write original line as it is good
+                                        good_samples_written += 1
+                                    else:
+                                        logger.debug(f"Removing sample {sample_in_dataset.get('id')} (from line {line_num}) due to validation status.")
+                                except json.JSONDecodeError:
+                                    logger.warning(f"Could not parse line {line_num} in original dataset '{output_file}' during filtering: {dataset_line.strip()}. Discarding this line.")
+                        
+                        # Replace original file with cleaned one
+                        shutil.move(temp_cleaned_output_file, output_file)
+                        deleted_count = original_sample_count - good_samples_written
+                        logger.info(f"Removed {deleted_count} bad samples. {good_samples_written} samples remain in {output_file}.")
+                        print(f"PROD_RUN: After validation and cleaning, {good_samples_written} samples remain in {output_file}.")
+                        # Update samples_generated_successfully for any final tally if needed, though new print is clearer
+                        # samples_generated_successfully = good_samples_written
+                    else:
+                        logger.info("No samples identified for removal by the validator (all were 'correct' or no IDs matched).")
+                else:
+                    logger.warning(f"Validator results file not found at {validator_results_path}. Skipping removal of bad samples.")
+
+            except FileNotFoundError:
+                logger.error(f"Validator script '{validator_script_path}' not found. Ensure it is in the correct directory. Skipping cleaning step.")
+            except subprocess.CalledProcessError as e:
+                logger.error(f"Validator script failed with exit code {e.returncode}. Skipping cleaning step.")
+                logger.error("Validator stdout snapshot:")
+                stdout_snapshot = e.stdout.splitlines()
+                for i, line_e in enumerate(stdout_snapshot):
+                    if i < 50: # Log first 50 lines of stdout
+                        logger.error(f"VALIDATOR_STDOUT_ERR: {line_e}")
+                    elif i == 50:
+                        logger.error(f"VALIDATOR_STDOUT_ERR: ... (stdout truncated after 50 lines)")
+                        break
+                logger.error("Validator stderr snapshot:")
+                stderr_snapshot = e.stderr.splitlines()
+                for i, line_e in enumerate(stderr_snapshot):
+                    if i < 50: # Log first 50 lines of stderr
+                        logger.error(f"VALIDATOR_STDERR_ERR: {line_e}")
+                    elif i == 50:
+                        logger.error(f"VALIDATOR_STDERR_ERR: ... (stderr truncated after 50 lines)")
+                        break
+            except Exception as e:
+                logger.error(f"An unexpected error occurred during PROD_RUN validation or cleaning: {e}", exc_info=True)
+    elif PROD_RUN and (samples_generated_successfully == 0 or not output_file or not os.path.exists(output_file)):
+        logger.info("PROD_RUN was True, but no samples were successfully generated, output file is missing, or path is invalid. Skipping validation and cleaning.")
+
     logging.shutdown()
 
 

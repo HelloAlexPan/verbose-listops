@@ -49,6 +49,7 @@ class Config:
     MAX_ATOM_VAL: int = 100                         # Max value for atomic numbers
     MAX_TOTAL_TOKENS: int = 10000                   # Cleaned sample token budget
     EARLY_TERMINATION_PROBABILITY: float = 0.0      # Chance to end AST branch early
+    PADDING_MAX_TOK_PERCENT: float = 0.75           # How much total tok budget can be padding
 
     # --- 2. Narrative Context Generation & Style ---
     USE_NARRATIVE_ANCHORS: bool = True              # Conceptual placeholders for intermediate results
@@ -57,10 +58,9 @@ class Config:
     MAX_WORLD_CHARS: int = 6                        # Max chars for randomized world gen
     MIN_WORLD_CONCEPTS: int = 5                     # Min concepts for randomized world gen
     MAX_WORLD_CONCEPTS: int = 10                    # Max concepts for randomized world gen
-    BEAT_CONTEXT: int = 200                         # Max previous scene chars for beat gen prompt
-    PADDING_CONTEXT: int = 150                      # Tokens of context for padding
-    MAX_PAD_PARAGRAPHS: int = 20                     # Max padding segments per-beat
-    PADDING_MAX_TOK_PERCENT: float = 0.8            # How much total tok budget can be padding
+    BEAT_CONTEXT: int = 1000                        # Max previous scene chars for beat gen prompt
+    PADDING_CONTEXT: int = 1500                     # Tokens of context for padding
+    MAX_PAD_PARAGRAPHS: int = 20                    # Max padding segments per-beat
 
     # --- 3. Temperature ---
     WORLD_GEN_TEMP:  float = 0.9                    # Temp. for world gen
@@ -2807,16 +2807,16 @@ def _generate_narrative_recursive(  # Line ~1315
     # Original token budget check with enhanced error message
     if would_exceed_budget(
         context.tokens_used,
-        estimated_prompt_tokens + current_max_beat_completion_tokens,
+        current_max_beat_completion_tokens, # Only consider the potential completion against the budget
         config.MAX_TOTAL_TOKENS,
         SAFETY_MARGIN,
     ):
         logger.warning(
-            f"❌ TOKEN LIMIT ABORT: Cannot generate beat for {node.op} ({narrative_anchor}). "
-            f"Current: {context.tokens_used}/{config.MAX_TOTAL_TOKENS} ({token_percentage:.1f}%), "
-            f"Required: +{estimated_prompt_tokens} prompt, +{current_max_beat_completion_tokens} completion, "
-            f"Total needed: {context.tokens_used + estimated_prompt_tokens + current_max_beat_completion_tokens}, "
-            f"Max allowed: {config.MAX_TOTAL_TOKENS - SAFETY_MARGIN} (with margin). "
+            f"❌ TOKEN LIMIT ABORT (Completions Only): Cannot generate beat for {node.op} ({narrative_anchor}). "
+            f"Current COMPLETION tokens: {context.tokens_used}/{config.MAX_TOTAL_TOKENS} ({token_percentage:.1f}%), "
+            f"Required max COMPLETION for this beat: +{current_max_beat_completion_tokens}, "
+            f"Total potential COMPLETION tokens: {context.tokens_used + current_max_beat_completion_tokens}, "
+            f"Max allowed COMPLETION tokens: {config.MAX_TOTAL_TOKENS - SAFETY_MARGIN} (with margin). "
             f"STOPPING GENERATION."
         )
         raise BeatGenerationError(
@@ -3134,15 +3134,15 @@ def _generate_narrative_recursive(  # Line ~1315
             # This check is slightly more precise for the immediate call to generate_with_retry
             if would_exceed_budget(
                 context.tokens_used,
-                estimated_pad_prompt_tokens + MAX_PAD_COMPLETION_TOKENS, # MAX_PAD_COMPLETION_TOKENS is used by generate_with_retry
+                MAX_PAD_COMPLETION_TOKENS, # Only consider the potential completion against the budget
                 config.MAX_TOTAL_TOKENS,
                 SAFETY_MARGIN,
             ):
                 logger.warning(
                     f"Padding after beat for {node.op} ({narrative_anchor}): "
                     f"Budget check indicates insufficient space for padding segment {local_padding_segments_added} "
-                    f"(prompt {estimated_pad_prompt_tokens} + max_completion {MAX_PAD_COMPLETION_TOKENS}). "
-                    f"Stopping padding for this beat."
+                    f"(max_completion {MAX_PAD_COMPLETION_TOKENS}). Current COMPLETION tokens: {context.tokens_used}. "
+                    f"STOPPING padding for this beat."
                 )
                 break # Break from this beat's padding loop
 

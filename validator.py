@@ -214,35 +214,43 @@ The benchmark's key characteristics:
    - However, it *must* then provide an explicit aggregate total (e.g., "yielding a total of X", "resulting in X items") that *is the correct result of the current ListOps operation on ALL its inputs (including those not itemized and those from previous sub-operations)*.
    - This stated aggregate IS the value to be carried forward. If this aggregate is correct for the operation, the step is mathematically valid even if itemization was incomplete.
 
+CRITICAL TASK: For EACH `ast_evaluation_steps` entry, you must verify:
+1.  **Input Fidelity (`ast_inputs_verified` field):** Did the narrative segment for this operation correctly use ALL inputs specified by the AST for this node? This means:
+    *   All direct atomic numbers for this step.
+    *   The numerical results from ALL child operations (which are often represented by conceptual anchors in the narrative). These anchors MUST be treated as their underlying numerical values for the current operation.
+    *   If the narrative describes an operation using a different set of inputs (e.g., ignores a child operation's result, or invents new numbers not in the AST for this step), `ast_inputs_verified` MUST be `false`.
+2.  **Narrative Consistency (`narrative_consistent` field):** Based on the above, is the narrative segment for this step an accurate and clear representation of the AST operation, its *correct* inputs, and its result? If `ast_inputs_verified` is `false` because the narrative used the wrong inputs, then `narrative_consistent` for this step MUST also be `false`.
+
 CRITICAL: Your ENTIRE response must be ONLY a valid JSON object with NO additional text.
 Use this exact template, replacing values in [SQUARE_BRACKETS] with your analysis:
 
 {
   "id": "[SAMPLE_ID]",
-  "overall_status": "[VALID or INVALID_MATH or INVALID_NARRATIVE or INVALID_MATH_AND_NARRATIVE]",
+  "overall_status": "[VALID or INVALID_MATH or INVALID_NARRATIVE or INVALID_MATH_AND_NARRATIVE or VALID_BUT_TRIVIAL]",
   "final_ast_value": [INTEGER_RESULT],
   "matches_ground_truth": [true or false],
-  "narrative_consistent": [true or false],
+  "narrative_consistent": [true or false], // Overall narrative consistency based on steps
   "ast_evaluation_steps": [
     {
       "step": 1,
       "operation_node_description": "[Brief description of the AST node being evaluated, e.g., (SUM 10 20 (MIN 5 8))]",
       "operation_type": "[MAX, MIN, SUM, AVG, MED, SM]",
-      "inputs": [LIST_OF_NUMBERS],
-      "result": [INTEGER_RESULT],
-      "narrative_consistent": [true or false],
-      "itemization_complete": [true or false],
-      "correct_aggregate_provided": [true or false],
-      "explanation": "[BRIEF_EXPLANATION]"
+      "inputs_from_ast": [LIST_OF_EXPECTED_NUMERICAL_INPUTS_FROM_AST_FOR_THIS_NODE],
+      "result_from_ast": [INTEGER_RESULT_OF_THIS_OPERATION_ON_AST_INPUTS],
+      "ast_inputs_verified": [true or false], // Crucial: Did narrative use these ast_inputs_from_ast?
+      "narrative_consistent": [true or false], // Narrative accuracy for THIS step, considering input fidelity.
+      "itemization_complete": [true or false], // Did narrative list all ast_inputs_from_ast individually?
+      "correct_aggregate_provided": [true or false], // Did narrative state the correct result_from_ast?
+      "explanation": "[BRIEF_EXPLANATION, detailing any input discrepancies or narrative issues]"
     },
     // Additional steps...
   ],
   "narrative_analysis": {
-    "strengths": ["[STRENGTH1]", "[STRENGTH2]", ...],
-    "weaknesses": ["[WEAKNESS1]", "[WEAKNESS2]", ...],
-    "inconsistencies": ["[INCONSISTENCY1]", "[INCONSISTENCY2]", ...]
+    "strengths": "[[STRENGTH1]", "[STRENGTH2]", ...]",
+    "weaknesses": "[[WEAKNESS1]", "[WEAKNESS2]", ...]",
+    "inconsistencies": "[[INCONSISTENCY1]", "[INCONSISTENCY2]", ...]" // Specifically note if narrative math diverges from AST math.
   },
-  "detailed_reason": "[Detailed explanation of any issues found, especially if overall_status is not VALID]",
+  "detailed_reason": "[Detailed explanation of any issues found, especially if overall_status is not VALID, focusing on input fidelity and narrative consistency across steps]",
   "summary": "[One-sentence summary of the validation outcome and primary reason if not VALID]"
 }
 
@@ -255,8 +263,8 @@ ListOps operators:
 - SM: Sum of inputs modulo 10 (result is sum % 10)
 
 Guidelines for `narrative_consistent` field in `ast_evaluation_steps`:
-- Mark `true` if the narrative segment for this step accurately and clearly conveys the operation, its inputs (or a correct aggregate that IS the operation's result), and its result. Minor stylistic awkwardness is acceptable if the mathematical progression is clear.
-- Mark `false` for significant ambiguity, misleading information, if the stated aggregate does not match the operation's true result, or if the math is unclear.
+- Mark `true` if the narrative segment for this step accurately and clearly conveys the operation, its *AST-defined inputs* (or a correct aggregate that IS the operation's result on those AST-defined inputs), and its result. Minor stylistic awkwardness is acceptable if the mathematical progression based on AST inputs is clear.
+- Mark `false` if `ast_inputs_verified` is `false`, or for significant ambiguity, misleading information, if the stated aggregate does not match the operation's true result on AST inputs, or if the math is unclear.
 - **FOR THE FINAL EVALUATION STEP ONLY:** The narrative is designed to lead up to the final answer but *NOT* explicitly state it. If the narrative segment for this final step *does* explicitly state the numerical result of this final operation (i.e., the overall ground_truth_answer for the problem), then `narrative_consistent` for this final step MUST be marked `false`. Your `explanation` for this step must clearly state: "Final answer revealed in narrative." In this specific scenario (math correct, prior steps consistent, but final answer revealed in the final narrative beat), set `overall_status` to `VALID_BUT_TRIVIAL`.
 
 DO NOT write any text outside of this JSON format, not even explanations or clarifications.
@@ -264,45 +272,52 @@ DO NOT write any text outside of this JSON format, not even explanations or clar
 
 # --- JSON Schema for validation output ---
 VALIDATION_OUTPUT_SCHEMA = {
-  "type": "object",
-  "properties": {
-    "id": {"type": "string"},
-    "overall_status": {
-      "type": "string", 
-      "enum": ["VALID", "INVALID_MATH", "INVALID_NARRATIVE", "INVALID_MATH_AND_NARRATIVE", "VALID_BUT_TRIVIAL"]
+    "type": "object",
+    "properties": {
+        "id": {"type": "string"},
+        "overall_status": {
+            "type": "string",
+            "enum": ["VALID", "INVALID_MATH", "INVALID_NARRATIVE", "INVALID_MATH_AND_NARRATIVE", "VALID_BUT_TRIVIAL"]
+        },
+        "final_ast_value": {"type": "integer"},
+        "matches_ground_truth": {"type": "boolean"},
+        "narrative_consistent": {"type": "boolean"}, 
+        "ast_evaluation_steps": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "step": {"type": "integer", "description": "Sequential step number in the evaluation"},
+                    "operation_node_description": {"type": "string", "description": "Brief description of the AST node being evaluated, e.g., (SUM 10 20 (MIN 5 8))"},
+                    "operation_type": {"type": "string", "enum": ["MAX", "MIN", "MED", "SUM", "AVG", "SM"], "description": "Type of ListOps operation performed (MAX, MIN, etc.)"},
+                    "inputs_from_ast": {"type": "array", "items": {"type": "integer"}, "description": "Input values for this step as defined by the AST (including results from children)"},
+                    "result_from_ast": {"type": "integer", "description": "Result of this operation step based on AST inputs"},
+                    "ast_inputs_verified": {"type": "boolean", "description": "Whether the narrative segment correctly used all inputs_from_ast (direct atoms and resolved anchors from children ops)"},
+                    "narrative_consistent": {"type": "boolean", "description": "Whether the narrative segment for this step accurately and clearly conveys the operation, its AST-defined inputs (or a correct aggregate that IS the operation's result on those AST-defined inputs), and its result. Mark false if ast_inputs_verified is false or for significant ambiguity/misleading info."},
+                    "itemization_complete": {"type": "boolean", "description": "Whether the narrative fully itemizes all individual numerical inputs from inputs_from_ast"},
+                    "correct_aggregate_provided": {"type": "boolean", "description": "Whether the narrative explicitly states an aggregate value that is the correct result_from_ast of the current ListOps operation on all inputs_from_ast"},
+                    "explanation": {"type": "string", "description": "Brief explanation of this step, highlighting any input fidelity issues or narrative discrepancies"}
+                },
+                "required": [
+                    "step", "operation_node_description", "operation_type",
+                    "inputs_from_ast", "result_from_ast", "ast_inputs_verified",
+                    "narrative_consistent", "itemization_complete",
+                    "correct_aggregate_provided", "explanation"
+                ]
+            }
+        },
+        "narrative_analysis": {
+            "type": "object",
+            "properties": {
+                "strengths": {"type": "array", "items": {"type": "string"}},
+                "weaknesses": {"type": "array", "items": {"type": "string"}},
+                "inconsistencies": {"type": "array", "items": {"type": "string"}}
+            }
+        },
+        "detailed_reason": {"type": "string"},
+        "summary": {"type": "string"}
     },
-    "final_ast_value": {"type": "integer"},
-    "matches_ground_truth": {"type": "boolean"},
-    "narrative_consistent": {"type": "boolean"},
-    "ast_evaluation_steps": {
-      "type": "array",
-      "items": {
-        "type": "object",
-        "properties": {
-          "step": {"type": "integer"},
-          "operation_node_description": {"type": "string"},
-          "operation_type": {"type": "string"},
-          "inputs": {"type": "array", "items": {"type": "integer"}},
-          "result": {"type": "integer"},
-          "narrative_consistent": {"type": "boolean"},
-          "itemization_complete": {"type": "boolean"},
-          "correct_aggregate_provided": {"type": "boolean"},
-          "explanation": {"type": "string"}
-        }
-      }
-    },
-    "narrative_analysis": {
-      "type": "object",
-      "properties": {
-        "strengths": {"type": "array", "items": {"type": "string"}},
-        "weaknesses": {"type": "array", "items": {"type": "string"}},
-        "inconsistencies": {"type": "array", "items": {"type": "string"}}
-      }
-    },
-    "detailed_reason": {"type": "string"},
-    "summary": {"type": "string"}
-  },
-  "required": ["id", "overall_status", "final_ast_value", "matches_ground_truth", "narrative_consistent", "ast_evaluation_steps", "summary"]
+    "required": ["id", "overall_status", "final_ast_value", "matches_ground_truth", "narrative_consistent", "ast_evaluation_steps", "summary"]
 }
 
 # --- Construct User Prompt ---
@@ -313,8 +328,8 @@ def construct_user_prompt(sample: dict) -> str:
     # Don't include a preview - we need the full narrative for proper validation
     prompt_data = {
         "id": sample.get("id", ""),
-        "ast_prefix": sample.get("ast_prefix", ""),
-        "ground_truth_answer": sample.get("ground_truth_answer", "")
+        "ast_prefix": sample.get("ast", ""),
+        "ground_truth_answer": sample.get("ground_truth", "")
     }
     
     # Simple prompt that highlights the structure needed
@@ -326,7 +341,7 @@ AST: {prompt_data['ast_prefix']}
 Expected Answer: {prompt_data['ground_truth_answer']}
 
 Narrative (full version used for validation):
-{sample.get("narrative_prompt", "")}
+{sample.get("narrative_with_question", "")}
 
 Perform a detailed evaluation:
 1. Evaluate each step of the AST, showing your work. For each step, identify the operation type, its inputs, and its result.
@@ -353,70 +368,8 @@ def get_llm_response(sample: dict, sample_id: str) -> str | None:
     user_prompt = construct_user_prompt(sample)
     
     # Define a proper JSON schema for validation results
-    validation_schema = {
-        "type": "object",
-        "properties": {
-            "id": {
-                "type": "string",
-                "description": "The sample ID from the input"
-            },
-            "overall_status": {
-                "type": "string",
-                "enum": ["VALID", "INVALID_MATH", "INVALID_NARRATIVE", "INVALID_MATH_AND_NARRATIVE", "VALID_BUT_TRIVIAL"],
-                "description": "Whether the sample is valid. 'VALID_BUT_TRIVIAL' means math is correct but final answer was revealed in the narrative's last step."
-            },
-            "final_ast_value": {
-                "type": "integer",
-                "description": "The final calculated value from evaluating the AST"
-            },
-            "matches_ground_truth": {
-                "type": "boolean",
-                "description": "Whether the calculated value matches the expected ground truth"
-            },
-            "narrative_consistent": {
-                "type": "boolean",
-                "description": "Whether the narrative correctly represents all operations and numbers"
-            },
-            "ast_evaluation_steps": {
-                "type": "array",
-                "description": "Step-by-step evaluation of the AST",
-                "items": {
-                    "type": "object",
-                    "properties": {
-                        "step": {"type": "integer", "description": "Sequential step number in the evaluation"},
-                        "operation_node_description": {"type": "string", "description": "Brief description of the AST node being evaluated, e.g., (SUM 10 20 (MIN 5 8))"},
-                        "operation_type": {"type": "string", "enum": ["MAX", "MIN", "MED", "SUM", "AVG", "SM"], "description": "Type of ListOps operation performed (MAX, MIN, etc.)"},
-                        "inputs": {"type": "array", "items": {"type": "integer"}, "description": "Input values for this step"},
-                        "result": {"type": "integer", "description": "Result of this operation step"},
-                        "narrative_consistent": {"type": "boolean", "description": "Whether the narrative segment for this step accurately and clearly conveys the operation, its inputs (or a correct aggregate that IS the operation's result), and its result. Minor stylistic issues are acceptable if math is clear. Mark false for significant ambiguity or misleading info."},
-                        "itemization_complete": {"type": "boolean", "description": "Whether the narrative fully itemizes all individual numerical inputs for this operation"},
-                        "correct_aggregate_provided": {"type": "boolean", "description": "Whether the narrative explicitly states an aggregate value that is the correct result of the current ListOps operation"},
-                        "explanation": {"type": "string", "description": "Brief explanation of this step and any issues"}
-                    },
-                    "required": ["step", "operation_node_description", "operation_type", "inputs", "result", "narrative_consistent", "itemization_complete", "correct_aggregate_provided", "explanation"]
-                }
-            },
-            "narrative_analysis": {
-                "type": "object",
-                "description": "Analysis of the narrative's strengths and weaknesses",
-                "properties": {
-                    "strengths": {"type": "array", "items": {"type": "string"}, "description": "Strong points of the narrative"},
-                    "weaknesses": {"type": "array", "items": {"type": "string"}, "description": "Weak points or issues in the narrative"},
-                    "inconsistencies": {"type": "array", "items": {"type": "string"}, "description": "Specific inconsistencies between narrative and AST"}
-                }
-            },
-            "detailed_reason": {
-                "type": "string",
-                "description": "Detailed explanation of any issues found"
-            },
-            "summary": {
-                "type": "string",
-                "description": "One-sentence summary of the validation outcome and primary reason if not VALID"
-            }
-        },
-        "required": ["id", "overall_status", "final_ast_value", "matches_ground_truth", "narrative_consistent", "ast_evaluation_steps", "summary"],
-        "additionalProperties": False
-    }
+    # THIS IS WHERE THE PREVIOUS SCHEMA WAS REDEFINED LOCALLY, REMOVING IT 
+    # AND RELYING ON THE GLOBAL VALIDATION_OUTPUT_SCHEMA
     
     # Basic retry mechanism
     for attempt in range(3): # Retry up to 3 times
@@ -442,7 +395,7 @@ def get_llm_response(sample: dict, sample_id: str) -> str | None:
                         "json_schema": {
                             "name": "validation_result",
                             "strict": True,
-                            "schema": validation_schema
+                            "schema": VALIDATION_OUTPUT_SCHEMA
                         }
                     }
                 )
@@ -583,7 +536,7 @@ def validate_sample(sample: dict) -> dict:
     sample_id = sample.get("id", "Unknown_ID")
     
     # Check for required fields
-    required_fields = ["id", "ast_prefix", "ground_truth_answer", "narrative_prompt"]
+    required_fields = ["id", "ast", "ground_truth", "narrative_with_question"]
     missing_fields = [field for field in required_fields if field not in sample]
     
     if missing_fields:
@@ -594,22 +547,22 @@ def validate_sample(sample: dict) -> dict:
             "reason": f"Missing required fields: {', '.join(missing_fields)}",
             "llm_response": None,
             "parsed_validation": None,
-            "ground_truth_answer": sample.get("ground_truth_answer")
+            "ground_truth_answer": sample.get("ground_truth")
         }
     
     # Ensure ground_truth_answer is an integer
     try:
-        if isinstance(sample["ground_truth_answer"], str):
-            sample["ground_truth_answer"] = int(sample["ground_truth_answer"])
+        if isinstance(sample["ground_truth"], str):
+            sample["ground_truth"] = int(sample["ground_truth"])
     except (ValueError, TypeError):
-        logger.error(f"[{sample_id}] Ground truth answer '{sample['ground_truth_answer']}' is not a valid integer. Skipping.")
+        logger.error(f"[{sample_id}] Ground truth answer '{sample['ground_truth']}' is not a valid integer. Skipping.")
         return {
             "id": sample_id,
             "status": "error",
             "reason": "Invalid ground_truth_answer format in sample.",
             "llm_response": None,
             "parsed_validation": None,
-            "ground_truth_answer": sample.get("ground_truth_answer")
+            "ground_truth_answer": sample.get("ground_truth")
         }
 
     logger.debug(f"[{sample_id}] Validating sample...")
@@ -623,7 +576,7 @@ def validate_sample(sample: dict) -> dict:
             "reason": "LLM call failed or returned no response.",
             "llm_response": None,
             "parsed_validation": None,
-            "ground_truth_answer": sample.get("ground_truth_answer")
+            "ground_truth_answer": sample.get("ground_truth")
         }
         
     parsed_validation = parse_llm_validation_output(llm_response_text, sample_id)
@@ -636,7 +589,7 @@ def validate_sample(sample: dict) -> dict:
             "reason": "Could not parse validation results from LLM response.",
             "llm_response": llm_response_text,
             "parsed_validation": None,
-            "ground_truth_answer": sample.get("ground_truth_answer")
+            "ground_truth_answer": sample.get("ground_truth")
         }
     
     # Map LLM's overall_status to our status categories
@@ -680,7 +633,7 @@ def validate_sample(sample: dict) -> dict:
         "reason": reason,
         "llm_response": llm_response_text,
         "parsed_validation": parsed_validation,
-        "ground_truth_answer": sample.get("ground_truth_answer")
+        "ground_truth_answer": sample.get("ground_truth")
     }
 
 # --- Save Detailed Validation Log ---
@@ -700,11 +653,11 @@ def save_detailed_validation_log(sample_id, sample, validation_result):
         detailed_log = {
             "sample": {
                 "id": sample.get("id"),
-                "ast_prefix": sample.get("ast_prefix"),
-                "ground_truth_answer": sample.get("ground_truth_answer"),
+                "ast_prefix": sample.get("ast"),
+                "ground_truth_answer": sample.get("ground_truth"),
                 # Truncate narrative for log file size
-                "narrative_prompt_preview": sample.get("narrative_prompt", "")[:500] + "..." 
-                if len(sample.get("narrative_prompt", "")) > 500 else sample.get("narrative_prompt", "")
+                "narrative_prompt_preview": sample.get("narrative_with_question", "")[:500] + "..." 
+                if len(sample.get("narrative_with_question", "")) > 500 else sample.get("narrative_with_question", "")
             },
             "validation_result": validation_result
         }

@@ -30,8 +30,8 @@ from dotenv import load_dotenv
 load_dotenv()
 
 # --- Batch Settings ---
-NUM_SAMPLES_TO_GENERATE = 800  # How many samples to generate in one run
-DEFAULT_MAX_WORKERS = 300   # Number of parallel threads for batch generation
+NUM_SAMPLES_TO_GENERATE = 5  # How many samples to generate in one run
+DEFAULT_MAX_WORKERS = 5   # Number of parallel threads for batch generation
 MODEL = "google/gemini-2.5-pro-preview-03-25"  # OpenRouter model
 DATASETS_DIR = "datasets"    # Directory for saving generated datasets
 PROD_RUN: bool = True       # If True, run validator and clean dataset post-generation
@@ -405,6 +405,7 @@ class GenerationContext:
     beat_counter: dict
     sample_index: int
     max_pad_paragraphs: int  # No default value, must be set explicitly during instantiation
+    overall_ground_truth_answer: int | None = None # ADDED: Store the AST's final answer
     # Add tracking for padding token statistics
     padding_stats: dict = field(default_factory=lambda: {
         "total_padding_tokens": 0,
@@ -1572,8 +1573,7 @@ def make_number_validator(
                     # So, if we reach here, it means for padding/intro, finding only "1" is acceptable.
                     # The rest of the validator logic for non-strict_zero (operand checks etc.) is not relevant here.
                     # BUT, we need to ensure this doesn't bypass other checks if strict_zero was meant to be part of a larger validation.
-                    # Given the current structure, if strict_zero is true, this is the primary gate.
-                    # Let's refine: if strict_zero is true, we ONLY care if non-{1} numbers are present.
+                    # Given the current structure, if strict_zero is true, we ONLY care if non-{1} numbers are present.
                 else:
                     # Numbers other than just {1} were found, or a mix including 1. This is a failure.
                     validation_report["status"] = "FAIL"
@@ -2330,8 +2330,31 @@ def _generate_narrative_recursive(  # Line ~1315
         f"Required atoms for beat {node.op} ({narrative_anchor}): {required_atoms_for_beat}"
     )
 
-    forbidden_atoms_for_prompt = context.introduced_atoms.copy()
-    truly_forbidden_for_prompt = forbidden_atoms_for_prompt - required_atoms_for_beat
+    # --- Determine forbidden numbers for the current beat's prompt and validation ---
+    # Start with atoms introduced in previous beats
+    forbidden_for_current_beat_rules = context.introduced_atoms.copy()
+
+    # Add the overall ground truth answer to this base forbidden set for every beat
+    if context.overall_ground_truth_answer is not None:
+        # We add it here. If the overall_ground_truth_answer happens to be
+        # one of the required_atoms_for_beat OR the correct_result of THIS beat,
+        # the validator's logic and the prompt construction will allow it specifically for this beat.
+        # Otherwise, its appearance will be an error.
+        forbidden_for_current_beat_rules.add(context.overall_ground_truth_answer)
+        logger.debug(
+            f"Added overall_ground_truth_answer ({context.overall_ground_truth_answer}) to forbidden set for beat {node.op} ({narrative_anchor}). Current forbidden set: {forbidden_for_current_beat_rules}"
+        )
+
+    # 'truly_forbidden_for_prompt' are numbers that should be listed in the "MUST AVOID" part of the prompt.
+    # These are numbers from the `forbidden_for_current_beat_rules` set,
+    # EXCLUDING any that are direct atomic inputs for the *current* beat.
+    # The `correct_result` of the current beat is handled separately in prompt construction (must be included)
+    # and by the validator (implicitly allowed if it's the step's result).
+    truly_forbidden_for_prompt = forbidden_for_current_beat_rules - required_atoms_for_beat
+    
+    # What was previously `forbidden_atoms_for_prompt` is now `forbidden_for_current_beat_rules`
+    # What was previously `truly_forbidden_for_prompt` is calculated above using the new base set.
+
     primary_object = world["object"]
 
     direct_atom_sum = None
@@ -2353,13 +2376,11 @@ def _generate_narrative_recursive(  # Line ~1315
     # It starts with the direct atomic operands for the current beat.
     numbers_to_mention_in_prompt = set(required_atoms_for_beat)
 
-    # Add the calculated result of the current operation to this set.
-    # The validator (make_number_validator) is already configured to expect this result
-    # when enforce_result_presence is True. This change ensures the LLM is also told to include it.
-    if correct_result is not None: # Should always be defined and not None at this stage
+    # Only add correct_result to "MUST INCLUDE" if it's NOT the root node
+    if not is_root and correct_result is not None:
         numbers_to_mention_in_prompt.add(correct_result)
-    else:
-        logger.warning(f"DEV WARNING: correct_result is None for node {node.op} ({narrative_anchor}) when building must_include_list. This is unexpected.")
+    elif is_root and correct_result is not None: # Added explicit logging for the root case
+        logger.debug(f"Root node beat: correct_result ({correct_result}) will NOT be added to numbers_to_mention_in_prompt for the LLM.")
 
     # Now, create the sorted list of strings for the prompt.
     # Using a set first (numbers_to_mention_in_prompt) handles potential duplicates
@@ -2384,7 +2405,7 @@ def _generate_narrative_recursive(  # Line ~1315
         )
     # --- END OF MODIFIED SECTION ---
 
-    if truly_forbidden_for_prompt:
+    if truly_forbidden_for_prompt: # This uses the updated `truly_forbidden_for_prompt`
         must_avoid_str = ", ".join(num_to_words(x) for x in sorted(truly_forbidden_for_prompt))
     else:
         must_avoid_str = "None"
@@ -2496,63 +2517,117 @@ def _generate_narrative_recursive(  # Line ~1315
         inputs_str = " and ".join(input_description_parts)
 
     action_description = ""
-    if node.op == "SUM":
-        correct_result_words = num_to_words(correct_result)
-        action_description = (
-            f"Narrate an action (e.g., gathering, merging) involving {inputs_str}. "
-            f"The outcome MUST be that the total quantity becomes exactly **{correct_result_words}** {primary_object}. Imply the sum through action."
-        )
-    elif node.op == "AVG":
-        correct_result_words = num_to_words(correct_result)
-        direct_atom_sum_words = num_to_words(direct_atom_sum) if direct_atom_sum is not None else "calculated sum"
-        action_description = (
-            f"Narrate an event (e.g., balancing, averaging mechanism) involving {inputs_str}. "
-            f"The outcome MUST be exactly **{correct_result_words}** {primary_object} (the floored average). "
-            f"You MAY mention the intermediate sum ({direct_atom_sum_words} from direct inputs ({formatted_direct_values_str}) if needed for the narrative, but the final result is key."
-        )
-    elif node.op == "SM":
-        correct_result_words = num_to_words(correct_result)
-        sm_intermediate_sum = "unknown"
-        try:
-            child_values = [eval_node(c) for c in node.children]
-            sm_intermediate_sum = sum(child_values)
-            sm_intermediate_sum_words = num_to_words(sm_intermediate_sum)
-        except Exception as e:
-            logger.warning(
-                f"SM Beat: Could not calculate intermediate sum for prompt explanation: {e}"
+    # --- MODIFIED action_description based on is_root --- 
+    if is_root:
+        # For the root node, describe the operation but DO NOT state the final numerical result.
+        if node.op == "SUM":
+            action_description = (
+                f"Narrate the final action (e.g., gathering all remaining resources, tallying the final count) involving {inputs_str}. "
+                f"The story should conclude with the characters having arrived at their final quantity of {primary_object}. "
+                f"DO NOT state the numerical value of this final tally in this scene. The question at the end will ask for it."
             )
-            sm_intermediate_sum_words = "unknown"
+        elif node.op == "AVG":
+            direct_atom_sum_words_for_root_avg = num_to_words(direct_atom_sum) if direct_atom_sum is not None else "calculated sum of new items"
+            action_description = (
+                f"Narrate the final event (e.g., determining the final average, establishing the ultimate equilibrium) involving {inputs_str}. "
+                f"The characters determine the final average value of {primary_object}. "
+                f"DO NOT state the numerical value of this final average in this scene. The question at the end will ask for it. "
+                f"If relevant for clarity, you MAY mention the intermediate sum of any new direct inputs ({direct_atom_sum_words_for_root_avg} from {formatted_direct_values_str}) before they are combined with prior results for averaging."
+            )
+        elif node.op == "SM":
+            sm_intermediate_sum_words_for_root = "unknown total" 
+            try:
+                child_values = [eval_node(c) for c in node.children]
+                sm_intermediate_sum_for_root = sum(child_values)
+                sm_intermediate_sum_words_for_root = num_to_words(sm_intermediate_sum_for_root)
+            except Exception as e_sm_sum_root:
+                logger.warning(f"SM Root Beat: Could not calculate intermediate sum for prompt: {e_sm_sum_root}")
+            
+            action_description = (
+                f"Narrate the final action involving {inputs_str}. The characters combine these inputs (conceptually reaching a temporary total around {sm_intermediate_sum_words_for_root}). "
+                f"Then, describe a plausible event that makes them keep only a quantity representing the final digit of that total. "
+                f"The story should resolve with them having this final quantity. DO NOT state its numerical value. "
+                f"Examples of events: a magical lock consumes all but the final unit, a tax collector takes most, a reaction leaves only the core essence."
+            )
+        elif node.op == "MAX":
+            action_description = (
+                f"Narrate the final comparison of {inputs_str}. The characters identify the item or quantity with the largest value, which becomes their ultimate acquisition or final state. "
+                f"DO NOT state the numerical value of this final maximum quantity in this scene."
+            )
+        elif node.op == "MIN":
+            action_description = (
+                f"Narrate the final comparison of {inputs_str}. The characters identify the item or quantity with the smallest value, which becomes their ultimate acquisition or final state. "
+                f"DO NOT state the numerical value of this final minimum quantity in this scene."
+            )
+        elif node.op == "MED":
+            action_description = (
+                f"Narrate the final evaluation of {inputs_str} numerically. The characters select the item or quantity representing the middle value (when sorted), which determines their final outcome. "
+                f"DO NOT state the numerical value of this final median quantity in this scene."
+            )
+        else: # Fallback for any other ops if added later
+            action_description = (
+                f"Narrate the final application of '{op_label}' to {inputs_str}. The story should conclude with the characters reaching their final result. "
+                f"DO NOT state the numerical value of this result in this scene."
+            )
+    else: # NOT is_root (existing logic for intermediate nodes)
+        correct_result_words = num_to_words(correct_result)
+        if node.op == "SUM":
+            action_description = (
+                f"Narrate an action (e.g., gathering, merging) involving {inputs_str}. "
+                f"The outcome MUST be that the total quantity becomes exactly **{correct_result_words}** {primary_object}. Imply the sum through action."
+            )
+        elif node.op == "AVG":
+            correct_result_words = num_to_words(correct_result)
+            direct_atom_sum_words = num_to_words(direct_atom_sum) if direct_atom_sum is not None else "calculated sum"
+            action_description = (
+                f"Narrate an event (e.g., balancing, averaging mechanism) involving {inputs_str}. "
+                f"The outcome MUST be exactly **{correct_result_words}** {primary_object} (the floored average). "
+                f"You MAY mention the intermediate sum ({direct_atom_sum_words} from direct inputs ({formatted_direct_values_str}) if needed for the narrative, but the final result is key."
+            )
+        elif node.op == "SM":
+            correct_result_words = num_to_words(correct_result)
+            sm_intermediate_sum = "unknown"
+            try:
+                child_values = [eval_node(c) for c in node.children]
+                sm_intermediate_sum = sum(child_values)
+                sm_intermediate_sum_words = num_to_words(sm_intermediate_sum)
+            except Exception as e:
+                logger.warning(
+                    f"SM Beat: Could not calculate intermediate sum for prompt explanation: {e}"
+                )
+                sm_intermediate_sum_words = "unknown"
 
-        action_description = (
-            f"Narrate an action involving {inputs_str}. The characters combine these inputs (reaching a temporary total conceptually around {sm_intermediate_sum_words}). "
-            f"Then, describe a specific, plausible event that **forces them to keep only a quantity equal to the final digit of that total**. "
-            f"Examples: \n"
-            f"*   A magical lock clicks open, consuming all but the final unit of energy ({correct_result_words}).\\n"
-            f"*   A mystical tax collector appears, taking all but the last {correct_result_words} {primary_object}.\\n"
-            f"*   The combined items react, leaving only {correct_result_words} stable {primary_object}.\\n"
-            f"The final quantity MUST become exactly **{correct_result_words}** {primary_object}. Do NOT explicitly state 'sum' or 'modulo'; the *event* causes the result."
-        )
-    elif node.op == "MAX":
-        correct_result_words = num_to_words(correct_result)
-        action_description = (
-            f"Narrate comparing {inputs_str}. They MUST choose the item/quantity with the largest value. "
-            f"The outcome MUST be exactly **{correct_result_words}** {primary_object}. Justify the choice."
-        )
-    elif node.op == "MIN":
-        correct_result_words = num_to_words(correct_result)
-        action_description = (
-            f"Narrate comparing {inputs_str}. They MUST choose the item/quantity with the smallest value. "
-            f"The outcome MUST be exactly **{correct_result_words}** {primary_object}. Justify the choice."
-        )
-    elif node.op == "MED":
-        correct_result_words = num_to_words(correct_result)
-        action_description = (
-            f"Narrate evaluating {inputs_str} numerically. They MUST select the item/quantity with the middle value (when sorted). "
-            f"The outcome MUST be exactly **{correct_result_words}** {primary_object}. Justify the choice."
-        )
-    else:
-        correct_result_words = num_to_words(correct_result)
-        action_description = f"Narrate applying '{op_label}' to {inputs_str}. Outcome must be {correct_result_words}."
+            action_description = (
+                f"Narrate an action involving {inputs_str}. The characters combine these inputs (reaching a temporary total conceptually around {sm_intermediate_sum_words}). "
+                f"Then, describe a specific, plausible event that **forces them to keep only a quantity equal to the final digit of that total**. "
+                f"Examples: \n"
+                f"*   A magical lock clicks open, consuming all but the final unit of energy ({correct_result_words}).\\\n"
+                f"*   A mystical tax collector appears, taking all but the last {correct_result_words} {primary_object}.\\\n"
+                f"*   The combined items react, leaving only {correct_result_words} stable {primary_object}.\\\n"
+                f"The final quantity MUST become exactly **{correct_result_words}** {primary_object}. Do NOT explicitly state \'sum\' or \'modulo\'; the *event* causes the result."
+            )
+        elif node.op == "MAX":
+            correct_result_words = num_to_words(correct_result)
+            action_description = (
+                f"Narrate comparing {inputs_str}. They MUST choose the item/quantity with the largest value. "
+                f"The outcome MUST be exactly **{correct_result_words}** {primary_object}. Justify the choice."
+            )
+        elif node.op == "MIN":
+            correct_result_words = num_to_words(correct_result)
+            action_description = (
+                f"Narrate comparing {inputs_str}. They MUST choose the item/quantity with the smallest value. "
+                f"The outcome MUST be exactly **{correct_result_words}** {primary_object}. Justify the choice."
+            )
+        elif node.op == "MED":
+            correct_result_words = num_to_words(correct_result)
+            action_description = (
+                f"Narrate evaluating {inputs_str} numerically. They MUST select the item/quantity with the middle value (when sorted). "
+                f"The outcome MUST be exactly **{correct_result_words}** {primary_object}. Justify the choice."
+            )
+        else:
+            correct_result_words = num_to_words(correct_result)
+            action_description = f"Narrate applying '{op_label}' to {inputs_str}. Outcome must be {correct_result_words}."
+    # --- END MODIFIED action_description --- 
 
     reminder = ""
     if child_narrative_anchors:
@@ -2869,13 +2944,13 @@ def _generate_narrative_recursive(  # Line ~1315
 
     validate_beat_numbers = make_number_validator(
         allowed_atoms=required_atoms_for_beat,
-        forbidden_atoms=truly_forbidden_for_prompt,
+        forbidden_atoms=truly_forbidden_for_prompt, # This now incorporates the overall_ground_truth logic
         operand_count=operand_count,
         correct_result_for_beat=correct_result,
         intermediate_sum_allowed=(
             direct_atom_sum if node.op in ["AVG", "SM"] else None
         ),
-        enforce_result_presence=True,
+        enforce_result_presence=not is_root, # <--- MODIFICATION
         operation_type=node.op,
     )
     forbidden_for_padding = context.introduced_atoms.union(required_atoms_for_beat)
@@ -3280,6 +3355,7 @@ def generate_narrative(
     p_inflect,
     logger,
     sample_index: int,
+    overall_ground_truth_answer: int, # ADDED: Pass the overall ground truth
 ) -> str | None:
     """
     Post-Order Strict Validation: Generate a narrative for a ListOps AST, ensuring
@@ -3461,6 +3537,7 @@ def generate_narrative(
         beat_counter=beat_counter,
         sample_index=sample_index,
         max_pad_paragraphs=config.MAX_PAD_PARAGRAPHS,  # Or get from config
+        overall_ground_truth_answer=overall_ground_truth_answer, # ADDED: Pass it to context
     )
     
     # Initialize padding budget tracking
@@ -3658,6 +3735,7 @@ def generate_single_sample(sample_index: int) -> dict | None:
             p_inflect,
             logger,
             sample_index,
+            overall_ground_truth_answer=ground_truth_answer, # ADDED: Pass ground_truth_answer
         )
             
         if not narrative_prompt:

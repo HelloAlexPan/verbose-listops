@@ -2814,7 +2814,7 @@ def _generate_narrative_recursive(  # Line ~1315
                 action_description = (
                     f"Narrate an event (e.g., balancing, averaging mechanism) involving {inputs_str}. "
                     f"The outcome MUST be exactly **{correct_result_words}** {primary_object} (the floored average). "
-                    f"You MAY mention the intermediate sum ({direct_atom_sum_words} from direct inputs ({formatted_direct_values_str}) if needed for the narrative, but the final result is key."
+                    f"You MAY mention the intermediate sum ({direct_atom_sum_words} from direct inputs ({formatted_direct_values_str})) if needed for the narrative, but the final result is key."
                 )
             elif node.op == "SM":
                 correct_result_words = num_to_words(correct_result)
@@ -2831,16 +2831,25 @@ def _generate_narrative_recursive(  # Line ~1315
 
                 action_description = (
                     f"Narrate an action involving {inputs_str}. The characters combine these inputs (reaching a temporary total conceptually around {sm_intermediate_sum_words}). "
-            f"❌ TOKEN LIMIT ABORT (Completions Only): Cannot generate beat for {node.op} ({narrative_anchor}). "
-            f"Current COMPLETION tokens: {context.tokens_used}/{config.MAX_TOTAL_TOKENS} ({token_percentage:.1f}%), "
-            f"Required max COMPLETION for this beat: +{current_max_beat_completion_tokens}, "
-            f"Total potential COMPLETION tokens: {context.tokens_used + current_max_beat_completion_tokens}, "
-            f"Max allowed COMPLETION tokens: {config.MAX_TOTAL_TOKENS - SAFETY_MARGIN} (with margin). "
-            f"STOPPING GENERATION."
-        )
-        raise BeatGenerationError(
-            f"Token budget exceeded before generating beat for {node.op}"
-        )
+                    f"Then, describe an event that makes them keep only the final digit of that total. "
+                    f"The narrative should explicitly state that they end up with exactly **{correct_result_words}** {primary_object}."
+                )
+            elif node.op == "MAX":
+                action_description = (
+                    f"Narrate comparing {inputs_str} to find the largest value. The characters MUST select and end up with exactly **{correct_result_words}** {primary_object}."
+                )
+            elif node.op == "MIN":
+                action_description = (
+                    f"Narrate comparing {inputs_str} to find the smallest value. The characters MUST select and end up with exactly **{correct_result_words}** {primary_object}."
+                )
+            elif node.op == "MED":
+                action_description = (
+                    f"Narrate evaluating {inputs_str} numerically. The characters MUST select and end up with exactly **{correct_result_words}** {primary_object}, the median."
+                )
+            else:
+                action_description = (
+                    f"Narrate applying '{op_label}' to {inputs_str}. The final operation result MUST be exactly **{correct_result_words}** {primary_object}."
+                )
 
     # Determine if the result presence should be enforced for the validator
     enforce_validator_result_presence = False  # Default to False
@@ -2883,6 +2892,26 @@ def _generate_narrative_recursive(  # Line ~1315
     beat_text = None
     candidate_text = ""
 
+    # Define the system prompt for narrative beat generation
+    system_prompt = """You are a master storyteller. Your task is to write a single scene that contributes to an ongoing narrative.
+Focus solely on advancing the story as specified in the task. Do not include explanations or analysis of your work.
+The story involves mathematical operations represented through narrative actions. Pay careful attention to the number rules.
+Produce ONLY clean narrative text."""
+
+    # Create a user message that includes all necessary context
+    context_snippet = clean_snippet(context.last_scene_text, max_len=config.BEAT_CONTEXT)
+    user_message_content = (
+        f"BEAT {context.beat_counter['current']}/{context.beat_counter['total']}\n\n"
+        f"**Current Status:** {scene_preamble}\n\n"
+        f"**Task:** {action_description}\n\n"
+        f"{ultra_strict_instruction}\n\n"
+        f"**Prior Scene Snippet:**\n{context_snippet}\n\n"
+        f"**Write the next scene continuing directly from the prior scene with a focus on the TASK above.**"
+    )
+    
+    # Set max completion tokens for the beat
+    current_max_beat_completion_tokens = config.BEAT_MAX_TOKENS
+    
     for attempt in range(1, config.MAX_BEAT_RETRIES + 1):
         reason = None
         try:
@@ -3363,7 +3392,7 @@ def generate_narrative(
         f"NO NUMERICAL VALUES ALLOWED. Do not mention any specific quantities of {world.get('object', 'artifacts')} "
         f"or any other items. Do not add titles or headers."
     )
-    
+
     intro_text = generate_with_retry(
         system_prompt=intro_system_prompt,
         user_prompt=intro_user_prompt,

@@ -37,9 +37,37 @@ VALIDATION_BUCKET_CAPACITY = 100
 VALIDATION_LIMITS_CHECK_INTERVAL = 5  # seconds
 VALIDATION_JITTER = 0.01
 
+# --- Token Costing (Placeholders - User should configure based on models used) ---
+DEFAULT_COST_PER_MILLION_PROMPT_TOKENS_VALIDATOR = 0.50  # e.g., $0.50 / 1M prompt tokens
+DEFAULT_COST_PER_MILLION_COMPLETION_TOKENS_VALIDATOR = 1.50 # e.g., $1.50 / 1M completion tokens
+
 # --- Logging Setup ---
 logging.basicConfig(level=LOG_LEVEL, format='%(asctime)s - %(levelname)s - [%(threadName)s] - %(message)s')
 logger = logging.getLogger(__name__)
+
+# --- Token Cost Tracker (same as in verbose-listops.py) ---
+class TokenCostTracker:
+    def __init__(self):
+        self.total_prompt_tokens = 0
+        self.total_completion_tokens = 0
+        self.total_api_calls = 0
+
+    def add_usage(self, prompt_tokens: int, completion_tokens: int):
+        self.total_prompt_tokens += prompt_tokens
+        self.total_completion_tokens += completion_tokens
+        self.total_api_calls += 1
+        logger.debug(f"ValidatorTokenTracker: Added {prompt_tokens} prompt, {completion_tokens} completion. Call #{self.total_api_calls}. Totals: P={self.total_prompt_tokens}, C={self.total_completion_tokens}")
+
+    def get_summary(self) -> tuple[int, int, int]:
+        return self.total_prompt_tokens, self.total_completion_tokens, self.total_api_calls
+
+    def calculate_cost(self, cost_per_million_prompt: float, cost_per_million_completion: float) -> float:
+        prompt_cost = (self.total_prompt_tokens / 1_000_000) * cost_per_million_prompt
+        completion_cost = (self.total_completion_tokens / 1_000_000) * cost_per_million_completion
+        return prompt_cost + completion_cost
+
+# Global instance for tracking token usage during validation
+validation_token_tracker = TokenCostTracker()
 
 # --- OpenAI Client for OpenRouter ---
 client = None
@@ -229,6 +257,7 @@ ListOps operators:
 Guidelines for `narrative_consistent` field in `ast_evaluation_steps`:
 - Mark `true` if the narrative segment for this step accurately and clearly conveys the operation, its inputs (or a correct aggregate that IS the operation's result), and its result. Minor stylistic awkwardness is acceptable if the mathematical progression is clear.
 - Mark `false` for significant ambiguity, misleading information, if the stated aggregate does not match the operation's true result, or if the math is unclear.
+- **FOR THE FINAL EVALUATION STEP ONLY:** The narrative is designed to lead up to the final answer but *NOT* explicitly state it. If the narrative segment for this final step *does* explicitly state the numerical result of this final operation (i.e., the overall ground_truth_answer for the problem), then `narrative_consistent` for this final step MUST be marked `false`. Your `explanation` for this step must clearly state: "Final answer revealed in narrative." In this specific scenario (math correct, prior steps consistent, but final answer revealed in the final narrative beat), set `overall_status` to `VALID_BUT_TRIVIAL`.
 
 DO NOT write any text outside of this JSON format, not even explanations or clarifications.
 """
@@ -240,7 +269,7 @@ VALIDATION_OUTPUT_SCHEMA = {
     "id": {"type": "string"},
     "overall_status": {
       "type": "string", 
-      "enum": ["VALID", "INVALID_MATH", "INVALID_NARRATIVE", "INVALID_MATH_AND_NARRATIVE"]
+      "enum": ["VALID", "INVALID_MATH", "INVALID_NARRATIVE", "INVALID_MATH_AND_NARRATIVE", "VALID_BUT_TRIVIAL"]
     },
     "final_ast_value": {"type": "integer"},
     "matches_ground_truth": {"type": "boolean"},
@@ -333,8 +362,8 @@ def get_llm_response(sample: dict, sample_id: str) -> str | None:
             },
             "overall_status": {
                 "type": "string",
-                "enum": ["VALID", "INVALID_MATH", "INVALID_NARRATIVE", "INVALID_MATH_AND_NARRATIVE"],
-                "description": "Whether the sample is valid based on math and narrative consistency"
+                "enum": ["VALID", "INVALID_MATH", "INVALID_NARRATIVE", "INVALID_MATH_AND_NARRATIVE", "VALID_BUT_TRIVIAL"],
+                "description": "Whether the sample is valid. 'VALID_BUT_TRIVIAL' means math is correct but final answer was revealed in the narrative's last step."
             },
             "final_ast_value": {
                 "type": "integer",
@@ -448,6 +477,15 @@ def get_llm_response(sample: dict, sample_id: str) -> str | None:
                 
             llm_output = response.choices[0].message.content
             logger.debug(f"[{sample_id}] Raw LLM response: '{llm_output[:200]}...'") # Log just the start
+            
+            # --- Track token usage for validator ---
+            if response and hasattr(response, 'usage') and response.usage:
+                prompt_tokens = response.usage.prompt_tokens or 0
+                completion_tokens = response.usage.completion_tokens or 0
+                validation_token_tracker.add_usage(prompt_tokens, completion_tokens)
+            else:
+                logger.warning(f"[{sample_id}] No usage data found in validation API response.")
+
             return llm_output
         except Exception as e:
             logger.warning(f"[{sample_id}] API call attempt {attempt + 1} failed: {e}")
@@ -606,6 +644,8 @@ def validate_sample(sample: dict) -> dict:
     
     if overall_status == "VALID":
         status = "correct"
+    elif overall_status == "VALID_BUT_TRIVIAL":
+        status = "trivial"
     elif overall_status in ["INVALID_MATH", "INVALID_NARRATIVE", "INVALID_MATH_AND_NARRATIVE"]:
         status = "incorrect"
     else:
@@ -791,6 +831,7 @@ def run_validation_process(dataset_file_path: str, output_results_path: str | No
     correct_count = sum(1 for r in results if r["status"] == "correct")
     incorrect_count = sum(1 for r in results if r["status"] == "incorrect")
     error_count = sum(1 for r in results if r["status"] == "error")
+    trivial_count = sum(1 for r in results if r["status"] == "trivial")
     
     # Count by validation categories
     validation_categories = {
@@ -798,6 +839,7 @@ def run_validation_process(dataset_file_path: str, output_results_path: str | No
         "INVALID_MATH": 0,
         "INVALID_NARRATIVE": 0, 
         "INVALID_MATH_AND_NARRATIVE": 0,
+        "VALID_BUT_TRIVIAL": 0,
         "UNDEFINED": 0  # For cases where we couldn't determine a category
     }
     
@@ -825,22 +867,38 @@ def run_validation_process(dataset_file_path: str, output_results_path: str | No
         print(f"Model:   {MODEL_FOR_VALIDATION.split('/')[-1]}")
         print(f"✓ Correct:   {correct_count}/{total_processed} ({accuracy:.1f}%)")
         print(f"✗ Incorrect: {incorrect_count}/{total_processed} ({(incorrect_count/total_processed)*100:.1f}%)")
+        print(f"ायला Trivial:   {trivial_count}/{total_processed} ({(trivial_count/total_processed)*100:.1f}%)受益")
         print(f"⚠ Errors:    {error_count}/{total_processed} ({(error_count/total_processed)*100:.1f}%)")
         
         # Show breakdown by category if relevant
-        if incorrect_count > 0 or error_count > 0 : # Show if any non-correct items
+        if incorrect_count > 0 or error_count > 0 or trivial_count > 0 : # Broaden condition to include trivial
             print("\n🔍 VALIDATION CATEGORY BREAKDOWN (from LLM validator)")
             for category, count in validation_categories.items():
                 if count > 0:  # Only show non-zero categories
                     category_display = category.replace("INVALID_", "").title().replace("_", " ")
-                    symbol = "✓" if category == "VALID" else ("✗" if "INVALID" in category else "⚠")
+                    symbol = "✓" if category == "VALID" else ("ायला" if category == "VALID_BUT_TRIVIAL" else ("✗" if "INVALID" in category else "⚠")) # Symbol for trivial
                     print(f"{symbol} {category_display}: {count} ({(count/total_processed)*100:.1f}%)")
     else:
         print("❌ No samples were processed successfully.")
 
     # If there were errors, provide a note about log files
-    if error_count > 0 or incorrect_count > 0 : # Broaden condition
-        print("\n⚠️ Some samples were not 'VALID'. Check logs/failed_validations/ for details on specific failures.")
+    if error_count > 0 or incorrect_count > 0 or trivial_count > 0 : # Broaden condition for log note
+        print("\n⚠️ Some samples were not 'VALID' or were 'TRIVIAL'. Check logs/failed_validations/ for details on specific failures.")
+
+    # --- Log Token Usage Summary for Validator ---    
+    val_prompt_tokens, val_completion_tokens, val_api_calls = validation_token_tracker.get_summary()
+    estimated_validation_cost = validation_token_tracker.calculate_cost(
+        DEFAULT_COST_PER_MILLION_PROMPT_TOKENS_VALIDATOR,
+        DEFAULT_COST_PER_MILLION_COMPLETION_TOKENS_VALIDATOR
+    )
+    logger.info(f"--- Validation Token Usage & Estimated Cost ---")
+    logger.info(f"Total API calls (validation): {val_api_calls}")
+    logger.info(f"Total Prompt Tokens (validation): {val_prompt_tokens}")
+    logger.info(f"Total Completion Tokens (validation): {val_completion_tokens}")
+    logger.info(f"Estimated Cost (validation only): ${estimated_validation_cost:.4f} (using placeholder rates)")
+    
+    # Print a summary line for verbose-listops.py to parse
+    print(f"VALIDATOR_TOKEN_USAGE_SUMMARY:prompt_tokens={val_prompt_tokens},completion_tokens={val_completion_tokens},api_calls={val_api_calls}")
 
     # Write detailed results to output file if path is provided
     if output_results_path:

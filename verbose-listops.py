@@ -31,7 +31,7 @@ load_dotenv()
 
 # --- Batch Settings ---
 NUM_SAMPLES_TO_GENERATE = 5  # How many samples to generate in one run
-DEFAULT_MAX_WORKERS = 5   # Number of parallel threads for batch generation
+DEFAULT_MAX_WORKERS = 50   # Number of parallel threads for batch generation
 MODEL = "google/gemini-2.5-pro-preview-03-25"  # OpenRouter model
 DATASETS_DIR = "datasets"    # Directory for saving generated datasets
 PROD_RUN: bool = True       # If True, run validator and clean dataset post-generation
@@ -53,6 +53,7 @@ class Config:
     MAX_TOTAL_TOKENS: int = 10000                   # Cleaned sample token budget
     EARLY_TERMINATION_PROBABILITY: float = 0.0      # Chance to end AST branch early
     PADDING_MAX_TOK_PERCENT: float = 0.60           # How much total tok budget can be padding
+    ALLOW_IMPLICIT_INTERMEDIATE_RESULTS: bool = True # If True, intermediate results don't need to be explicitly stated
 
     # --- 2. Narrative Context Generation & Style ---
     USE_NARRATIVE_ANCHORS: bool = True              # Conceptual placeholders for intermediate results
@@ -113,10 +114,38 @@ class Config:
     BEAT_MAX_TOKENS: int = 400                     # Beat max tok (for tracking)
     PADDING_MAX_TOKENS: int = 200                  # Padding max tok (for tracking)
 
-    # Production Mode
-    # PROD_RUN: bool = False # Moved to Batch Settings
-
 config = Config()
+
+class GenerationTokenTracker:
+    def __init__(self):
+        self.total_prompt_tokens = 0
+        self.total_completion_tokens = 0
+        self.api_calls = 0
+        self.lock = threading.Lock()
+
+    def add_usage(self, prompt_tokens: int, completion_tokens: int):
+        with self.lock:
+            self.total_prompt_tokens += prompt_tokens
+            self.total_completion_tokens += completion_tokens
+            self.api_calls += 1
+        logger.debug(f"Token Tracker: Added {prompt_tokens} prompt, {completion_tokens} completion. Total P: {self.total_prompt_tokens}, C: {self.total_completion_tokens}, Calls: {self.api_calls}")
+
+    def get_summary(self):
+        with self.lock:
+            return self.total_prompt_tokens, self.total_completion_tokens, self.api_calls
+
+    def calculate_cost(self, prompt_cost_per_million: float, completion_cost_per_million: float) -> float:
+        with self.lock:
+            prompt_cost = (self.total_prompt_tokens / 1_000_000) * prompt_cost_per_million
+            completion_cost = (self.total_completion_tokens / 1_000_000) * completion_cost_per_million
+            return prompt_cost + completion_cost
+
+# Instantiate the tracker globally
+generation_token_tracker = GenerationTokenTracker()
+
+# Define some placeholder costs (you should update these with actual model costs)
+DEFAULT_COST_PER_MILLION_PROMPT_TOKENS = 0.50  # Example: $0.50 / 1M prompt tokens
+DEFAULT_COST_PER_MILLION_COMPLETION_TOKENS = 1.50 # Example: $1.50 / 1M completion tokens
 
 
 ORDINAL_WORDS_TO_IGNORE = {
@@ -375,7 +404,7 @@ def log_prompt(
 
 
 FINAL_QUESTION_TEMPLATE = Template(
-    "\n\n---\n\n**Question:** Following the entire sequence of events described in the story, exactly how many $primary_object did the characters end up with? Provide only the final integer count."
+    "\n\n---\n\n**Question:** Considering the entire sequence of events described in the story, what is the final, precise quantity of $primary_object that the characters possess or have determined at the very end of their activities? Provide only the single integer representing this final amount."
 )
 
 # --- GenerationContext for recursive narrative state ---
@@ -538,11 +567,13 @@ class RateLimiter:
     def update_limits_from_api(self):
         """
         Check OpenRouter API rate limits and adjust rate limiter settings accordingly.
+        Returns the current account usage (float) or None if an error occurs or usage is not found.
         """
         if not OPENROUTER_API_KEY or OPENROUTER_API_KEY == "YOUR_OPENROUTER_API_KEY_HERE":
             logger.warning("Cannot check OpenRouter limits: No valid API key")
-            return
+            return None # ADDED
 
+        current_usage = None # Initialize to None
         try:
             logger.info("Checking OpenRouter rate limits and remaining credits...")
             response = requests.get(
@@ -593,6 +624,7 @@ class RateLimiter:
 
                 if usage is not None:
                     log_message_parts.append(f"Usage: ${usage:.4f}")
+                    current_usage = float(usage) # Store the usage
 
                 if limit is not None and limit_remaining is not None:
                     log_message_parts.append(f"Credits: Rem ${limit_remaining:.4f} of ${limit:.4f}")
@@ -613,9 +645,10 @@ class RateLimiter:
 
         except Exception as e:
             logger.error(f"Error checking OpenRouter limits: {e}")
+            return None # Return None on exception
 
-        # Wait at least 5 minutes before checking again
         self.last_limits_check_time = time.time()
+        return current_usage # Return the fetched usage
 
 # Create a singleton rate limiter instance
 rate_limiter = RateLimiter(
@@ -1034,8 +1067,95 @@ def build_random_ast(max_ops: int, max_branch: int = config.MAX_BRANCH) -> Node:
         return OpNode(op, children)
 
     root = helper()
-    if isinstance(root, Atom) and max_ops >= 1:
-        op = random.choice(ops)
+
+    # --- START MODIFICATION FOR SUGGESTION 2 ---
+    # If the root is an Atom (meaning max_ops was 0 or 1 initially, or early termination)
+    # OR if the root is NOT a combining operation (SUM, AVG, SM) and we want to force it
+    # for problems with at least, say, 2 operations.
+    # This ensures the final step is a calculation rather than just a selection if possible.
+    
+    is_combining_op = isinstance(root, OpNode) and root.op in ["SUM", "AVG", "SM"]
+    MIN_OPS_FOR_COMBINING_ROOT = 2 # Arbitrary: only force if problem has some depth
+
+    if (isinstance(root, Atom) and max_ops >= 1) or \
+       (count >= MIN_OPS_FOR_COMBINING_ROOT and not is_combining_op and max_ops > count): # Ensure we have ops left to make a new root
+        
+        logger.debug(f"AST Gen: Original root was {getattr(root, 'op', 'Atom')}. Attempting to ensure a combining root.")
+        
+        # Prefer SUM, AVG, SM as the new root
+        combining_ops = ["SUM", "AVG", "SM"]
+        new_root_op = random.choice(combining_ops)
+        
+        # Determine arity for the new root
+        # New root will have the old root as one child, and new atoms as others.
+        # Ensure arity is at least 2 to include the old root and at least one new atom.
+        # Max arity should still respect max_branch.
+        new_arity = random.randint(max(2, config.MIN_ARITY), max_branch) 
+        
+        new_children = [root] # The old root is one child
+        
+        # Add new Atom children
+        for _ in range(new_arity - 1):
+            new_children.append(Atom(random.randint(config.MIN_ATOM_VAL, config.MAX_ATOM_VAL)))
+        
+        random.shuffle(new_children)
+        
+        # Special handling for AVG if we created it as the new root
+        if new_root_op == "AVG":
+            direct_atoms_new_root = [c for c in new_children if isinstance(c, Atom)]
+            current_sum_new_root = sum(a.n for a in direct_atoms_new_root)
+            num_direct_atoms_new_root = len(direct_atoms_new_root)
+
+            if num_direct_atoms_new_root > 0: # Should always be true if new_arity >=2 and one child is Atom
+                remainder_new_root = current_sum_new_root % num_direct_atoms_new_root
+                if remainder_new_root != 0:
+                    adjustment_needed_new_root = (num_direct_atoms_new_root - remainder_new_root) % num_direct_atoms_new_root
+                    
+                    # Try to adjust one of the newly added atoms
+                    newly_added_atoms = [c for c in new_children if isinstance(c, Atom) and c is not root] # Exclude the old root if it was an atom
+                    
+                    atom_to_adjust_new_root = None
+                    if newly_added_atoms:
+                         atom_to_adjust_new_root = random.choice(newly_added_atoms)
+                    elif direct_atoms_new_root: # Fallback if old root was an atom and only one new atom was added
+                         atom_to_adjust_new_root = random.choice(direct_atoms_new_root)
+
+
+                    if atom_to_adjust_new_root:
+                        adjusted_new_root = False
+                        # Try adding
+                        if config.MIN_ATOM_VAL <= atom_to_adjust_new_root.n + adjustment_needed_new_root <= config.MAX_ATOM_VAL:
+                            atom_to_adjust_new_root.n += adjustment_needed_new_root
+                            atom_to_adjust_new_root.value = atom_to_adjust_new_root.n # Update value too
+                            adjusted_new_root = True
+                            logger.debug(f"AST Gen (Forced Root AVG): Adjusted new atom value for divisibility.")
+                        # Try subtracting if adding failed
+                        elif config.MIN_ATOM_VAL <= atom_to_adjust_new_root.n - (num_direct_atoms_new_root - adjustment_needed_new_root) <= config.MAX_ATOM_VAL:
+                            atom_to_adjust_new_root.n -= (num_direct_atoms_new_root - adjustment_needed_new_root)
+                            atom_to_adjust_new_root.value = atom_to_adjust_new_root.n # Update value too
+                            adjusted_new_root = True
+                            logger.debug(f"AST Gen (Forced Root AVG): Adjusted new atom value (subtracted) for divisibility.")
+                        
+                        if not adjusted_new_root:
+                            logger.warning(f"AST Gen (Forced Root AVG): Could not adjust new atom for AVG divisibility.")
+                    else:
+                        logger.warning(f"AST Gen (Forced Root AVG): No suitable atom found to adjust for divisibility.")
+        
+        root = OpNode(new_root_op, new_children)
+        # Increment max_ops if we added an operation, or ensure count reflects it.
+        # The 'count' variable in helper() tracks operations. If we add one here,
+        # it's effectively one more operation than 'max_ops' might have initially allowed
+        # for the helper. This is a design choice. For now, we assume 'max_ops' is a soft limit.
+        logger.info(f"AST Gen: Ensured root is a combining op: {root.op}")
+    # --- END MODIFICATION FOR SUGGESTION 2 ---
+    
+    # Original fallback if root is Atom and max_ops >=1 (this might be redundant now or need adjustment)
+    # Consider if this block is still needed or if the logic above covers it.
+    # For now, I'll keep it but it might interact with the above.
+    # A simpler approach might be to remove this original block if the new logic is robust.
+    elif isinstance(root, Atom) and max_ops >= 1: # Original condition
+        logger.debug(f"AST Gen: Original root was Atom, max_ops >=1. Wrapping with a random op.")
+        op = random.choice(ops) # ops = ["MAX", "MIN", "MED", "SUM", "SM", "AVG"]
         arity = random.randint(config.MIN_ARITY, max_branch)
         children = [
             Atom(random.randint(config.MIN_ATOM_VAL, config.MAX_ATOM_VAL))
@@ -1044,6 +1164,8 @@ def build_random_ast(max_ops: int, max_branch: int = config.MAX_BRANCH) -> Node:
         children.append(root)
         random.shuffle(children)
         root = OpNode(op, children)
+        logger.info(f"AST Gen: Wrapped Atom root with {op}.")
+
     return root
 
 
@@ -1233,9 +1355,20 @@ def _chat_completion_call(*args, **kwargs):
 
         # Use extra_body for OpenRouter-specific parameters
         if openrouter_specific_params:
-            return client.chat.completions.create(**api_call_standard_kwargs, extra_body=openrouter_specific_params)
+            resp = client.chat.completions.create(**api_call_standard_kwargs, extra_body=openrouter_specific_params) # MODIFIED: assign to resp
         else:
-            return client.chat.completions.create(**api_call_standard_kwargs)
+            resp = client.chat.completions.create(**api_call_standard_kwargs) # MODIFIED: assign to resp
+        
+        # --- Track token usage --- ADD THIS BLOCK ---
+        if resp and hasattr(resp, 'usage') and resp.usage:
+            prompt_tokens = resp.usage.prompt_tokens or 0
+            completion_tokens = resp.usage.completion_tokens or 0
+            generation_token_tracker.add_usage(prompt_tokens, completion_tokens)
+        else:
+            logger.warning("_chat_completion_call: No usage data found in API response.")
+        # --- END ADDED BLOCK ---
+            
+        return resp # Ensure resp is returned
 
     except Exception as e:
         logger.error(f"Error during client.chat.completions.create: {e}")
@@ -2352,8 +2485,35 @@ def _generate_narrative_recursive(  # Line ~1315
     # and by the validator (implicitly allowed if it's the step's result).
     truly_forbidden_for_prompt = forbidden_for_current_beat_rules - required_atoms_for_beat
     
-    # What was previously `forbidden_atoms_for_prompt` is now `forbidden_for_current_beat_rules`
-    # What was previously `truly_forbidden_for_prompt` is calculated above using the new base set.
+    # --- REFINED HANDLING OF OVERALL_GROUND_TRUTH_ANSWER ---
+    # For the root node, we don't want to list the final answer as "MUST AVOID" in the prompt
+    # because it's the result of this node's calculation. Its absence is managed by:
+    # 1. Not putting it in "MUST INCLUDE" for the root prompt
+    # 2. The action_description telling the LLM not to state the final result
+    # 3. Setting enforce_result_presence=False in the validator
+    if is_root and context.overall_ground_truth_answer is not None and context.overall_ground_truth_answer in truly_forbidden_for_prompt:
+        # Remove the overall_ground_truth_answer from "MUST AVOID" for the root node's prompt
+        truly_forbidden_for_prompt.remove(context.overall_ground_truth_answer)
+        logger.debug(
+            f"ROOT NODE: Removed overall_ground_truth_answer ({context.overall_ground_truth_answer}) from truly_forbidden_for_prompt to avoid conflicting instructions."
+        )
+
+    # Create a specialized set for the validator that's more nuanced than the prompt's "MUST AVOID" list
+    forbidden_atoms_for_validator = context.introduced_atoms.copy()
+    # For non-root nodes, always include the overall_ground_truth_answer in the validator's forbidden set
+    # For the root node, only include it if it's somehow different from the node's own calculated result
+    # (which would be a safety check, as normally they should be the same)
+    if context.overall_ground_truth_answer is not None:
+        if not is_root:  # For intermediate nodes
+            forbidden_atoms_for_validator.add(context.overall_ground_truth_answer)
+            logger.debug(f"VALIDATOR: Added overall_ground_truth_answer ({context.overall_ground_truth_answer}) to validator's forbidden set for non-root node.")
+        elif context.overall_ground_truth_answer != correct_result:
+            # Edge case: For root node, only add if it's different from the calculated result
+            forbidden_atoms_for_validator.add(context.overall_ground_truth_answer)
+            logger.debug(f"VALIDATOR: Added overall_ground_truth_answer ({context.overall_ground_truth_answer}) to validator's forbidden set for root node because it differs from calculated result ({correct_result}).")
+    
+    # Remove the required atoms from the validator's forbidden set
+    forbidden_atoms_for_validator = forbidden_atoms_for_validator - required_atoms_for_beat
 
     primary_object = world["object"]
 
@@ -2376,10 +2536,17 @@ def _generate_narrative_recursive(  # Line ~1315
     # It starts with the direct atomic operands for the current beat.
     numbers_to_mention_in_prompt = set(required_atoms_for_beat)
 
-    # Only add correct_result to "MUST INCLUDE" if it's NOT the root node
+    # Only add correct_result to "MUST INCLUDE" if:
+    # 1. It's NOT the root node (we never want to mention the final result)
+    # 2. AND for intermediate nodes, only if ALLOW_IMPLICIT_INTERMEDIATE_RESULTS is False (requiring explicit mention)
     if not is_root and correct_result is not None:
-        numbers_to_mention_in_prompt.add(correct_result)
-    elif is_root and correct_result is not None: # Added explicit logging for the root case
+        if not context.config.ALLOW_IMPLICIT_INTERMEDIATE_RESULTS:
+            # Only add the result if we're requiring explicit mention of intermediate results
+            numbers_to_mention_in_prompt.add(correct_result)
+            logger.debug(f"Added correct_result ({correct_result}) to numbers_to_mention_in_prompt because ALLOW_IMPLICIT_INTERMEDIATE_RESULTS=False")
+        else:
+            logger.debug(f"Intermediate node beat: correct_result ({correct_result}) NOT added to numbers_to_mention_in_prompt because ALLOW_IMPLICIT_INTERMEDIATE_RESULTS=True")
+    elif is_root and correct_result is not None: 
         logger.debug(f"Root node beat: correct_result ({correct_result}) will NOT be added to numbers_to_mention_in_prompt for the LLM.")
 
     # Now, create the sorted list of strings for the prompt.
@@ -2520,25 +2687,29 @@ def _generate_narrative_recursive(  # Line ~1315
     # --- MODIFIED action_description based on is_root --- 
     if is_root:
         # For the root node, describe the operation but DO NOT state the final numerical result.
+        # The inputs_str will correctly list the direct operands for the final operation.
         if node.op == "SUM":
             action_description = (
                 f"Narrate the final action (e.g., gathering all remaining resources, tallying the final count) involving {inputs_str}. "
-                f"The story should conclude with the characters having arrived at their final quantity of {primary_object}. "
+                f"The story should conclude with the characters having performed the action that would lead to their final quantity of {primary_object}. "
                 f"DO NOT state the numerical value of this final tally in this scene. The question at the end will ask for it."
             )
         elif node.op == "AVG":
-            direct_atom_sum_words_for_root_avg = num_to_words(direct_atom_sum) if direct_atom_sum is not None else "calculated sum of new items"
+            # For AVG, direct_atom_sum might be relevant if the root AVG combines new atoms with an anchor.
+            # If the root AVG only averages previous anchors, direct_atom_sum would be None or based on 0 atoms.
+            direct_atom_sum_words_for_root_avg = num_to_words(direct_atom_sum) if direct_atom_sum is not None and direct_atom_children else "any new direct items"
             action_description = (
                 f"Narrate the final event (e.g., determining the final average, establishing the ultimate equilibrium) involving {inputs_str}. "
-                f"The characters determine the final average value of {primary_object}. "
+                f"The characters perform the necessary steps to determine the final average value of {primary_object}. "
                 f"DO NOT state the numerical value of this final average in this scene. The question at the end will ask for it. "
-                f"If relevant for clarity, you MAY mention the intermediate sum of any new direct inputs ({direct_atom_sum_words_for_root_avg} from {formatted_direct_values_str}) before they are combined with prior results for averaging."
+                f"If relevant for clarity (e.g., if new items {formatted_direct_values_str} are part of this final average), you MAY mention their intermediate sum ({direct_atom_sum_words_for_root_avg}) before they are combined with prior results for averaging, but the final average itself must not be stated."
             )
         elif node.op == "SM":
             sm_intermediate_sum_words_for_root = "unknown total" 
             try:
-                child_values = [eval_node(c) for c in node.children]
-                sm_intermediate_sum_for_root = sum(child_values)
+                # Ensure child values are evaluated if not already (should be by now)
+                child_values_for_sm_root = [eval_node(c) for c in node.children]
+                sm_intermediate_sum_for_root = sum(child_values_for_sm_root)
                 sm_intermediate_sum_words_for_root = num_to_words(sm_intermediate_sum_for_root)
             except Exception as e_sm_sum_root:
                 logger.warning(f"SM Root Beat: Could not calculate intermediate sum for prompt: {e_sm_sum_root}")
@@ -2546,391 +2717,120 @@ def _generate_narrative_recursive(  # Line ~1315
             action_description = (
                 f"Narrate the final action involving {inputs_str}. The characters combine these inputs (conceptually reaching a temporary total around {sm_intermediate_sum_words_for_root}). "
                 f"Then, describe a plausible event that makes them keep only a quantity representing the final digit of that total. "
-                f"The story should resolve with them having this final quantity. DO NOT state its numerical value. "
+                f"The story should resolve with them having performed the action that results in this final quantity. DO NOT state its numerical value. "
                 f"Examples of events: a magical lock consumes all but the final unit, a tax collector takes most, a reaction leaves only the core essence."
             )
         elif node.op == "MAX":
             action_description = (
-                f"Narrate the final comparison of {inputs_str}. The characters identify the item or quantity with the largest value, which becomes their ultimate acquisition or final state. "
-                f"DO NOT state the numerical value of this final maximum quantity in this scene."
+                f"Narrate the final comparison of {inputs_str}. The characters identify the item or quantity with the largest value. "
+                f"Describe their realization or decision-making process that identifies this largest quantity. "
+                f"The scene should conclude with them having made this crucial identification. "
+                f"DO NOT explicitly state that they take or end up with this largest quantity. DO NOT state its numerical value as their final possession. "
+                f"The story implies they will act on this decision, but the narrative ends before that final acquisition."
             )
         elif node.op == "MIN":
             action_description = (
-                f"Narrate the final comparison of {inputs_str}. The characters identify the item or quantity with the smallest value, which becomes their ultimate acquisition or final state. "
-                f"DO NOT state the numerical value of this final minimum quantity in this scene."
+                f"Narrate the final comparison of {inputs_str}. The characters identify the item or quantity with the smallest value. "
+                f"Describe their realization or decision-making process that identifies this smallest quantity. "
+                f"The scene should conclude with them having made this crucial identification. "
+                f"DO NOT explicitly state that they take or end up with this smallest quantity. DO NOT state its numerical value as their final possession. "
+                f"The story implies they will act on this decision, but the narrative ends before that final acquisition."
             )
         elif node.op == "MED":
             action_description = (
-                f"Narrate the final evaluation of {inputs_str} numerically. The characters select the item or quantity representing the middle value (when sorted), which determines their final outcome. "
-                f"DO NOT state the numerical value of this final median quantity in this scene."
+                f"Narrate the final evaluation of {inputs_str} numerically. The characters select the item or quantity representing the middle value (when sorted). "
+                f"Describe their realization or decision-making process that identifies this median quantity. "
+                f"The scene should conclude with them having made this crucial identification. "
+                f"DO NOT explicitly state that they take or end up with this median quantity. DO NOT state its numerical value as their final possession. "
+                f"The story implies they will act on this decision, but the narrative ends before that final acquisition."
             )
         else: # Fallback for any other ops if added later
             action_description = (
-                f"Narrate the final application of '{op_label}' to {inputs_str}. The story should conclude with the characters reaching their final result. "
+                f"Narrate the final application of '{op_label}' to {inputs_str}. The story should conclude with the characters having performed the action to reach their final result. "
                 f"DO NOT state the numerical value of this result in this scene."
             )
     else: # NOT is_root (existing logic for intermediate nodes)
         correct_result_words = num_to_words(correct_result)
-        if node.op == "SUM":
-            action_description = (
-                f"Narrate an action (e.g., gathering, merging) involving {inputs_str}. "
-                f"The outcome MUST be that the total quantity becomes exactly **{correct_result_words}** {primary_object}. Imply the sum through action."
-            )
-        elif node.op == "AVG":
-            correct_result_words = num_to_words(correct_result)
-            direct_atom_sum_words = num_to_words(direct_atom_sum) if direct_atom_sum is not None else "calculated sum"
-            action_description = (
-                f"Narrate an event (e.g., balancing, averaging mechanism) involving {inputs_str}. "
-                f"The outcome MUST be exactly **{correct_result_words}** {primary_object} (the floored average). "
-                f"You MAY mention the intermediate sum ({direct_atom_sum_words} from direct inputs ({formatted_direct_values_str}) if needed for the narrative, but the final result is key."
-            )
-        elif node.op == "SM":
-            correct_result_words = num_to_words(correct_result)
-            sm_intermediate_sum = "unknown"
-            try:
-                child_values = [eval_node(c) for c in node.children]
-                sm_intermediate_sum = sum(child_values)
-                sm_intermediate_sum_words = num_to_words(sm_intermediate_sum)
-            except Exception as e:
-                logger.warning(
-                    f"SM Beat: Could not calculate intermediate sum for prompt explanation: {e}"
+        
+        # Check if intermediate results must be explicitly mentioned
+        if context.config.ALLOW_IMPLICIT_INTERMEDIATE_RESULTS:
+            # Intermediate results are OPTIONAL - use more flexible phrasing
+            if node.op == "SUM":
+                action_description = (
+                    f"Narrate an action (e.g., gathering, merging) involving {inputs_str} to calculate their sum. "
+                    f"The narrative should clearly imply this summation occurred. You MAY explicitly state that the total quantity becomes {correct_result_words} {primary_object}, but it's not strictly required if the summation is clear from the action."
                 )
-                sm_intermediate_sum_words = "unknown"
+            elif node.op == "AVG":
+                direct_atom_sum_words = num_to_words(direct_atom_sum) if direct_atom_sum is not None else "calculated sum"
+                action_description = (
+                    f"Narrate an event (e.g., balancing, averaging mechanism) involving {inputs_str} to determine their integer average (floored). "
+                    f"The narrative should clearly imply this averaging. You MAY explicitly state the outcome is {correct_result_words} {primary_object}. "
+                    f"You MAY also mention the intermediate sum ({direct_atom_sum_words} from direct inputs ({formatted_direct_values_str})) if it aids the narrative."
+                )
+            elif node.op == "SM":
+                sm_intermediate_sum_words = "unknown" # Default
+                try:
+                    child_values = [eval_node(c) for c in node.children]
+                    sm_intermediate_sum = sum(child_values)
+                    sm_intermediate_sum_words = num_to_words(sm_intermediate_sum)
+                except Exception as e:
+                    logger.warning(f"SM Beat: Could not calculate intermediate sum for prompt explanation: {e}")
+                    sm_intermediate_sum_words = "unknown"
 
-            action_description = (
-                f"Narrate an action involving {inputs_str}. The characters combine these inputs (reaching a temporary total conceptually around {sm_intermediate_sum_words}). "
-                f"Then, describe a specific, plausible event that **forces them to keep only a quantity equal to the final digit of that total**. "
-                f"Examples: \n"
-                f"*   A magical lock clicks open, consuming all but the final unit of energy ({correct_result_words}).\\\n"
-                f"*   A mystical tax collector appears, taking all but the last {correct_result_words} {primary_object}.\\\n"
-                f"*   The combined items react, leaving only {correct_result_words} stable {primary_object}.\\\n"
-                f"The final quantity MUST become exactly **{correct_result_words}** {primary_object}. Do NOT explicitly state \'sum\' or \'modulo\'; the *event* causes the result."
-            )
-        elif node.op == "MAX":
-            correct_result_words = num_to_words(correct_result)
-            action_description = (
-                f"Narrate comparing {inputs_str}. They MUST choose the item/quantity with the largest value. "
-                f"The outcome MUST be exactly **{correct_result_words}** {primary_object}. Justify the choice."
-            )
-        elif node.op == "MIN":
-            correct_result_words = num_to_words(correct_result)
-            action_description = (
-                f"Narrate comparing {inputs_str}. They MUST choose the item/quantity with the smallest value. "
-                f"The outcome MUST be exactly **{correct_result_words}** {primary_object}. Justify the choice."
-            )
-        elif node.op == "MED":
-            correct_result_words = num_to_words(correct_result)
-            action_description = (
-                f"Narrate evaluating {inputs_str} numerically. They MUST select the item/quantity with the middle value (when sorted). "
-                f"The outcome MUST be exactly **{correct_result_words}** {primary_object}. Justify the choice."
-            )
+                action_description = (
+                    f"Narrate an action involving {inputs_str}. The characters combine these inputs (conceptually reaching a temporary total around {sm_intermediate_sum_words}). "
+                    f"Then, describe an event that makes them keep only a quantity equal to the final digit of that total. "
+                    f"The narrative should imply this sum-modulo-10 operation. You MAY explicitly state the final quantity becomes {correct_result_words} {primary_object}, but it's not strictly required."
+                )
+            elif node.op == "MAX":
+                action_description = (
+                    f"Narrate comparing {inputs_str} to find the largest value. Justify the choice. "
+                    f"The narrative should clearly imply this selection. You MAY explicitly state the chosen quantity is {correct_result_words} {primary_object}, but it's not strictly required."
+                )
+            elif node.op == "MIN":
+                action_description = (
+                    f"Narrate comparing {inputs_str} to find the smallest value. Justify the choice. "
+                    f"The narrative should clearly imply this selection. You MAY explicitly state the chosen quantity is {correct_result_words} {primary_object}, but it's not strictly required."
+                )
+            elif node.op == "MED":
+                action_description = (
+                    f"Narrate evaluating {inputs_str} numerically to select the median (middle) value. Justify the choice. "
+                    f"The narrative should clearly imply this selection. You MAY explicitly state the chosen quantity is {correct_result_words} {primary_object}, but it's not strictly required."
+                )
+            else:
+                action_description = (
+                    f"Narrate applying '{op_label}' to {inputs_str}. The narrative should clearly imply this operation. "
+                    f"You MAY explicitly state the outcome is {correct_result_words} {primary_object}, but it's not strictly required."
+                )
         else:
-            correct_result_words = num_to_words(correct_result)
-            action_description = f"Narrate applying '{op_label}' to {inputs_str}. Outcome must be {correct_result_words}."
-    # --- END MODIFIED action_description --- 
+            # Original strict behavior - intermediate results MUST be mentioned
+            if node.op == "SUM":
+                action_description = (
+                    f"Narrate an action (e.g., gathering, merging) involving {inputs_str}. "
+                    f"The outcome MUST be that the total quantity becomes exactly **{correct_result_words}** {primary_object}. Imply the sum through action."
+                )
+            elif node.op == "AVG":
+                direct_atom_sum_words = num_to_words(direct_atom_sum) if direct_atom_sum is not None else "calculated sum"
+                action_description = (
+                    f"Narrate an event (e.g., balancing, averaging mechanism) involving {inputs_str}. "
+                    f"The outcome MUST be exactly **{correct_result_words}** {primary_object} (the floored average). "
+                    f"You MAY mention the intermediate sum ({direct_atom_sum_words} from direct inputs ({formatted_direct_values_str}) if needed for the narrative, but the final result is key."
+                )
+            elif node.op == "SM":
+                correct_result_words = num_to_words(correct_result)
+                sm_intermediate_sum = "unknown"
+                try:
+                    child_values = [eval_node(c) for c in node.children]
+                    sm_intermediate_sum = sum(child_values)
+                    sm_intermediate_sum_words = num_to_words(sm_intermediate_sum)
+                except Exception as e:
+                    logger.warning(
+                        f"SM Beat: Could not calculate intermediate sum for prompt explanation: {e}"
+                    )
+                    sm_intermediate_sum_words = "unknown"
 
-    reminder = ""
-    if child_narrative_anchors:
-        reminder_names_str = ", ".join(f"'{name}'" for name in child_narrative_anchors)
-        must_mention_str = (
-            formatted_direct_values_str
-            if has_direct_atom_children
-            else "(none for this step, as it only involves prior conceptual results)"
-        )
-        reminder = (
-            f"\n**REMINDER:** Do NOT mention the actual numeric results associated with previous conceptual steps ({reminder_names_str}) in your text. "
-            f"Refer to them by their conceptual names (e.g., '{random.choice(child_narrative_anchors) if child_narrative_anchors else "a previous finding"}') ONLY. "
-            f"This is crucial for maintaining narrative suspense and focusing the reader on the current step's numbers. "
-            f"However, you MUST explicitly mention the newly discovered quantities for *this* step: {must_mention_str} (as words)."
-        )
-
-    operational_instruction = (
-        f"This scene resolves the step named '{narrative_anchor}'.\n"
-        f"{action_description}\n"
-        f"{reminder}"
-    )
-
-    few_shot_section = ""
-    num_shots = config.FEW_SHOT_EXAMPLES
-
-    if num_shots == 1 and FEW_SHOT_EXAMPLES_STRICT:
-        rules_str, good_narrative, _, _ = FEW_SHOT_EXAMPLES_STRICT[0]
-        example_prompt_text = (
-            f"--- Example of Strict Narrative Generation ---\n"
-            f"Rules:\n{rules_str}\n"
-            f"Good Narrative Output (Follows Rules):\n{good_narrative}\n"
-            f"--- End Example ---"
-        )
-        few_shot_section = (
-            "Here is an example of generating a narrative scene while strictly following number rules:\n\n"
-            + example_prompt_text  # Renamed to avoid conflict with function name
-            + "\n\n---\n\n"
-        )
-    elif num_shots > 0 and FEW_SHOT_EXAMPLES_STRICT:
-        logger.warning(
-            f"Configured for {num_shots} few-shot examples, but FEW_SHOT_EXAMPLES_STRICT list only has {len(FEW_SHOT_EXAMPLES_STRICT)} example(s) after modification. Using the first one."
-        )
-        rules_str, good_narrative, _, _ = FEW_SHOT_EXAMPLES_STRICT[0]
-        example_prompt_text = (
-            f"--- Example of Strict Narrative Generation ---\n"
-            f"Rules:\n{rules_str}\n"
-            f"Good Narrative Output (Follows Rules):\n{good_narrative}\n"
-            f"--- End Example ---"
-        )
-        few_shot_section = (
-            "Here is an example of generating a narrative scene while strictly following number rules:\n\n"
-            + example_prompt_text
-            + "\n\n---\n\n"
-        )
-
-    system_prompt = (
-        "You are a fiction writer creating sequential story scenes. Your ONLY task is to write the *next* narrative scene text based on the user's instructions and a snippet of the previous scene. "
-        "ABSOLUTELY FORBIDDEN: Any text other than the story scene. NO analysis, NO checklists, NO rule explanations, NO calculations, NO meta-commentary, NO greetings. "
-        "Study the few shot examples of what to do. Adhere STRICTLY to ALL instructions, especially the number rules for the current scene."
-    )
-
-    cleaned_snippet = clean_snippet(context.last_scene_text, max_len=150)
-
-    user_message_content = (
-        f"**CONTEXT:**\\n"
-        f"Genre: {world.get('genre', 'fantasy')}\\n"
-        f"Setting: '{world.get('setting', 'a fictional world')}'\\n"
-        f"Previous Scene Snippet: '...{cleaned_snippet}'\\n\\n"
-    )
-
-    # --- Few-Shot Example Section ---
-    few_shot_section = ""
-    num_shots = config.FEW_SHOT_EXAMPLES
-    if num_shots == 1 and FEW_SHOT_EXAMPLES_STRICT:
-        rules_str, good_narrative, _, _ = FEW_SHOT_EXAMPLES_STRICT[0]
-        example_prompt_text = (
-            f"Rules:\\n{rules_str}\\n"
-            f"Good Narrative Output (Follows Rules):\\n{good_narrative}\\n"
-        )
-        few_shot_section = (
-            f"**EXAMPLE (How to Follow Rules):**\\n"  # Clearer heading
-            f"{example_prompt_text}"
-            f"---\\n\\n"
-        )
-    # Add elif/else for more examples if FEW_SHOT_EXAMPLES_STRICT is expanded later
-    elif num_shots > 0 and FEW_SHOT_EXAMPLES_STRICT:
-        logger.warning(
-            f"Configured for {num_shots} few-shot examples, but FEW_SHOT_EXAMPLES_STRICT list only has {len(FEW_SHOT_EXAMPLES_STRICT)} example(s). Using the first one."
-        )
-        rules_str, good_narrative, _, _ = FEW_SHOT_EXAMPLES_STRICT[0]
-        example_prompt_text = (
-            f"Rules:\\n{rules_str}\\n"
-            f"Good Narrative Output (Follows Rules):\\n{good_narrative}\\n"
-        )
-        few_shot_section = (
-            f"**EXAMPLE (How to Follow Rules):**\\n"
-            f"{example_prompt_text}"
-            f"---\\n\\n"
-        )
-
-    if few_shot_section:
-        user_message_content += few_shot_section
-
-    # --- Combined Task & Scene Requirements ---
-    task_header = "Reaching the conclusion" if is_root else "Continuing on the journey"
-    current_scene_instructions = (
-        f"**YOUR TASK: Write ONLY the narrative text for the next scene.**\\n"
-    )
-    current_scene_instructions += (
-        f"Continue directly from the snippet: '...{cleaned_snippet}'\\n\\n"
-    )
-
-    current_scene_instructions += (
-        f"**SCENE REQUIREMENTS ({task_header} for '{narrative_anchor}'):**\\n"
-    )
-    if scene_preamble:
-        current_scene_instructions += f"*   Discovery: {scene_preamble}\\n"
-    current_scene_instructions += f"*   Action: {action_description}\\n"
-    if reminder:
-        current_scene_instructions += (
-            f"*   Reminder: {reminder.replace('**REMINDER:**','').strip()}\\n"
-        )
-
-    user_message_content += (
-        f"{current_scene_instructions}\\n"  # Add the combined requirements
-    )
-
-    # --- Strengthened Number Rules Section --- (and explicit formatting instruction)
-    user_message_content += (
-        f"**!!! CRITICAL NUMBER RULES & FORMATTING !!!**\\n"
-        f"Your writing MUST explicitly state the numbers for the current calculation (listed as 'MUST INCLUDE' below) using written word forms (e.g., 'forty-two', 'one hundred and seven').\\n"
-        f"For other numbers you are allowed to use (like counts or the number 'one'), also write them out as words (e.g., 'three', 'one').\\n"
-        f"Do NOT use digits (like '42' or '107') in your story text for ANY number.\\n"
-        f"Do NOT use the 'word (digit)' format like 'seven (7)' in your story text for ANY number.\\n"
-        f"--- Current Step's Numbers ---\\n"
-        f"- MUST INCLUDE: {must_include_combined_str} (as written words)\\n"
-    )
-    
-    # New explicit construction for "You may optionally use..."
-    optional_use_parts_list = []
-    # Special instruction if operand_count itself is forbidden
-    if operand_count > 0 and operand_count_is_forbidden_for_prompt:
-        operand_count_word = num_to_words(operand_count)
-        user_message_content += (
-            f"- **SPECIAL NARRATIVE CHALLENGE FOR THIS SCENE:** While there are {operand_count_word} new groups of {primary_object} to be described, "
-            f"the number '{operand_count_word}' itself was critically important in a previous event and is now TEMPORARILY FORBIDDEN for direct mention as a count. "
-            f"Therefore, for THIS SCENE ONLY, you MUST describe the discovery of these {operand_count_word} groups "
-            f"WITHOUT using the word '{operand_count_word}' to state their count. "
-            f"Instead, use phrasing like 'They found several new caches...' or 'Another set of discoveries was made...' or 'The next locations revealed...' "
-            f"and then proceed to list their contents (which are in the 'MUST INCLUDE' list: {must_include_combined_str}). "
-            f"This tests your ability to narrate around a specific, temporarily forbidden number while still conveying all necessary new information.\n"
-        )
-    elif operand_count > 0: # operand_count is not forbidden, so it can be optionally used
-        operand_count_word = num_to_words(operand_count)
-        # primary_object is defined earlier in this function scope
-        optional_use_parts_list.append(
-            f"{operand_count_word}, as this is the number of groups of {primary_object}s the characters will find"
-        )
-
-    # No longer explicitly mentioning 'one' as optionally usable
-    # The numbers 'one', 'two', 'three', as well as common ordinals are now generally allowed for narrative fluency
-    # as indicated in the no_other_numbers_instruction
-
-    # --- CORRECTED LOGIC for mentioning intermediate sum in "optional use" ---
-    # This `direct_atom_sum` is the sum of direct atomic children of the current node.
-    intermediate_sum_mention_in_optional_rules = ""
-    if (
-        direct_atom_sum is not None
-    ):  # If there are direct atoms and their sum is calculated
-        if node.op == "AVG":
-            direct_atom_sum_words = num_to_words(direct_atom_sum)
-            intermediate_sum_mention_in_optional_rules = f"the sum of new items ({direct_atom_sum_words}) which contributes to the average calculation"
-        elif node.op == "SM":
-            # For SM, direct_atom_sum is the sum of new atomic items for this step.
-            # The overall sum for SM (sm_intermediate_sum) is mentioned in the action_description.
-            # Allowing direct_atom_sum here is consistent with the validator.
-            direct_atom_sum_words = num_to_words(direct_atom_sum)
-            intermediate_sum_mention_in_optional_rules = f"the sum of new items ({direct_atom_sum_words}) before they are combined with other values for the final digit operation"
-        # Add other conditions here if other ops have a specific intermediate sum from direct atoms that can be mentioned.
-
-    # Build the "You may optionally use" line
-    full_optional_statement_parts = []
-    if optional_use_parts_list:
-        # Join the existing optional parts (like operand count and 'one')
-        full_optional_statement_parts.append(" and ".join(optional_use_parts_list))
-
-    if (
-        intermediate_sum_mention_in_optional_rules
-    ):  # If there's a relevant intermediate sum to mention
-        full_optional_statement_parts.append(intermediate_sum_mention_in_optional_rules)
-
-    if full_optional_statement_parts:
-        user_message_content += f"- You may optionally use: { ' and '.join(full_optional_statement_parts) }.\n"
-
-    # Now, resume the original f-string concatenation for the remaining rules
-    # --- Refined "NO OTHER NUMBERS ALLOWED" instruction with narrative context ---
-    # `numbers_to_mention_in_prompt` is the set of current beat's direct operands + its result
-    # `truly_forbidden_for_prompt` is (all_previously_introduced_atoms - current_beat_direct_operands)
-
-    primary_object = world.get("object", "items") # Get the primary object name
-
-    # Use dynamic problematic numbers: base set from config + current operand_count if it's forbidden
-    dynamic_problematic_numbers_to_check = config.PROBLEM_SMALL_NUMBERS_TO_CHECK.copy()
-    if operand_count_is_forbidden_for_prompt: # If the operand count itself is forbidden
-        dynamic_problematic_numbers_to_check.add(operand_count)
-
-    special_attention_clauses = []
-    
-    for num_val in sorted(list(dynamic_problematic_numbers_to_check)):
-        # Do not create special warnings for 1, 2, 3 as they are now generally allowed by validator for fluency
-        if num_val in [1, 2, 3]:
-            continue 
-
-        if (num_val in truly_forbidden_for_prompt) and \
-           (num_val not in numbers_to_mention_in_prompt):
-            
-            num_word = num_to_words(num_val)
-            object_form = p_inflect.singular_noun(primary_object) if num_val == 1 and p_inflect else primary_object
-            
-            is_current_operand_count_clause = ""
-            if num_val == operand_count and operand_count_is_forbidden_for_prompt:
-                is_current_operand_count_clause = (f" (Note: even though there are {num_word} new groups of {object_form} in *this* scene, "
-                                                   f"the word '{num_word}' is forbidden due to its prior significance - see SPECIAL NARRATIVE CHALLENGE above if provided)")
-
-            clause = (
-                f"The number **'{num_word}'** (referring to '{num_word} {object_form}' or just the quantity '{num_word}') "
-                f"was significant in a prior event. For THIS SCENE, you MUST NOT use the word '{num_word}'{is_current_operand_count_clause}, unless '{num_word}' is explicitly in 'MUST INCLUDE' for this step."
-            )
-            special_attention_clauses.append(clause)
-
-    # Start with the general rule
-    no_other_numbers_instruction = (
-        "- **NO OTHER NUMBERS ALLOWED** beyond those in 'MUST INCLUDE' or 'You may optionally use' (if any are listed).\n"
-        "  This means you should avoid introducing other numerical quantities (e.g., 'seven items', 'after twelve minutes') unless they are part of the core calculation for this scene.\n"
-        "  The numbers 'one', 'two', and 'three', as well as common ordinal numbers (first, second, third, etc.), are generally acceptable for natural narrative flow and are not considered part of this restriction, even if not explicitly listed as 'optional'.\n"
-    )
-
-    if special_attention_clauses:
-        # If there are specific warnings, add a header and then list them.
-        # This makes the prompt structure clearer.
-        no_other_numbers_instruction += (
-            "  **ADDITIONAL CLARIFICATIONS ON PREVIOUSLY MENTIONED QUANTITIES (VERY IMPORTANT FOR THIS SCENE):**\n"
-        )
-        for clause_text in special_attention_clauses:
-            no_other_numbers_instruction += f"    *   {clause_text}\n"
-
-    user_message_content += no_other_numbers_instruction
-    # The "Adherence to these number rules is MANDATORY" line should follow immediately
-    user_message_content += (
-        f"**Adherence to these number rules is MANDATORY.**\n\n"
-    )
-
-    # --- Final Reminder ---
-    user_message_content += (
-        f"REMEMBER: OUTPUT ONLY THE NARRATIVE TEXT FOR THIS SCENE. NO EXTRA TEXT."
-    )
-
-    log_prompt(
-        f"{{'=== FINAL' if is_root else '=== Intermediate'}} Operator Beat Prompt (Op: {node.op}, Narrative Anchor: {narrative_anchor})",
-        f"System: {system_prompt}\\n---\\nUser:\\n{user_message_content}",
-        sample_index=context.sample_index,
-    )
-
-    estimated_prompt_tokens = 0
-    try:
-        estimated_prompt_tokens = len(
-            encoder.encode(system_prompt + user_message_content)
-        )
-    except Exception as e:
-        logger.error(f"Error encoding prompt for token estimation: {e}")
-
-    current_max_beat_completion_tokens = (
-        config.BEAT_MAX_TOKENS
-    )  # Renamed variable
-
-    # Enhanced logging for token budget before API call
-    token_percentage = (context.tokens_used / config.MAX_TOTAL_TOKENS) * 100
-    expected_after_call = context.tokens_used + estimated_prompt_tokens + current_max_beat_completion_tokens
-    expected_percentage = (expected_after_call / config.MAX_TOTAL_TOKENS) * 100
-    will_exceed = would_exceed_budget(
-        context.tokens_used,
-        estimated_prompt_tokens + current_max_beat_completion_tokens,
-        config.MAX_TOTAL_TOKENS,
-        SAFETY_MARGIN,
-    )
-    
-    logger.info(
-        f"TOKEN BUDGET PRE-CALL [{node.op}/{narrative_anchor}]: "
-        f"Current: {context.tokens_used} ({token_percentage:.1f}%), "
-        f"This call: +{estimated_prompt_tokens} prompt, +{current_max_beat_completion_tokens} max completion = "
-        f"+{estimated_prompt_tokens + current_max_beat_completion_tokens} total, "
-        f"Expected after: {expected_after_call}/{config.MAX_TOTAL_TOKENS} ({expected_percentage:.1f}%), "
-        f"Will exceed: {will_exceed}"
-    )
-
-    # Original token budget check with enhanced error message
-    if would_exceed_budget(
-        context.tokens_used,
-        current_max_beat_completion_tokens, # Only consider the potential completion against the budget
-        config.MAX_TOTAL_TOKENS,
-        SAFETY_MARGIN,
-    ):
-        logger.warning(
+                action_description = (
+                    f"Narrate an action involving {inputs_str}. The characters combine these inputs (reaching a temporary total conceptually around {sm_intermediate_sum_words}). "
             f"❌ TOKEN LIMIT ABORT (Completions Only): Cannot generate beat for {node.op} ({narrative_anchor}). "
             f"Current COMPLETION tokens: {context.tokens_used}/{config.MAX_TOTAL_TOKENS} ({token_percentage:.1f}%), "
             f"Required max COMPLETION for this beat: +{current_max_beat_completion_tokens}, "
@@ -2942,15 +2842,29 @@ def _generate_narrative_recursive(  # Line ~1315
             f"Token budget exceeded before generating beat for {node.op}"
         )
 
+    # Determine if the result presence should be enforced for the validator
+    enforce_validator_result_presence = False  # Default to False
+    if is_root:
+        # For root node: NEVER enforce the presence of the final answer
+        enforce_validator_result_presence = False
+        logger.debug(f"Root node: Setting enforce_validator_result_presence=False to allow omitting the final answer")
+    else:
+        # For intermediate nodes: Only enforce if ALLOW_IMPLICIT_INTERMEDIATE_RESULTS is False
+        if not context.config.ALLOW_IMPLICIT_INTERMEDIATE_RESULTS:
+            enforce_validator_result_presence = True
+            logger.debug(f"Intermediate node: Setting enforce_validator_result_presence=True because ALLOW_IMPLICIT_INTERMEDIATE_RESULTS=False")
+        else:
+            logger.debug(f"Intermediate node: Setting enforce_validator_result_presence=False because ALLOW_IMPLICIT_INTERMEDIATE_RESULTS=True")
+
     validate_beat_numbers = make_number_validator(
         allowed_atoms=required_atoms_for_beat,
-        forbidden_atoms=truly_forbidden_for_prompt, # This now incorporates the overall_ground_truth logic
+        forbidden_atoms=forbidden_atoms_for_validator, # Use our refined set instead of truly_forbidden_for_prompt
         operand_count=operand_count,
         correct_result_for_beat=correct_result,
         intermediate_sum_allowed=(
             direct_atom_sum if node.op in ["AVG", "SM"] else None
         ),
-        enforce_result_presence=not is_root, # <--- MODIFICATION
+        enforce_result_presence=enforce_validator_result_presence, # Use our dynamic setting
         operation_type=node.op,
     )
     forbidden_for_padding = context.introduced_atoms.union(required_atoms_for_beat)
@@ -3355,130 +3269,101 @@ def generate_narrative(
     p_inflect,
     logger,
     sample_index: int,
-    overall_ground_truth_answer: int, # ADDED: Pass the overall ground truth
+    overall_ground_truth_answer: int, # ADDED: Receive the overall ground truth
 ) -> str | None:
     """
-    Post-Order Strict Validation: Generate a narrative for a ListOps AST, ensuring
-    original atomic operands are mentioned incrementally with their parent operation.
-    Post-order traversal: children scenes precede their parent's scene.
+    Generate a structured narrative representation of the AST.
+    Each operation is represented by a scene, carefully sequenced with
+    intermediate node anchor names. Uses STRICT recursive generation.
     """
+    logger.info(f"[Sample {sample_index + 1}] Starting narrative generation.")
+    logger.debug(f"DEBUG: Using model: {MODEL}")
+    logger.debug(f"DEBUG: AST: {ast_to_prefix(ast)}")
 
-    if not isinstance(ast, Node):
-        raise ValueError("ast must be an instance of Node")
-    if not isinstance(world, dict):
-        raise ValueError("world must be a dict")
-    required_keys = ("characters", "genre", "setting", "object")
-    if not all(k in world for k in required_keys):
-        logger.error(f"World info missing required keys: {world.keys()}")
-        raise ValueError("world missing required key(s)")
-    if encoder is None:
-        raise RuntimeError("Tokenizer not initialized.")
-    if p_inflect is None:
-        raise RuntimeError("Inflect engine not initialized.")
-
-    # Pre-calculate node values
-    logger.debug("Pre-calculating all AST node values...")
-    try:
-        eval_node(ast)  # Evaluate the whole tree to populate .value attributes
-        logger.debug("AST node values pre-calculation complete.")
-    except Exception as e:
-        logger.error(f"Error during AST pre-evaluation: {e}")
-        raise RuntimeError("Failed to pre-evaluate AST values.") from e
-
-    all_atoms = get_atoms_in_subtree(ast)
-
-    operator_nodes = [n for n in postorder(ast) if not isinstance(n, Atom)]
+    # --- Initial Setup ---
+    all_operator_nodes = [node for node in postorder(ast) if not isinstance(node, Atom)]
+    all_atoms = set()
+    for node in postorder(ast):
+        if isinstance(node, Atom):
+            all_atoms.add(node.n)
+    logger.debug(f"DEBUG: All atoms in AST: {sorted(list(all_atoms))}")
+    # Add the final answer to the log for debugging
+    logger.debug(f"DEBUG: Overall ground truth (final answer): {overall_ground_truth_answer}")
+    
+    operator_nodes = []
     narrative_anchor_map = {}
-    
-    if config.USE_NARRATIVE_ANCHORS and operator_nodes:
-        use_llm = config.USE_LLM_NAMING
-        characters = world.get("characters", [])
-        
-        # Create a function for ThreadPoolExecutor to run
-        def generate_anchor_for_node(op_node):
-            if not isinstance(op_node, OpNode):
-                return (id(op_node), None)
-                
-            node_id = id(op_node)
-            narrative_anchor = None
-            
-            if use_llm:
-                # Note: We're no longer using all_anchors_so_far as that would 
-                # create a dependency between parallel executions
-                try:
-                    narrative_anchor = generate_narrative_anchor_with_llm(
-                        world_info=world,
-                        op_node=op_node,
-                        all_previous_anchors=[],  # Empty list since we're parallelizing
-                        sample_index=sample_index,
-                    )
-                except Exception as e:
-                    logger.error(f"LLM Naming failed for OpNode {op_node.op}: {e}")
-            
-            # Return the node_id and anchor (or None if failed)
-            return (node_id, narrative_anchor)
-        
-        # Submit all jobs to ThreadPoolExecutor
-        with concurrent.futures.ThreadPoolExecutor() as executor:
-            # Submit all jobs
-            future_to_node = {
-                executor.submit(generate_anchor_for_node, op_node): op_node 
-                for op_node in operator_nodes
-            }
-            
-            # Process results as they complete
-            for future in concurrent.futures.as_completed(future_to_node):
-                op_node = future_to_node[future]
-                try:
-                    node_id, narrative_anchor = future.result()
-                    
-                    # Apply fallback naming if needed
-                    if not narrative_anchor:
-                        primary_object = world["object"]
-                        op_index = operator_nodes.index(op_node)
-                        
-                        if characters:
-                            char_name = random.choice(characters).get("name", "Someone")
-                            possessive = (
-                                f"{char_name}'"
-                                if char_name.endswith("s")
-                                else f"{char_name}'s"
-                            )
-                            narrative_anchor = f"{possessive} {op_node.op} Result ({op_index+1})"
-                        else:
-                            narrative_anchor = f"the {primary_object} ({op_node.op} #{op_index+1})"
-                    
-                    # Update the map
-                    narrative_anchor_map[node_id] = narrative_anchor
-                    logger.debug(f"Mapped narrative anchor for node {op_node.op}: '{narrative_anchor}'")
-                    
-                except Exception as e:
-                    logger.error(f"Error in parallel anchor generation for {getattr(op_node, 'op', 'unknown')}: {e}")
-                    # Apply emergency fallback
-                    node_id = id(op_node)
-                    narrative_anchor_map[node_id] = f"emergency_fallback_{getattr(op_node, 'op', 'node')}_{node_id}"
-        
-        logger.info(f"Generated {len(narrative_anchor_map)} narrative anchors in parallel")
-    
+    intro_text = None
     scenes = []
     tokens_used = 0
+    
+    # --- Generate narrative anchors for op nodes ---
+    if config.USE_NARRATIVE_ANCHORS:
+        def generate_anchor_for_node(op_node):
+            """Helper to generate anchors for intermediate nodes."""
+            if not config.USE_LLM_NAMING:
+                # Use deterministic naming if not using LLM
+                return f"the_{op_node.op.lower()}_result_{id(op_node) % 1000:03d}"
+            
+            all_anchors_list = list(narrative_anchor_map.values())
+            try:
+                anchor = generate_narrative_anchor_with_llm(
+                    world, op_node, all_anchors_list, sample_index=sample_index
+                )
+                
+                if anchor:
+                    return anchor
+                else:
+                    logger.warning(
+                        f"Failed to generate LLM anchor for {op_node.op}. Using deterministic fallback."
+                    )
+                    return f"the_{op_node.op.lower()}_result_{id(op_node) % 1000:03d}"
+            except Exception as e:
+                logger.error(f"Error in narrative anchor generation: {e}")
+                return f"the_{op_node.op.lower()}_result_{id(op_node) % 1000:03d}"
+                
+        # Process nodes in postorder for anchors (bottom-up)
+        for node in postorder(ast):
+            if isinstance(node, OpNode):
+                # Use helper to generate anchor names
+                anchor = generate_anchor_for_node(node)
+                narrative_anchor_map[id(node)] = anchor
+                operator_nodes.append(node)
+                logger.debug(f"Added narrative anchor '{anchor}' for {node.op} node")
+    else:
+        # Without narrative anchors, just use basic names
+        for node in postorder(ast):
+            if isinstance(node, OpNode):
+                narrative_anchor_map[id(node)] = f"the_{node.op.lower()}_result_{id(node) % 1000:03d}"
+                operator_nodes.append(node)
+
+    # Now we have anchors for all operator nodes
+    # Note on operator_nodes ordering: Because we populated it during postorder
+    # traversal, it's already in the correct execution order (leaves first, root last).
+    logger.info(f"Generated {len(narrative_anchor_map)} narrative anchors.")
+    log_str = "Narrative anchors: " + ", ".join(
+        [f"'{anchor}' ({node.op})" for node, anchor in 
+         [(n, narrative_anchor_map.get(id(n), "MISSING")) for n in operator_nodes]]
+    )
+    logger.debug(log_str)
+
+    # --- Generate introductory scene with strict validation ---
     intro_system_prompt = (
-        f"You are a fiction writer specializing in writing opening scenes for {world.get('genre', 'Unknown')} novels. Your ONLY job is to produce an introductory scene for a story with the context I provide you. "
-        "In your response, do not include ANY text other than the introductory scene. NO greetings, analysis, checklists, reasoning, or meta-commentary. "
-        "Additionally, you must not use ANY numbers in your opening scene. NO numbers are allowed (neither digits like '1', '2' nor words like 'one', 'two', 'first', 'second')."
+        "You are a fiction writer crafting the opening scene for a story. "
+        "Your ONLY task is to write a brief, engaging introduction that establishes the setting and characters. "
+        "ABSOLUTELY FORBIDDEN: Any numerical values, calculations, or mathematical content."
     )
+    
     intro_user_prompt = (
-        f"Write a short, introductory narrative story scene for the following context (2-4 sentences) about '{world.get('setting', 'Unknown')}'. This story has these characters:\\n"
-        f"{json.dumps(world.get('characters', []))}\\n"
-        "REMEMBER: Output ONLY the narrative text for the scene. Nothing else."
+        f"Genre: {world.get('genre', 'fantasy')}\n"
+        f"Setting: {world.get('setting', 'a fictional world')}\n"
+        f"Characters: {', '.join(char.get('name', 'Unknown') for char in world.get('characters', []))}\n"
+        f"Item of interest: {world.get('object', 'artifacts')}\n\n"
+        f"Write a brief introductory scene (1-2 paragraphs) that establishes the setting and introduces the characters. "
+        f"Explain that the characters are seeking or interested in the items mentioned above. "
+        f"NO NUMERICAL VALUES ALLOWED. Do not mention any specific quantities of {world.get('object', 'artifacts')} "
+        f"or any other items. Do not add titles or headers."
     )
-
-    log_prompt(  # Log the intro prompt
-        "Intro Scene Generation Prompt",
-        f"System: {intro_system_prompt}\nUser: {intro_user_prompt}",
-        sample_index=sample_index,
-    )
-
+    
     intro_text = generate_with_retry(
         system_prompt=intro_system_prompt,
         user_prompt=intro_user_prompt,
@@ -3828,13 +3713,28 @@ def generate_single_sample(sample_index: int) -> dict | None:
 
 def main(
     config: Config,
-    num_samples: int = NUM_SAMPLES_TO_GENERATE,  # Use global constant instead
-    max_workers: int = DEFAULT_MAX_WORKERS,      # Use global constant instead
+    num_samples: int = NUM_SAMPLES_TO_GENERATE,
+    max_workers: int = DEFAULT_MAX_WORKERS,
+    # REMOVE initial_account_usage: float | None = None # We'll fetch it inside
 ):
     """Generate samples with strict validation."""
     # Test log output to ensure logger is working properly
     logger.info("START OF MAIN FUNCTION - THIS LOG SHOULD APPEAR IN verbose_listops.log")
     
+    # --- Fetch initial account usage --- ADD THIS BLOCK ---
+    initial_account_usage = None # Initialize
+    if client and OPENROUTER_API_KEY and OPENROUTER_API_KEY != "YOUR_OPENROUTER_API_KEY_HERE":
+        logger.info("Fetching initial OpenRouter account usage...")
+        initial_account_usage = rate_limiter.update_limits_from_api() # Call modified function
+        if initial_account_usage is not None:
+            logger.info(f"Initial OpenRouter account usage: ${initial_account_usage:.4f}")
+        else:
+            logger.warning("Could not fetch initial OpenRouter account usage.")
+    else:
+        logger.warning("Skipping initial OpenRouter account usage check: Client not initialized or API key missing/placeholder.")
+    # --- END ADDED BLOCK ---
+
+
     # --- Dynamic Filename Generation ---
     sanitized_model_name = MODEL.replace("/", "_").replace(":", "-")
 
@@ -4070,22 +3970,60 @@ def main(
     elif PROD_RUN and (samples_generated_successfully == 0 or not output_file or not os.path.exists(output_file)):
         logger.info("PROD_RUN was True, but no samples were successfully generated, output file is missing, or path is invalid. Skipping validation and cleaning.")
 
+    # --- Final Cost Calculation and Logging --- ADD THIS SECTION ---
+    gen_prompt_tokens, gen_completion_tokens, gen_api_calls = generation_token_tracker.get_summary()
+    estimated_generation_cost = generation_token_tracker.calculate_cost(
+        DEFAULT_COST_PER_MILLION_PROMPT_TOKENS,
+        DEFAULT_COST_PER_MILLION_COMPLETION_TOKENS
+    )
+    
+    logger.info(f"--- Generation Token Usage & Estimated Cost ---")
+    logger.info(f"Total API calls (generation): {gen_api_calls}")
+    logger.info(f"Total Prompt Tokens (generation): {gen_prompt_tokens}")
+    logger.info(f"Total Completion Tokens (generation): {gen_completion_tokens}")
+    logger.info(f"Estimated Cost (generation only): ${estimated_generation_cost:.4f} (using placeholder rates)")
+    logger.info(f"Note: Costs are estimates. Actual costs depend on specific models and OpenRouter pricing.")
+
+    # --- Calculate and Log Total Run Cost via Usage Difference ---
+    if client and OPENROUTER_API_KEY and OPENROUTER_API_KEY != "YOUR_OPENROUTER_API_KEY_HERE":
+        logger.info("Fetching final OpenRouter account usage...")
+        final_account_usage = rate_limiter.update_limits_from_api()
+        if final_account_usage is not None:
+            logger.info(f"Final OpenRouter account usage: ${final_account_usage:.4f}")
+            if initial_account_usage is not None:
+                total_run_cost_by_difference = final_account_usage - initial_account_usage
+                logger.info(f"--- Total Run Cost (from Usage Difference) ---")
+                logger.info(f"Initial Usage: ${initial_account_usage:.4f}")
+                logger.info(f"Final Usage:   ${final_account_usage:.4f}")
+                logger.info(f"TOTAL RUN COST (Generation + Validation): ${total_run_cost_by_difference:.4f}")
+            else:
+                logger.warning("Cannot calculate total run cost by difference: Initial account usage was not fetched.")
+        else:
+            logger.warning("Could not fetch final OpenRouter account usage. Cannot calculate total run cost by difference.")
+    else:
+        logger.warning("Skipping final OpenRouter account usage check for run cost: Client not initialized or API key missing/placeholder.")
+    # --- END ADDED SECTION ---
+
     logging.shutdown()
 
 
 if __name__ == "__main__":
     # Call update_limits_from_api once after full logger setup and before starting main generation.
-    if client and OPENROUTER_API_KEY and OPENROUTER_API_KEY != "YOUR_OPENROUTER_API_KEY_HERE":
-        try:
-            logger.info("Performing initial OpenRouter limits check before starting main generation...")
-            rate_limiter.update_limits_from_api()
-        except Exception as e:
-            logger.error(f"Initial OpenRouter limits check failed: {e}")
-    else:
-        logger.warning("Skipping initial OpenRouter limits check: Client not initialized or API key missing/placeholder.")
+    # This is already handled by the logic at the start of main() now for initial_account_usage.
+    # We can remove the specific pre-main call if main() handles it robustly.
+
+    # if client and OPENROUTER_API_KEY and OPENROUTER_API_KEY != "YOUR_OPENROUTER_API_KEY_HERE":
+    #     try:
+    #         logger.info("Performing initial OpenRouter limits check before starting main generation...")
+    #         rate_limiter.update_limits_from_api() # This will now also attempt to get usage for logging by main
+    #     except Exception as e:
+    #         logger.error(f"Initial OpenRouter limits check failed: {e}")
+    # else:
+    #     logger.warning("Skipping initial OpenRouter limits check: Client not initialized or API key missing/placeholder.")
 
     main(
         config,
         num_samples=NUM_SAMPLES_TO_GENERATE,
         max_workers=DEFAULT_MAX_WORKERS,
+        # initial_account_usage will be fetched inside main
     )

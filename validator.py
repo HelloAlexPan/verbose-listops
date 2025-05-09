@@ -48,9 +48,9 @@ if not OPENROUTER_API_KEY or OPENROUTER_API_KEY == "YOUR_OPENROUTER_API_KEY_HERE
     print("⚠️ ERROR: API key missing or invalid.")
 else:
     try:
-        print(f"Initializing client for model: {MODEL_FOR_VALIDATION}...")
+        logger.debug(f"Initializing client for model: {MODEL_FOR_VALIDATION}...")
         client = OpenAI(api_key=OPENROUTER_API_KEY, base_url="https://openrouter.ai/api/v1")
-        print(f"Client initialized ✓")
+        logger.info(f"Client initialized for {MODEL_FOR_VALIDATION} ✓")
     except Exception as e:
         logger.error(f"Failed to initialize client: {e}")
         print(f"⚠️ ERROR initializing client: {e}")
@@ -75,7 +75,7 @@ class RateLimiter:
         self.last_limits_check_time = 0.0 # Ensure float
         self.limits_check_interval = VALIDATION_LIMITS_CHECK_INTERVAL # Use constant
 
-        logger.info(f"Rate limiter initialized for validator: {self.max_requests_per_second} req/s, "
+        logger.debug(f"Rate limiter initialized for validator: {self.max_requests_per_second} req/s, "
                     f"{self.min_interval}s min interval, bucket capacity {self.bucket_capacity}, jitter {self.jitter}")
 
     def wait_if_needed(self):
@@ -110,7 +110,7 @@ class RateLimiter:
             return
 
         try:
-            logger.info("[ValidatorRateLimiter] Checking OpenRouter rate limits and remaining credits...")
+            logger.debug("[ValidatorRateLimiter] Checking OpenRouter rate limits and remaining credits...")
             response = requests.get(
                 url="https://openrouter.ai/api/v1/auth/key",
                 headers={"Authorization": f"Bearer {OPENROUTER_API_KEY}"},
@@ -155,7 +155,7 @@ class RateLimiter:
                         if old_self_rate != self.max_requests_per_second:
                             log_message_parts.append(f"LOW CREDITS - RPS reduced to {self.max_requests_per_second:.1f}!")
                 
-                logger.info(", ".join(log_message_parts))
+                logger.debug(", ".join(log_message_parts))
             else:
                 logger.warning(f"[ValidatorRateLimiter] Failed to get OpenRouter account status: HTTP {response.status_code}")
         except Exception as e:
@@ -574,7 +574,7 @@ def validate_sample(sample: dict) -> dict:
             "ground_truth_answer": sample.get("ground_truth_answer")
         }
 
-    logger.info(f"[{sample_id}] Validating sample...")
+    logger.debug(f"[{sample_id}] Validating sample...")
     llm_response_text = get_llm_response(sample, sample_id)
     
     if llm_response_text is None:
@@ -626,7 +626,7 @@ def validate_sample(sample: dict) -> dict:
     else:
         reason = "Sample validated successfully."
     
-    logger.info(f"[{sample_id}] Result: {status.upper()}. LLM Overall status: {overall_status}. Matches ground truth: {matches_ground_truth}.")
+    logger.debug(f"[{sample_id}] Result: {status.upper()}. LLM Overall status: {overall_status}. Matches ground truth: {matches_ground_truth}.")
 
     # Add more detailed logging based on narrative consistency
     if parsed_validation:
@@ -707,8 +707,7 @@ def run_validation_process(dataset_file_path: str, output_results_path: str | No
 
     results = []
     total_samples = len(dataset)
-    print(f"\n🔍 Validating {total_samples} samples with {MAX_WORKERS} workers using {MODEL_FOR_VALIDATION}")
-    print("=" * 60)
+    print(f"🔍 Validating {total_samples} samples with {MAX_WORKERS} workers using {MODEL_FOR_VALIDATION.split('/')[-1]}")
     start_time = time.time()
     processed_count = 0
     
@@ -872,7 +871,7 @@ if __name__ == "__main__":
         # Perform initial limits check if client is available
         if rate_limiter and OPENROUTER_API_KEY and OPENROUTER_API_KEY != "YOUR_OPENROUTER_API_KEY_HERE":
             try:
-                logger.info("[Validator] Performing initial OpenRouter limits check before starting validation...")
+                logger.debug("[Validator] Performing initial OpenRouter limits check before starting validation...")
                 rate_limiter.update_limits_from_api()
             except Exception as e_limits: # Renamed to avoid conflict
                 logger.error(f"[Validator] Initial OpenRouter limits check failed: {e_limits}")

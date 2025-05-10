@@ -34,6 +34,7 @@ load_dotenv()
 NUM_SAMPLES_TO_GENERATE = 5  # How many samples to generate in one run
 DEFAULT_MAX_WORKERS = 50   # Number of parallel threads for batch generation
 MODEL = "google/gemini-2.5-pro-preview"  # OpenRouter model for main generation
+STATIC_CHECKER_MODEL = "qwen/qwq-32b" # Different model for static beat validation
 DATASETS_DIR = "datasets"    # Directory for saving generated datasets
 PROD_RUN: bool = True       # If True, run validator and clean dataset post-generation
 
@@ -59,10 +60,10 @@ class Config:
     # --- 2. Narrative Context Generation & Style ---
     USE_NARRATIVE_ANCHORS: bool = True              # Conceptual placeholders for intermediate results
     USE_LLM_NAMING: bool = True                     # Use LLM for creative anchor names
-    MIN_WORLD_CHARS: int = 3                        # Min characters in the fictional world
-    MAX_WORLD_CHARS: int = 6                        # Max characters in the fictional world
-    MIN_WORLD_CONCEPTS: int = 3                     # Parameter for num_concepts in generate_world; not directly used in prompt
-    MAX_WORLD_CONCEPTS: int = 5                     # Parameter for num_concepts in generate_world; not directly used in prompt
+    MIN_WORLD_CHARS: int = 3                        # Min chars for randomized world gen
+    MAX_WORLD_CHARS: int = 6                        # Max chars for randomized world gen
+    MIN_WORLD_CONCEPTS: int = 3                     # Min concepts for randomized world gen
+    MAX_WORLD_CONCEPTS: int = 5                    # Max concepts for randomized world gen
     BEAT_CONTEXT: int = 1000                        # Max previous scene chars for beat gen prompt
     PADDING_CONTEXT: int = 1500                     # Tokens of context for padding
     MAX_PAD_PARAGRAPHS: int = 20                    # Max padding segments per-beat
@@ -73,11 +74,16 @@ class Config:
     CREATIVE_NARRATIVE_TEMP: float = 0.5            # Temp. for creative parts (intro, padding)
     ANCHOR_GEN_TEMP: float = 0.75                   # Temp. for narrative anchor generation
 
-    # === Iterative LLM Beat Validation & Revision ===
-    LLM_VALIDATOR_MODEL: str = "google/gemini-2.5-pro-preview"     # Model for the iterative LLM beat validator
+    # === Static Beat Validation (New) ===
+    USE_LLM_STATIC_BEAT_VALIDATION: bool = True     # Whether to use an LLM to validate each beat's narrative logic
+    STATIC_BEAT_VALIDATION_MAX_RETRIES: int = 5     # Max retries for a beat if LLM validation fails
+    STATIC_BEAT_VALIDATION_TEMP: float = 0.05       # Temperature for the beat validator LLM
+
+    # === Iterative LLM Beat Validation & Revision (New from User Plan) ===
+    LLM_VALIDATOR_MODEL: str = "qwen/qwq-32b"       # Model for the iterative LLM beat validator
     LLM_VALIDATOR_TEMP: float = 0.05                # Temperature for the iterative LLM beat validator
     BEAT_REVISION_TEMP: float = 0.1                 # Temperature for generator LLM during beat revisions
-    MAX_LLM_VALIDATION_ITERATIONS: int = 8          # Max attempts for the inner LLM validation loop
+    MAX_LLM_VALIDATION_ITERATIONS: int = 3          # Max attempts for the inner LLM validation loop
     MODEL_MAX_CONTEXT_TOKENS: int = 750000          # Max context for generator model (example, adjust for actual model, e.g. Gemini 2.5 Pro ~1M-2M, leave buffer)
 
     # === Other: Probably don't touch the below unless you know what you're doing ===
@@ -429,41 +435,6 @@ def log_prompt(
             logger.error(f"Error writing to LLM turn log file: {e}")
         else:
             print(f"Error writing to LLM turn log file: {e}")
-
-
-# --- Few-shot example formatter utility ---
-def format_strict_few_shot_examples_for_prompt(examples_list: list, max_examples: int = None) -> str:
-    """
-    Formats the FEW_SHOT_EXAMPLES_STRICT list into a string for inclusion in the generator prompt.
-    
-    Args:
-        examples_list: List of tuple examples in the format (rules_summary, good_example, bad_example, bad_reasoning)
-        max_examples: Maximum number of examples to include, defaults to all if None
-        
-    Returns:
-        Formatted string containing few-shot examples for prompt inclusion
-    """
-    if not examples_list:
-        return ""
-    
-    # Limit the number of examples if max_examples is specified
-    if max_examples is not None and max_examples > 0:
-        examples_to_use = examples_list[:max_examples]
-    else:
-        examples_to_use = examples_list
-        
-    formatted_examples = ["\n\n--- Examples of Adhering to Strict Number Rules ---"]
-    
-    for i, (rules_summary, good_example, bad_example, bad_reasoning) in enumerate(examples_to_use):
-        example_str = f"\nExample {i+1}:\n"
-        example_str += f"Number Rules:\n{rules_summary}\n\n"
-        example_str += f"GOOD Narrative (Follows Rules):\n\"{good_example}\"\n\n"
-        example_str += f"BAD Narrative (Violates Rules):\n\"{bad_example}\"\n"
-        example_str += f"Why BAD: {bad_reasoning}\n"
-        formatted_examples.append(example_str)
-    
-    formatted_examples.append("\nApply similar strictness to the current task's number rules.")
-    return "\n".join(formatted_examples)
 
 
 FINAL_QUESTION_TEMPLATE = Template(
@@ -1874,7 +1845,7 @@ if p_inflect:
             1001,
             2025,
         ]:  # Added 99
-            key_no_and = num_to_words(num_val_to_check) 
+            key_no_and = num_to_words(num_val_to_check)
             if key_no_and.lower() in EXPANDED_NUMBER_WORDS_DICT:
                 sample_keys_diverse.append(key_no_and.lower())
             # Check for hyphenated version of no_and
@@ -1885,7 +1856,7 @@ if p_inflect:
                     and hyphenated_key_no_and not in sample_keys_diverse
                 ):
                     sample_keys_diverse.append(hyphenated_key_no_and)
-            
+
             if num_val_to_check > 100 and p_inflect:
                 word_with_and = p_inflect.number_to_words(
                     num_val_to_check, andword="and"
@@ -1902,8 +1873,8 @@ if p_inflect:
                         hyphenated_key_with_and in EXPANDED_NUMBER_WORDS_DICT
                         and hyphenated_key_with_and not in sample_keys_diverse
                     ):
-                         sample_keys_diverse.append(hyphenated_key_with_and)
-        
+                        sample_keys_diverse.append(hyphenated_key_with_and)
+
         sample_items = {
             k: EXPANDED_NUMBER_WORDS_DICT.get(k) for k in sample_keys_diverse[:20]
         }  # Log more samples
@@ -1942,7 +1913,7 @@ def extract_numbers_from_text(text: str) -> Set[int]:
 
     text_chars_list = list(search_text)
     digit_spans_to_replace = []
-    for match in DIGIT_REGEX.finditer(search_text): 
+    for match in DIGIT_REGEX.finditer(search_text):
         digit_str = match.group(0)
         try:
             value = int(digit_str)
@@ -1953,11 +1924,11 @@ def extract_numbers_from_text(text: str) -> Set[int]:
                 f"Could not convert digit string '{digit_str}' to int during extraction."
             )
             continue
-            
+
     for start, end in digit_spans_to_replace:
         for i in range(start, end):
             text_chars_list[i] = "|"  # Replace with a non-space, non-word character
-            
+
     text_for_word_search = "".join(text_chars_list)
     text_for_word_search = text_for_word_search.replace(
         "|", " "
@@ -1991,7 +1962,7 @@ def extract_numbers_from_text(text: str) -> Set[int]:
         number_word_matched = match.group(
             2
         ).lower()  # The matched number phrase from the regex pattern
-        
+
         value = EXPANDED_NUMBER_WORDS_DICT.get(number_word_matched)
 
         if value is not None:
@@ -2636,16 +2607,16 @@ You will be given the Genre, Setting, Item (Primary Object), and Concept/Operati
         # --- Aggressively remove echoed input preamble ---
         # Construct the expected preamble pattern based on current genre, item, concept
         preamble_pattern_str = (
-            rf"Genre: {re.escape(genre)}\s*\n" 
-            rf"Setting: {re.escape(setting)}\s*\n" 
-            rf"Item: {re.escape(primary_object)}\s*\n" 
-            rf"Concept/Operation Hint: {re.escape(concept_keywords_for_prompt)}\s*\n" 
+            rf"Genre: {re.escape(genre)}\s*\n"
+            rf"Setting: {re.escape(setting)}\s*\n"
+            rf"Item: {re.escape(primary_object)}\s*\n"
+            rf"Concept/Operation Hint: {re.escape(concept_keywords_for_prompt)}\s*\n"
         )
         # Remove preamble if found at the beginning of the candidate string
         candidate = re.sub(
-            f"^{preamble_pattern_str}", 
-            "", 
-            candidate, 
+            f"^{preamble_pattern_str}",
+            "",
+            candidate,
             flags=re.IGNORECASE | re.MULTILINE,  # Added re.MULTILINE
         ).strip()
 
@@ -2754,19 +2725,8 @@ def perform_llm_static_content_validation(
     config_obj: Config = config,
     logger_obj: logging.Logger = logger,
 ) -> tuple[bool, str]:
-    """
-    DEPRECATED: This function has been replaced by the iterative LLM validation loop in
-    _generate_and_llm_validate_beat combined with static number validation.
-    
-    It is kept here for reference only and is no longer called in the main flow.
-    """
     # DEPRECATED: This function is no longer called in the main flow as it has been replaced by the
     # iterative validation approach in _generate_and_llm_validate_beat. Keep for reference or potential future use.
-    logger_obj.warning(
-        f"[Sample {sample_index+1 if sample_index is not None else 'N/A'}, Beat Op: {current_op_node.op}] "
-        f"DEPRECATED function perform_llm_static_content_validation was called. "
-        f"This function has been replaced by the iterative validation loop in _generate_and_llm_validate_beat."
-    )
     logger_obj.info(
         f"[Sample {sample_index+1 if sample_index is not None else 'N/A'}, Beat Op: {current_op_node.op}] Performing LLM static content validation on beat text."
     )
@@ -2806,7 +2766,7 @@ def perform_llm_static_content_validation(
     user_prompt = "".join(user_prompt_parts)
 
     log_prompt(
-        header=f"LLM Static Beat Validation Prompt (Op: {current_op_node.op}) for model {config_obj.LLM_VALIDATOR_MODEL}",
+        header=f"LLM Static Beat Validation Prompt (Op: {current_op_node.op}) for model {STATIC_CHECKER_MODEL}",
         prompt=f"System: {system_prompt}\\nUser:\\n{user_prompt}",
         sample_index=sample_index,
     )
@@ -2816,13 +2776,13 @@ def perform_llm_static_content_validation(
         # Inner try for the API call and response processing
         try:
             resp = _chat_completion_call(
-                model=config_obj.LLM_VALIDATOR_MODEL,
+                model=STATIC_CHECKER_MODEL,
                 messages=[
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": user_prompt},
                 ],
                 max_completion_tokens=350,
-                temperature=config_obj.LLM_VALIDATOR_TEMP,
+                temperature=config_obj.STATIC_BEAT_VALIDATION_TEMP,
                 reasoning={"exclude": True},
             )
 
@@ -2836,7 +2796,7 @@ def perform_llm_static_content_validation(
                 raw_llm_output = resp.choices[0].message.content or ""
 
             log_prompt(
-                header=f"LLM Static Beat Validation Raw Response (Op: {current_op_node.op}) from model {config_obj.LLM_VALIDATOR_MODEL}",
+                header=f"LLM Static Beat Validation Raw Response (Op: {current_op_node.op}) from model {STATIC_CHECKER_MODEL}",
                 prompt=f"Raw Output:\n{raw_llm_output}",
                 sample_index=sample_index,
             )
@@ -2894,7 +2854,7 @@ def perform_llm_static_content_validation(
 
         except Exception as e:  # Catch errors from _chat_completion_call itself
             logger_obj.error(
-                f"[Sample {sample_index+1 if sample_index is not None else 'N/A'}, Beat Op: {current_op_node.op}] API call to static beat validator ({config_obj.LLM_VALIDATOR_MODEL}) failed: {e}"
+                f"[Sample {sample_index+1 if sample_index is not None else 'N/A'}, Beat Op: {current_op_node.op}] API call to static beat validator ({STATIC_CHECKER_MODEL}) failed: {e}"
             )
             return False, f"API call to static beat validator failed: {e}"
     except Exception as e:  # Catch any other unexpected error in this function
@@ -3112,110 +3072,41 @@ def _generate_and_llm_validate_beat(
 
 Beat Task:
 - Operation: {current_op_node.op} ({OP_LABELS.get(current_op_node.op, current_op_node.op)})
-- Conceptual Inputs (from previous steps, must be used conceptually, NOT by their prior numerical value): {conceptual_inputs_str}
-- New Atomic Inputs for this beat (must be used numerically as words): {atomic_inputs_words_str}
-- Intended Narrative Action (Generator was told to follow this, including NOT stating intermediate results numerically): {action_description}
-- Expected Numerical Result of THIS beat (FOR VALIDATOR REFERENCE ONLY - SHOULD NOT BE STATED IN NARRATIVE FOR INTERMEDIATE OR ROOT NODES): {expected_beat_result_words if expected_beat_result_words else "N/A (Root node, or result must be implicit)"}
+- Conceptual Inputs (from previous steps): {conceptual_inputs_str}
+- New Atomic Inputs for this beat: {atomic_inputs_words_str}
+- Intended Narrative Action: {action_description}
+- Expected Numerical Result (for this beat, if not root): {expected_beat_result_words}
 
 Generated Beat Text to Evaluate:
 ---
 {generated_text_cleaned}
 ---
 
-Validation Criteria (ALL must be met for 'is_valid: true'):
-1.  **Operational Fidelity (CRITICAL)**:
-    *   Does the narrated action *unambiguously* and *accurately* correspond to the specified 'Operation' (e.g., if task is MAX, did the story describe characters selecting/identifying the largest among options, or did it incorrectly describe summing, averaging, etc.)?
-    *   Is the core logic of the operation correctly portrayed?
-
-2.  **Input Integrity (CRITICAL)**:
-    *   **Conceptual Inputs**: Does the narrative correctly use ALL specified 'Conceptual Inputs' by referring to their established conceptual meaning/anchor from prior steps? Were any conceptual inputs ignored or misused? Crucially, were their *prior numerical values* (if known to you as validator) re-stated instead of using the conceptual anchor? This re-statement is a failure.
-    *   **Atomic Inputs**: Does the narrative use ALL specified 'New Atomic Inputs' by mentioning their numerical values (as words)? Were any atomic inputs missed?
-    *   **Invented Inputs**: Were any unmentioned inputs (conceptual or numerical) invented by the narrative and used in the operation? This is a failure.
-    *   **Attempt to list the inputs (conceptual anchors and atomic numbers as words) you believe the narrative *actually used* for its described operation.**
-
-3.  **Intermediate Result Secrecy (CRITICAL for non-root nodes)**:
-    *   If this is NOT the final (root) operation, the numerical result of THIS specific operation (expected value: '{expected_beat_result_words if expected_beat_result_words and not (current_op_node.op == "ROOT_OP_PLACEHOLDER" or expected_beat_result_words.startswith("N/A")) else "N/A"}') should NOT have been explicitly stated in the narrative. Was it stated numerically (as words)? If so, this is a failure.
-    *   The narrative should only imply the result and establish its conceptual anchor for future reference.
-    *   (For the final root operation, its result must also NOT be stated numerically.)
-
-4.  **Narrative Coherence & Clarity**:
-    *   Is the story segment logical and easy to understand in the context of the task, operation, and inputs?
-    *   Does it clearly lead to the conceptual outcome that would be represented by this beat's narrative anchor?
-
-5.  **Extraneous Calculations/Information**:
-    *   Does the beat avoid unrelated calculations or numerical details that are not part of the direct atomic inputs for this step or the allowed intermediate sum for AVG/SM operations?
-    *   Does the narrative avoid making up its own arithmetic that isn't directly tied to the current operation and its specified inputs?
+Validation Criteria:
+1. Task Adherence: Does the narrative accurately reflect the specified 'Operation' and 'Intended Narrative Action'? (e.g., if SUM, does it describe combining things?)
+2. Input Fidelity: Does the narrative correctly incorporate ALL 'Conceptual Inputs' and 'New Atomic Inputs'? Are any missing or ignored? Are any unmentioned inputs invented?
+3. Narrative Coherence: Is the story segment logical and easy to understand in the context of the task?
+4. Result Alignment (for non-root nodes if explicit mention is expected, or implicit alignment otherwise): Does the narrative lead to a situation consistent with the 'Expected Numerical Result'? (For root nodes, the result should NOT be stated).
 
 Output Instructions:
 Respond ONLY with a single JSON object.
-If the beat is valid according to ALL CRITICAL criteria above:
+If the beat is valid according to the criteria:
 {{
   "is_valid": true,
-  "explanation_for_audit": "Concise reason why it's valid, confirming adherence to Operational Fidelity, Input Integrity, and Intermediate Result Secrecy."
+  "explanation_for_audit": "Concise reason why it's valid."
 }}
-If the beat is NOT valid due to failure in ANY of the criteria (especially critical ones):
+If the beat is NOT valid:
 {{
   "is_valid": false,
-  "explanation_for_generator": "Detailed explanation of ALL flaws, prioritizing: 1. Operational Fidelity (e.g., 'Narrative described SUM instead of MAX'). 2. Input Integrity (e.g., 'Missed conceptual input X', 'Used wrong atomic number Y', 'Re-stated prior result Z numerically instead of using its anchor'). 3. Intermediate Result Secrecy (e.g., 'Incorrectly stated intermediate result W as a number'). Be specific.",
-  "overall_revision_summary_for_generator_prompt": "Generate a concise (1-3 sentences) actionable instruction for the narrative generator. This instruction MUST: 1) Clearly state the primary reason(s) the beat failed (e.g., 'Wrong operation portrayed (MAX vs SUM),' 'Missed required input X / Used wrong input Y,' 'Stated intermediate result Z numerically instead of implying it'). 2) Instruct the generator to specifically address these primary reasons in its revision, ensuring the correct operation is narrated using only the specified inputs, and that intermediate results are not stated numerically. Example: 'Revise: portray MAX operation (select largest), not SUM. Use conceptual input 'Alpha Core' and atomic 'ten'. DO NOT state the numerical result of this MAX. Setting description was good.'",
+  "explanation_for_generator": "Detailed explanation of the primary flaws for the generator LLM.",
+  "overall_revision_summary_for_generator_prompt": "A concise (1-2 sentence) instruction for the generator on what to fix. E.g., 'Revise to ensure the narrative describes summing all inputs, including X and Y, instead of selecting the maximum.'",
   "suggested_revisions": [
-    // Optional: {{ "type": "correct_operation_portrayal", "expected_op": "MAX", "narrated_op_impression": "SUM", "reason": "Narrative described combining items instead of selecting the largest." }},
-    // {{ "type": "ensure_input_usage", "input_type": "conceptual_anchor", "input_name": "The Alpha Confluence", "action_needed": "Must be mentioned and used conceptually as an input to the current operation." }},
-    // {{ "type": "ensure_input_usage", "input_type": "atomic_number", "value_as_word": "seventy-seven", "action_needed": "Must be mentioned as a direct numerical input to the current operation." }},
-    // {{ "type": "remove_intermediate_result_statement", "stated_value_as_word": "fifty-five", "reason": "The numerical result of this intermediate step should not be explicitly stated. Imply it and establish its conceptual anchor." }},
-    // {{ "type": "fix_input_misuse", "problem_description": "Narrative re-stated the numerical value of prior result 'Omega Point' instead of using its conceptual anchor." }}
+    // Optional: array of specific suggestions if you can make them very concrete
+    // {{ "type": "change_focus", "from": "problematic phrase", "to": "suggested focus/phrase", "reason": "..." }},
+    // {{ "type": "ensure_mention", "item": "missing item", "reason": "..." }}
   ]
-}}"""
-        
-        # --- Token Count Check for Validator Prompt ---
-        validator_prompt_tokens = 0
-        if encoder_obj: # Check if encoder_obj is available
-            try:
-                validator_prompt_tokens = len(encoder_obj.encode(validator_system_prompt + validator_user_prompt))
-                # Add extra buffer for potentially long generated_text_cleaned
-                generated_text_tokens = len(encoder_obj.encode(generated_text_cleaned))
-                validator_prompt_tokens += generated_text_tokens
-                
-                logger_obj.debug(
-                    f"[Sample {sample_index+1}, Beat Op: {current_op_node.op}] Validator prompt tokens: {validator_prompt_tokens} "
-                    f"(includes {generated_text_tokens} tokens from generated beat text)"
-                )
-                
-                # Use a percentage of MODEL_MAX_CONTEXT_TOKENS for the validator (e.g., 80%)
-                VALIDATOR_MAX_CONTEXT_LIMIT = int(context_config.MODEL_MAX_CONTEXT_TOKENS * 0.8)
-                
-                # Check if validator prompt would exceed limit
-                if validator_prompt_tokens > VALIDATOR_MAX_CONTEXT_LIMIT:
-                    logger_obj.warning(
-                        f"[Sample {sample_index+1}, Beat Op: {current_op_node.op}] Validator prompt too large: {validator_prompt_tokens} tokens "
-                        f"exceeds {VALIDATOR_MAX_CONTEXT_LIMIT} tokens (80% of max context). Truncating generated text."
-                    )
-                    
-                    # If too long, truncate the generated text to fit within limits
-                    # Calculate max tokens for generated text
-                    base_prompt_tokens = len(encoder_obj.encode(validator_system_prompt + validator_user_prompt.replace(generated_text_cleaned, "")))
-                    max_generated_text_tokens = VALIDATOR_MAX_CONTEXT_LIMIT - base_prompt_tokens - 500  # 500 token buffer
-                    
-                    if max_generated_text_tokens > 500:  # Ensure we keep at least something meaningful
-                        # Truncate the generated text
-                        truncated_text = generated_text_cleaned
-                        while len(encoder_obj.encode(truncated_text)) > max_generated_text_tokens and len(truncated_text) > 100:
-                            # Cut off ~20% from the end each time
-                            truncate_point = int(len(truncated_text) * 0.8)
-                            truncated_text = truncated_text[:truncate_point] + "\n[... text truncated for validation ...]"
-                        
-                        # Update the prompt with truncated text
-                        validator_user_prompt = validator_user_prompt.replace(generated_text_cleaned, truncated_text)
-                        logger_obj.info(
-                            f"[Sample {sample_index+1}, Beat Op: {current_op_node.op}] Truncated generated text for validator "
-                            f"from {generated_text_tokens} to ~{len(encoder_obj.encode(truncated_text))} tokens"
-                        )
-            except Exception as e_encode:
-                logger_obj.error(
-                    f"[Sample {sample_index+1}, Beat Op: {current_op_node.op}] Error encoding validator prompt for token count: {e_encode}. "
-                    f"Proceeding without token check."
-                )
-        # --- End Token Count Check ---
+}}
+"""  # Note: Double curly braces for JSON examples in f-string
         
         try:
             log_prompt(
@@ -3494,14 +3385,23 @@ def _generate_narrative_recursive(  # Line ~1315
     # It starts with the direct atomic operands for the current beat.
     numbers_to_mention_in_prompt = set(required_atoms_for_beat)
 
-    # Log the decision for clarity
+    # Only add correct_result to "MUST INCLUDE" if:
+    # 1. It's NOT the root node (we never want to mention the final result)
+    # 2. AND for intermediate nodes, only if ALLOW_IMPLICIT_INTERMEDIATE_RESULTS is False (requiring explicit mention)
     if not is_root and correct_result is not None:
+        if not context.config.ALLOW_IMPLICIT_INTERMEDIATE_RESULTS:
+            # Only add the result if we're requiring explicit mention of intermediate results
+            numbers_to_mention_in_prompt.add(correct_result)
+            logger.debug(
+                f"Added correct_result ({correct_result}) to numbers_to_mention_in_prompt because ALLOW_IMPLICIT_INTERMEDIATE_RESULTS=False"
+            )
+        else:
+            logger.debug(
+                f"Intermediate node beat: correct_result ({correct_result}) NOT added to numbers_to_mention_in_prompt because ALLOW_IMPLICIT_INTERMEDIATE_RESULTS=True"
+            )
+    elif is_root and correct_result is not None:
         logger.debug(
-            f"Intermediate node beat ({node.op}, anchor: {narrative_anchor}): correct_result ({correct_result}) will NOT be added to 'numbers_to_mention_in_prompt' for the LLM. It must be implied and not stated numerically."
-        )
-    elif is_root and correct_result is not None: # Should be the overall_ground_truth_answer
-         logger.debug(
-            f"Root node beat ({node.op}, anchor: {narrative_anchor}): correct_result ({correct_result}) will NOT be added to 'numbers_to_mention_in_prompt' for the LLM. It must be implied and not stated numerically."
+            f"Root node beat: correct_result ({correct_result}) will NOT be added to numbers_to_mention_in_prompt for the LLM."
         )
 
     # Now, create the sorted list of strings for the prompt.
@@ -3717,85 +3617,128 @@ def _generate_narrative_recursive(  # Line ~1315
                 f"DO NOT state the numerical value of this result in this scene."
             )
     else:  # NOT is_root (existing logic for intermediate nodes)
-        # --- REPLACEMENT LOGIC for non-root action_description ---
-        # This narrative_anchor is for the CURRENT node being processed.
-        current_op_anchor_name = narrative_anchor_map.get(id(node), f"the_conceptual_outcome_of_the_{node.op.lower()}_process")
-        # correct_result_words is still needed for the DO NOT state part of the prompt.
         correct_result_words = num_to_words(correct_result)
 
-        if node.op == "SUM":
-            action_description = (
-                f"Narrate an action (e.g., gathering, merging, combining) that accurately reflects performing a SUM operation on {inputs_str}. "
-                f"The narrative MUST clearly imply this summation occurred. The outcome of this action will be conceptually known as '{current_op_anchor_name}'. "
-                f"**CRITICAL: DO NOT explicitly state the numerical result of this sum (which is '{correct_result_words}') in this scene.** Focus on the action of summation and establishing '{current_op_anchor_name}' as its conceptual result."
-            )
-        elif node.op == "AVG":
-            direct_atom_sum_words = (
-                num_to_words(direct_atom_sum) if direct_atom_sum is not None and direct_atom_children else "any relevant intermediate sum of new items"
-            )
-            action_description = (
-                f"Narrate an event (e.g., balancing, using an averaging mechanism) that accurately reflects performing an AVG (integer average, floored) operation on {inputs_str}. "
-                f"The narrative MUST clearly imply this averaging. The outcome of this action will be conceptually known as '{current_op_anchor_name}'. "
-                f"**CRITICAL: DO NOT explicitly state the numerical result of this average (which is '{correct_result_words}') in this scene.** "
-                f"If new atomic inputs ({formatted_direct_values_str}) are part of this average, you MAY mention their intermediate sum ({direct_atom_sum_words}) if it aids the narrative of *how* the average is being determined, but the final average value for this step must not be stated. "
-                f"Focus on the action of averaging and establishing '{current_op_anchor_name}' as its conceptual result."
-            )
-        elif node.op == "SM":
-            sm_intermediate_sum_words = "an intermediate total"
-            try:
-                child_values_for_sm = [eval_node(c) for c in node.children]
-                sm_intermediate_sum_val = sum(child_values_for_sm)
-                sm_intermediate_sum_words = num_to_words(sm_intermediate_sum_val)
-            except Exception as e_sm_sum_local:
-                logger.warning(f"SM Beat (non-root): Could not calculate intermediate sum for prompt explanation: {e_sm_sum_local}")
-            action_description = (
-                f"Narrate an action that accurately reflects performing a SUM MODULO 10 operation on {inputs_str}. "
-                f"This involves the characters combining these inputs (conceptually reaching a temporary total around {sm_intermediate_sum_words}), "
-                f"and then an event occurs that makes them keep only a quantity equal to the final digit of that total. "
-                f"The narrative MUST clearly imply this sum-modulo-10 operation. The outcome of this action will be conceptually known as '{current_op_anchor_name}'. "
-                f"**CRITICAL: DO NOT explicitly state the numerical result of this operation (which is '{correct_result_words}') in this scene.** Focus on the action and establishing '{current_op_anchor_name}' as its conceptual result."
-            )
-        elif node.op == "MAX":
-            action_description = (
-                f"Narrate an action that accurately reflects performing a MAX operation by comparing {inputs_str} to find the largest value. The characters MUST select/identify the item/quantity with the largest value. "
-                f"The narrative MUST clearly imply this selection of the maximum occurred. The outcome of this action (the selected largest value) will be conceptually known as '{current_op_anchor_name}'. "
-                f"**CRITICAL: DO NOT explicitly state the numerical value of this selection (which is '{correct_result_words}') in this scene.** Focus on the comparison, the act of selecting the largest, and establishing '{current_op_anchor_name}' as its conceptual result."
-            )
-        elif node.op == "MIN":
-            action_description = (
-                f"Narrate an action that accurately reflects performing a MIN operation by comparing {inputs_str} to find the smallest value. The characters MUST select/identify the item/quantity with the smallest value. "
-                f"The narrative MUST clearly imply this selection of the minimum occurred. The outcome of this action (the selected smallest value) will be conceptually known as '{current_op_anchor_name}'. "
-                f"**CRITICAL: DO NOT explicitly state the numerical value of this selection (which is '{correct_result_words}') in this scene.** Focus on the comparison, the act of selecting the smallest, and establishing '{current_op_anchor_name}' as its conceptual result."
-            )
-        elif node.op == "MED":
-            action_description = (
-                f"Narrate an action that accurately reflects performing a MEDIAN operation by evaluating {inputs_str} numerically to select the median (middle) value. The characters MUST select/identify the item/quantity with the median value. "
-                f"The narrative MUST clearly imply this selection of the median occurred. The outcome of this action (the selected median value) will be conceptually known as '{current_op_anchor_name}'. "
-                f"**CRITICAL: DO NOT explicitly state the numerical value of this selection (which is '{correct_result_words}') in this scene.** Focus on the evaluation, the act of selecting the median, and establishing '{current_op_anchor_name}' as its conceptual result."
-            )
-        else: # Fallback
-            action_description = (
-                f"Narrate an action that accurately reflects applying the '{op_label}' operation to {inputs_str}. The narrative MUST clearly imply this operation occurred. "
-                f"The outcome of this action will be conceptually known as '{current_op_anchor_name}'. "
-                f"**CRITICAL: DO NOT explicitly state the numerical result of this operation (which is '{correct_result_words}') in this scene.** Focus on the action and establishing '{current_op_anchor_name}' as its conceptual result."
-            )
+        # Check if intermediate results must be explicitly mentioned
+        if context.config.ALLOW_IMPLICIT_INTERMEDIATE_RESULTS:
+            # Intermediate results are OPTIONAL - use more flexible phrasing
+            if node.op == "SUM":
+                action_description = (
+                    f"Narrate an action (e.g., gathering, merging) involving {inputs_str} to calculate their sum. "
+                    f"The narrative should clearly imply this summation occurred. You MAY explicitly state that the total quantity becomes {correct_result_words} {primary_object}, but it's not strictly required if the summation is clear from the action."
+                )
+            elif node.op == "AVG":
+                direct_atom_sum_words = (
+                    num_to_words(direct_atom_sum)
+                    if direct_atom_sum is not None
+                    else "calculated sum"
+                )
+                action_description = (
+                    f"Narrate an event (e.g., balancing, averaging mechanism) involving {inputs_str} to determine their integer average (floored). "
+                    f"The narrative should clearly imply this averaging. You MAY explicitly state the outcome is {correct_result_words} {primary_object}. "
+                    f"You MAY also mention the intermediate sum ({direct_atom_sum_words} from direct inputs ({formatted_direct_values_str})) if it aids the narrative."
+                )
+            elif node.op == "SM":
+                sm_intermediate_sum_words = "unknown"  # Default
+                try:
+                    child_values = [eval_node(c) for c in node.children]
+                    sm_intermediate_sum = sum(child_values)
+                    sm_intermediate_sum_words = num_to_words(sm_intermediate_sum)
+                except Exception as e:
+                    logger.warning(
+                        f"SM Beat: Could not calculate intermediate sum for prompt explanation: {e}"
+                    )
+                    sm_intermediate_sum_words = "unknown"
+
+                action_description = (
+                    f"Narrate an action involving {inputs_str}. The characters combine these inputs (conceptually reaching a temporary total around {sm_intermediate_sum_words}). "
+                    f"Then, describe an event that makes them keep only a quantity equal to the final digit of that total. "
+                    f"The narrative should imply this sum-modulo-10 operation. You MAY explicitly state the final quantity becomes {correct_result_words} {primary_object}, but it's not strictly required."
+                )
+            elif node.op == "MAX":
+                action_description = (
+                    f"Narrate comparing {inputs_str} to find the largest value. Justify the choice. "
+                    f"The narrative should clearly imply this selection. You MAY explicitly state the chosen quantity is {correct_result_words} {primary_object}, but it's not strictly required."
+                )
+            elif node.op == "MIN":
+                action_description = (
+                    f"Narrate comparing {inputs_str} to find the smallest value. Justify the choice. "
+                    f"The narrative should clearly imply this selection. You MAY explicitly state the chosen quantity is {correct_result_words} {primary_object}, but it's not strictly required."
+                )
+            elif node.op == "MED":
+                action_description = (
+                    f"Narrate evaluating {inputs_str} numerically to select the median (middle) value. Justify the choice. "
+                    f"The narrative should clearly imply this selection. You MAY explicitly state the chosen quantity is {correct_result_words} {primary_object}, but it's not strictly required."
+                )
+            else:
+                action_description = (
+                    f"Narrate applying '{op_label}' to {inputs_str}. The narrative should clearly imply this operation. "
+                    f"You MAY explicitly state the outcome is {correct_result_words} {primary_object}, but it's not strictly required."
+                )
+        else:
+            # Original strict behavior - intermediate results MUST be mentioned
+            if node.op == "SUM":
+                action_description = (
+                    f"Narrate an action (e.g., gathering, merging) involving {inputs_str}. "
+                    f"The outcome MUST be that the total quantity becomes exactly **{correct_result_words}** {primary_object}. Imply the sum through action."
+                )
+            elif node.op == "AVG":
+                direct_atom_sum_words = (
+                    num_to_words(direct_atom_sum)
+                    if direct_atom_sum is not None
+                    else "calculated sum"
+                )
+                action_description = (
+                    f"Narrate an event (e.g., balancing, averaging mechanism) involving {inputs_str}. "
+                    f"The outcome MUST be exactly **{correct_result_words}** {primary_object} (the floored average). "
+                    f"You MAY mention the intermediate sum ({direct_atom_sum_words} from direct inputs ({formatted_direct_values_str})) if needed for the narrative, but the final result is key."
+                )
+            elif node.op == "SM":
+                correct_result_words = num_to_words(correct_result)
+                sm_intermediate_sum = "unknown"
+                try:
+                    child_values = [eval_node(c) for c in node.children]
+                    sm_intermediate_sum = sum(child_values)
+                    sm_intermediate_sum_words = num_to_words(sm_intermediate_sum)
+                except Exception as e:
+                    logger.warning(
+                        f"SM Beat: Could not calculate intermediate sum for prompt explanation: {e}"
+                    )
+                    sm_intermediate_sum_words = "unknown"
+
+                action_description = (
+                    f"Narrate an action involving {inputs_str}. The characters combine these inputs (reaching a temporary total conceptually around {sm_intermediate_sum_words}). "
+                    f"Then, describe an event that makes them keep only the final digit of that total. "
+                    f"The narrative should explicitly state that they end up with exactly **{correct_result_words}** {primary_object}."
+                )
+            elif node.op == "MAX":
+                action_description = f"Narrate comparing {inputs_str} to find the largest value. The characters MUST select and end up with exactly **{correct_result_words}** {primary_object}."
+            elif node.op == "MIN":
+                action_description = f"Narrate comparing {inputs_str} to find the smallest value. The characters MUST select and end up with exactly **{correct_result_words}** {primary_object}."
+            elif node.op == "MED":
+                action_description = f"Narrate evaluating {inputs_str} numerically. The characters MUST select and end up with exactly **{correct_result_words}** {primary_object}, the median."
+            else:
+                action_description = f"Narrate applying '{op_label}' to {inputs_str}. The final operation result MUST be exactly **{correct_result_words}** {primary_object}."
 
     # Determine if the result presence should be enforced for the validator
-    enforce_validator_result_presence = False # Default to False
+    enforce_validator_result_presence = False  # Default to False
     if is_root:
         # For root node: NEVER enforce the presence of the final answer
-        # enforce_validator_result_presence remains False
+        enforce_validator_result_presence = False
         logger.debug(
-            f"Root node ({node.op}, anchor: {narrative_anchor}): Setting enforce_validator_result_presence=False (final answer should not be stated)."
+            f"Root node: Setting enforce_validator_result_presence=False to allow omitting the final answer"
         )
-    else: # Intermediate node
-        # For intermediate nodes, we are now instructing the generator NOT to state the result numerically.
-        # So, the static validator should NOT enforce its presence.
-        # The LLM validator will be responsible for checking if it was *incorrectly* stated.
-        # enforce_validator_result_presence remains False
-        logger.debug(
-            f"Intermediate node ({node.op}, anchor: {narrative_anchor}): Setting enforce_validator_result_presence=False (intermediate result should not be stated numerically)."
-        )
+    else:
+        # For intermediate nodes: Only enforce if ALLOW_IMPLICIT_INTERMEDIATE_RESULTS is False
+        if not context.config.ALLOW_IMPLICIT_INTERMEDIATE_RESULTS:
+            enforce_validator_result_presence = True
+            logger.debug(
+                f"Intermediate node: Setting enforce_validator_result_presence=True because ALLOW_IMPLICIT_INTERMEDIATE_RESULTS=False"
+            )
+        else:
+            logger.debug(
+                f"Intermediate node: Setting enforce_validator_result_presence=False because ALLOW_IMPLICIT_INTERMEDIATE_RESULTS=True"
+            )
 
     validate_beat_numbers = make_number_validator(
         allowed_atoms=required_atoms_for_beat,
@@ -3835,21 +3778,11 @@ Produce ONLY clean narrative text."""
     context_snippet = clean_snippet(
         context.last_scene_text, max_len=config.BEAT_CONTEXT
     )
-    
-    # Format few-shot examples if needed based on config
-    few_shot_examples_str = ""
-    if config.FEW_SHOT_EXAMPLES > 0:
-        few_shot_examples_str = format_strict_few_shot_examples_for_prompt(
-            FEW_SHOT_EXAMPLES_STRICT, 
-            max_examples=config.FEW_SHOT_EXAMPLES
-        )
-    
     initial_user_message_for_generator = (
         f"BEAT {context.beat_counter['current']}/{context.beat_counter['total']}\n\n"
         f"**Current Status:** {scene_preamble}\n\n"
         f"**Task:** {action_description}\n\n"
-        f"{ultra_strict_instruction}\n"
-        f"{few_shot_examples_str}\n\n"
+        f"{ultra_strict_instruction}\n\n"
         f"**Prior Scene Snippet:**\n{context_snippet}\n\n"
         f"**Write the next scene continuing directly from the prior scene with a focus on the TASK above.**"
     )
@@ -3897,7 +3830,7 @@ Produce ONLY clean narrative text."""
             action_description=action_description,
             expected_beat_result_words=expected_beat_result_words_for_val,
             current_max_beat_completion_tokens=current_max_beat_completion_tokens,
-                sample_index=context.sample_index,
+            sample_index=context.sample_index,
             context_config=config,
             logger_obj=logger,
             encoder_obj=encoder,  # Pass the encoder
@@ -3942,7 +3875,7 @@ Produce ONLY clean narrative text."""
     # After the outer loop:
     if beat_text_final_validated:
         beat_text = beat_text_final_validated  # This is the successfully generated and validated beat
-        # ... (rest of your existing logic: append to scenes, update tokens, etc.)
+        # ... (rest of your existing logic: append to scenes, update tokens, etc. - this starts below)
     else:
         logger.error(
             f"Operator {node.op} ({narrative_anchor}) failed after {config.MAX_BEAT_RETRIES} outer attempts (incl. LLM validation loops). Aborting narrative generation. {'(ROOT NODE)' if is_root else ''}"
@@ -4571,101 +4504,6 @@ def generate_narrative(
         f"Successfully generated narrative for sample {sample_index + 1}. Final context tokens: {context.tokens_used}, Narrative tokens: {final_token_count}"
     )
     return narrative_body.strip()
-
-
-def generate_single_sample(sample_index: int) -> dict | None:
-    """
-    Generate a single narrative sample with the given index.
-    This function is called by the parallel executor in main().
-    
-    Args:
-        sample_index: The index of the sample to generate
-        
-    Returns:
-        dict: A dictionary with the sample data or None if generation fails
-    """
-    try:
-        logger.info(f"[Sample {sample_index + 1}] Starting generation")
-        
-        # 1. Generate the AST and evaluate it
-        ast = build_random_ast(config.MAX_OPS, config.MAX_BRANCH)
-        logger.info(f"[Sample {sample_index + 1}] Built AST, evaluating...")
-        
-        try:
-            validate_ast(ast)
-            ground_truth_answer = eval_node(ast)
-            logger.info(f"[Sample {sample_index + 1}] AST evaluation result (ground truth answer): {ground_truth_answer}")
-            
-            # Create AST prefix notation for metadata
-            ast_prefix = ast_to_prefix(ast)
-            logger.info(f"[Sample {sample_index + 1}] AST prefix notation: {ast_prefix}")
-        except Exception as e:
-            logger.error(f"[Sample {sample_index + 1}] AST validation/evaluation error: {e}")
-            return None
-            
-        # 2. Generate the world where the narrative will take place
-        try:
-            # Generate a random number of characters/concepts within the config range
-            num_chars = random.randint(config.MIN_WORLD_CHARS, config.MAX_WORLD_CHARS)
-            num_concepts = random.randint(config.MIN_WORLD_CONCEPTS, config.MAX_WORLD_CONCEPTS)
-            
-            # Generate world data
-            world_data = generate_world(
-                num_characters=num_chars,
-                num_concepts=num_concepts,
-                max_retries=config.WORLDGEN_MAX_RETRIES,
-                sample_index=sample_index
-            )
-            logger.info(f"[Sample {sample_index + 1}] Generated world: {world_data.get('genre', 'Unknown genre')}, {world_data.get('setting', 'Unknown setting')}")
-        except Exception as e:
-            logger.error(f"[Sample {sample_index + 1}] World generation error: {e}")
-            return None
-        
-        # 3. Generate the narrative
-        narrative = generate_narrative(
-            ast=ast, 
-            world=world_data,  # Now passing the world data we generated
-            config=config,
-            encoder=encoder,
-            p_inflect=p_inflect,
-            logger=logger,
-            sample_index=sample_index,
-            overall_ground_truth_answer=ground_truth_answer
-        )
-        
-        if not narrative:
-            logger.error(f"[Sample {sample_index + 1}] Failed to generate narrative")
-            return None
-            
-        logger.info(f"[Sample {sample_index + 1}] Successfully generated narrative with {len(narrative.split())} words")
-        
-        # 4. Prepare the final question text
-        primary_object = world_data.get("object", "items")  # Use the object from world data with fallback
-        final_question = FINAL_QUESTION_TEMPLATE.substitute(primary_object=primary_object)
-        full_prompt = narrative + final_question
-        
-        # 5. Prepare the sample data
-        sample_data = {
-            "id": f"sample_{sample_index + 1}",
-            "ast_prefix": ast_prefix,
-            "ground_truth_answer": ground_truth_answer,
-            "narrative": narrative,
-            "full_prompt": full_prompt,
-            "final_question": final_question,
-            "generation_timestamp": datetime.datetime.now().isoformat(),
-            "model": MODEL,
-            # Add fields required by validator
-            "narrative_with_question": full_prompt,
-            "ast": ast_prefix,
-            "ground_truth": ground_truth_answer
-        }
-        
-        logger.info(f"[Sample {sample_index + 1}] Sample generation complete!")
-        return sample_data
-        
-    except Exception as e:
-        logger.error(f"[Sample {sample_index + 1}] Unexpected error during sample generation: {e}", exc_info=True)
-        return None
 
 
 def main(

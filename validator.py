@@ -1,15 +1,16 @@
-import os
-import json
-import concurrent.futures
-import time
-import logging
-from openai import OpenAI
-from dotenv import load_dotenv
-import re
 import argparse
+import concurrent.futures
+import json
+import logging
+import os
 import random
+import re
 import threading
+import time
+
 import requests
+from dotenv import load_dotenv
+from openai import OpenAI
 
 # --- Initial configuration logging ---
 # Replace lines 9-31 with more concise setup info

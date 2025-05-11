@@ -34,6 +34,7 @@ load_dotenv()
 NUM_SAMPLES_TO_GENERATE = 5  # How many samples to generate in one run
 DEFAULT_MAX_WORKERS = 50   # Number of parallel threads for batch generation
 MODEL = "google/gemini-2.5-pro-preview"  # OpenRouter model for main generation
+STATIC_CHECKER_MODEL = "qwen/qwq-32b" # Different model for static beat validation
 DATASETS_DIR = "datasets"    # Directory for saving generated datasets
 PROD_RUN: bool = True       # If True, run validator and clean dataset post-generation
 
@@ -73,7 +74,12 @@ class Config:
     CREATIVE_NARRATIVE_TEMP: float = 0.5            # Temp. for creative parts (intro, padding)
     ANCHOR_GEN_TEMP: float = 0.75                   # Temp. for narrative anchor generation
 
-    # === Iterative LLM Beat Validation & Revision ===
+    # === Static Beat Validation (New) ===
+    USE_LLM_STATIC_BEAT_VALIDATION: bool = True     # Whether to use an LLM to validate each beat's narrative logic
+    STATIC_BEAT_VALIDATION_MAX_RETRIES: int = 5     # Max retries for a beat if LLM validation fails
+    STATIC_BEAT_VALIDATION_TEMP: float = 0.05       # Temperature for the beat validator LLM
+
+    # === Iterative LLM Beat Validation & Revision (New from User Plan) ===
     LLM_VALIDATOR_MODEL: str = "qwen/qwq-32b"       # Model for the iterative LLM beat validator
     LLM_VALIDATOR_TEMP: float = 0.05                # Temperature for the iterative LLM beat validator
     BEAT_REVISION_TEMP: float = 0.1                 # Temperature for generator LLM during beat revisions
@@ -429,41 +435,6 @@ def log_prompt(
             logger.error(f"Error writing to LLM turn log file: {e}")
         else:
             print(f"Error writing to LLM turn log file: {e}")
-
-
-# --- Few-shot example formatter utility ---
-def format_strict_few_shot_examples_for_prompt(examples_list: list, max_examples: int = None) -> str:
-    """
-    Formats the FEW_SHOT_EXAMPLES_STRICT list into a string for inclusion in the generator prompt.
-    
-    Args:
-        examples_list: List of tuple examples in the format (rules_summary, good_example, bad_example, bad_reasoning)
-        max_examples: Maximum number of examples to include, defaults to all if None
-        
-    Returns:
-        Formatted string containing few-shot examples for prompt inclusion
-    """
-    if not examples_list:
-        return ""
-    
-    # Limit the number of examples if max_examples is specified
-    if max_examples is not None and max_examples > 0:
-        examples_to_use = examples_list[:max_examples]
-    else:
-        examples_to_use = examples_list
-        
-    formatted_examples = ["\n\n--- Examples of Adhering to Strict Number Rules ---"]
-    
-    for i, (rules_summary, good_example, bad_example, bad_reasoning) in enumerate(examples_to_use):
-        example_str = f"\nExample {i+1}:\n"
-        example_str += f"Number Rules:\n{rules_summary}\n\n"
-        example_str += f"GOOD Narrative (Follows Rules):\n\"{good_example}\"\n\n"
-        example_str += f"BAD Narrative (Violates Rules):\n\"{bad_example}\"\n"
-        example_str += f"Why BAD: {bad_reasoning}\n"
-        formatted_examples.append(example_str)
-    
-    formatted_examples.append("\nApply similar strictness to the current task's number rules.")
-    return "\n".join(formatted_examples)
 
 
 FINAL_QUESTION_TEMPLATE = Template(
@@ -1874,7 +1845,7 @@ if p_inflect:
             1001,
             2025,
         ]:  # Added 99
-            key_no_and = num_to_words(num_val_to_check) 
+            key_no_and = num_to_words(num_val_to_check)
             if key_no_and.lower() in EXPANDED_NUMBER_WORDS_DICT:
                 sample_keys_diverse.append(key_no_and.lower())
             # Check for hyphenated version of no_and
@@ -1885,7 +1856,7 @@ if p_inflect:
                     and hyphenated_key_no_and not in sample_keys_diverse
                 ):
                     sample_keys_diverse.append(hyphenated_key_no_and)
-            
+
             if num_val_to_check > 100 and p_inflect:
                 word_with_and = p_inflect.number_to_words(
                     num_val_to_check, andword="and"
@@ -1902,8 +1873,8 @@ if p_inflect:
                         hyphenated_key_with_and in EXPANDED_NUMBER_WORDS_DICT
                         and hyphenated_key_with_and not in sample_keys_diverse
                     ):
-                         sample_keys_diverse.append(hyphenated_key_with_and)
-        
+                        sample_keys_diverse.append(hyphenated_key_with_and)
+
         sample_items = {
             k: EXPANDED_NUMBER_WORDS_DICT.get(k) for k in sample_keys_diverse[:20]
         }  # Log more samples
@@ -1942,7 +1913,7 @@ def extract_numbers_from_text(text: str) -> Set[int]:
 
     text_chars_list = list(search_text)
     digit_spans_to_replace = []
-    for match in DIGIT_REGEX.finditer(search_text): 
+    for match in DIGIT_REGEX.finditer(search_text):
         digit_str = match.group(0)
         try:
             value = int(digit_str)
@@ -1953,11 +1924,11 @@ def extract_numbers_from_text(text: str) -> Set[int]:
                 f"Could not convert digit string '{digit_str}' to int during extraction."
             )
             continue
-            
+
     for start, end in digit_spans_to_replace:
         for i in range(start, end):
             text_chars_list[i] = "|"  # Replace with a non-space, non-word character
-            
+
     text_for_word_search = "".join(text_chars_list)
     text_for_word_search = text_for_word_search.replace(
         "|", " "
@@ -1991,7 +1962,7 @@ def extract_numbers_from_text(text: str) -> Set[int]:
         number_word_matched = match.group(
             2
         ).lower()  # The matched number phrase from the regex pattern
-        
+
         value = EXPANDED_NUMBER_WORDS_DICT.get(number_word_matched)
 
         if value is not None:
@@ -2636,16 +2607,16 @@ You will be given the Genre, Setting, Item (Primary Object), and Concept/Operati
         # --- Aggressively remove echoed input preamble ---
         # Construct the expected preamble pattern based on current genre, item, concept
         preamble_pattern_str = (
-            rf"Genre: {re.escape(genre)}\s*\n" 
-            rf"Setting: {re.escape(setting)}\s*\n" 
-            rf"Item: {re.escape(primary_object)}\s*\n" 
-            rf"Concept/Operation Hint: {re.escape(concept_keywords_for_prompt)}\s*\n" 
+            rf"Genre: {re.escape(genre)}\s*\n"
+            rf"Setting: {re.escape(setting)}\s*\n"
+            rf"Item: {re.escape(primary_object)}\s*\n"
+            rf"Concept/Operation Hint: {re.escape(concept_keywords_for_prompt)}\s*\n"
         )
         # Remove preamble if found at the beginning of the candidate string
         candidate = re.sub(
-            f"^{preamble_pattern_str}", 
-            "", 
-            candidate, 
+            f"^{preamble_pattern_str}",
+            "",
+            candidate,
             flags=re.IGNORECASE | re.MULTILINE,  # Added re.MULTILINE
         ).strip()
 
@@ -2754,19 +2725,8 @@ def perform_llm_static_content_validation(
     config_obj: Config = config,
     logger_obj: logging.Logger = logger,
 ) -> tuple[bool, str]:
-    """
-    DEPRECATED: This function has been replaced by the iterative LLM validation loop in
-    _generate_and_llm_validate_beat combined with static number validation.
-    
-    It is kept here for reference only and is no longer called in the main flow.
-    """
     # DEPRECATED: This function is no longer called in the main flow as it has been replaced by the
     # iterative validation approach in _generate_and_llm_validate_beat. Keep for reference or potential future use.
-    logger_obj.warning(
-        f"[Sample {sample_index+1 if sample_index is not None else 'N/A'}, Beat Op: {current_op_node.op}] "
-        f"DEPRECATED function perform_llm_static_content_validation was called. "
-        f"This function has been replaced by the iterative validation loop in _generate_and_llm_validate_beat."
-    )
     logger_obj.info(
         f"[Sample {sample_index+1 if sample_index is not None else 'N/A'}, Beat Op: {current_op_node.op}] Performing LLM static content validation on beat text."
     )
@@ -2806,7 +2766,7 @@ def perform_llm_static_content_validation(
     user_prompt = "".join(user_prompt_parts)
 
     log_prompt(
-        header=f"LLM Static Beat Validation Prompt (Op: {current_op_node.op}) for model {config_obj.LLM_VALIDATOR_MODEL}",
+        header=f"LLM Static Beat Validation Prompt (Op: {current_op_node.op}) for model {STATIC_CHECKER_MODEL}",
         prompt=f"System: {system_prompt}\\nUser:\\n{user_prompt}",
         sample_index=sample_index,
     )
@@ -2816,13 +2776,13 @@ def perform_llm_static_content_validation(
         # Inner try for the API call and response processing
         try:
             resp = _chat_completion_call(
-                model=config_obj.LLM_VALIDATOR_MODEL,
+                model=STATIC_CHECKER_MODEL,
                 messages=[
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": user_prompt},
                 ],
                 max_completion_tokens=350,
-                temperature=config_obj.LLM_VALIDATOR_TEMP,
+                temperature=config_obj.STATIC_BEAT_VALIDATION_TEMP,
                 reasoning={"exclude": True},
             )
 
@@ -2836,7 +2796,7 @@ def perform_llm_static_content_validation(
                 raw_llm_output = resp.choices[0].message.content or ""
 
             log_prompt(
-                header=f"LLM Static Beat Validation Raw Response (Op: {current_op_node.op}) from model {config_obj.LLM_VALIDATOR_MODEL}",
+                header=f"LLM Static Beat Validation Raw Response (Op: {current_op_node.op}) from model {STATIC_CHECKER_MODEL}",
                 prompt=f"Raw Output:\n{raw_llm_output}",
                 sample_index=sample_index,
             )
@@ -2894,7 +2854,7 @@ def perform_llm_static_content_validation(
 
         except Exception as e:  # Catch errors from _chat_completion_call itself
             logger_obj.error(
-                f"[Sample {sample_index+1 if sample_index is not None else 'N/A'}, Beat Op: {current_op_node.op}] API call to static beat validator ({config_obj.LLM_VALIDATOR_MODEL}) failed: {e}"
+                f"[Sample {sample_index+1 if sample_index is not None else 'N/A'}, Beat Op: {current_op_node.op}] API call to static beat validator ({STATIC_CHECKER_MODEL}) failed: {e}"
             )
             return False, f"API call to static beat validator failed: {e}"
     except Exception as e:  # Catch any other unexpected error in this function
@@ -3818,21 +3778,11 @@ Produce ONLY clean narrative text."""
     context_snippet = clean_snippet(
         context.last_scene_text, max_len=config.BEAT_CONTEXT
     )
-    
-    # Format few-shot examples if needed based on config
-    few_shot_examples_str = ""
-    if config.FEW_SHOT_EXAMPLES > 0:
-        few_shot_examples_str = format_strict_few_shot_examples_for_prompt(
-            FEW_SHOT_EXAMPLES_STRICT, 
-            max_examples=config.FEW_SHOT_EXAMPLES
-        )
-    
     initial_user_message_for_generator = (
         f"BEAT {context.beat_counter['current']}/{context.beat_counter['total']}\n\n"
         f"**Current Status:** {scene_preamble}\n\n"
         f"**Task:** {action_description}\n\n"
-        f"{ultra_strict_instruction}\n"
-        f"{few_shot_examples_str}\n\n"
+        f"{ultra_strict_instruction}\n\n"
         f"**Prior Scene Snippet:**\n{context_snippet}\n\n"
         f"**Write the next scene continuing directly from the prior scene with a focus on the TASK above.**"
     )
@@ -3880,7 +3830,7 @@ Produce ONLY clean narrative text."""
             action_description=action_description,
             expected_beat_result_words=expected_beat_result_words_for_val,
             current_max_beat_completion_tokens=current_max_beat_completion_tokens,
-                sample_index=context.sample_index,
+            sample_index=context.sample_index,
             context_config=config,
             logger_obj=logger,
             encoder_obj=encoder,  # Pass the encoder
@@ -4554,101 +4504,6 @@ def generate_narrative(
         f"Successfully generated narrative for sample {sample_index + 1}. Final context tokens: {context.tokens_used}, Narrative tokens: {final_token_count}"
     )
     return narrative_body.strip()
-
-
-def generate_single_sample(sample_index: int) -> dict | None:
-    """
-    Generate a single narrative sample with the given index.
-    This function is called by the parallel executor in main().
-    
-    Args:
-        sample_index: The index of the sample to generate
-        
-    Returns:
-        dict: A dictionary with the sample data or None if generation fails
-    """
-    try:
-        logger.info(f"[Sample {sample_index + 1}] Starting generation")
-        
-        # 1. Generate the AST and evaluate it
-        ast = build_random_ast(config.MAX_OPS, config.MAX_BRANCH)
-        logger.info(f"[Sample {sample_index + 1}] Built AST, evaluating...")
-        
-        try:
-            validate_ast(ast)
-            ground_truth_answer = eval_node(ast)
-            logger.info(f"[Sample {sample_index + 1}] AST evaluation result (ground truth answer): {ground_truth_answer}")
-            
-            # Create AST prefix notation for metadata
-            ast_prefix = ast_to_prefix(ast)
-            logger.info(f"[Sample {sample_index + 1}] AST prefix notation: {ast_prefix}")
-        except Exception as e:
-            logger.error(f"[Sample {sample_index + 1}] AST validation/evaluation error: {e}")
-            return None
-            
-        # 2. Generate the world where the narrative will take place
-        try:
-            # Generate a random number of characters/concepts within the config range
-            num_chars = random.randint(config.MIN_WORLD_CHARS, config.MAX_WORLD_CHARS)
-            num_concepts = random.randint(config.MIN_WORLD_CONCEPTS, config.MAX_WORLD_CONCEPTS)
-            
-            # Generate world data
-            world_data = generate_world(
-                num_characters=num_chars,
-                num_concepts=num_concepts,
-                max_retries=config.WORLDGEN_MAX_RETRIES,
-                sample_index=sample_index
-            )
-            logger.info(f"[Sample {sample_index + 1}] Generated world: {world_data.get('genre', 'Unknown genre')}, {world_data.get('setting', 'Unknown setting')}")
-        except Exception as e:
-            logger.error(f"[Sample {sample_index + 1}] World generation error: {e}")
-            return None
-        
-        # 3. Generate the narrative
-        narrative = generate_narrative(
-            ast=ast, 
-            world=world_data,  # Now passing the world data we generated
-            config=config,
-            encoder=encoder,
-            p_inflect=p_inflect,
-            logger=logger,
-            sample_index=sample_index,
-            overall_ground_truth_answer=ground_truth_answer
-        )
-        
-        if not narrative:
-            logger.error(f"[Sample {sample_index + 1}] Failed to generate narrative")
-            return None
-            
-        logger.info(f"[Sample {sample_index + 1}] Successfully generated narrative with {len(narrative.split())} words")
-        
-        # 4. Prepare the final question text
-        primary_object = world_data.get("object", "items")  # Use the object from world data with fallback
-        final_question = FINAL_QUESTION_TEMPLATE.substitute(primary_object=primary_object)
-        full_prompt = narrative + final_question
-        
-        # 5. Prepare the sample data
-        sample_data = {
-            "id": f"sample_{sample_index + 1}",
-            "ast_prefix": ast_prefix,
-            "ground_truth_answer": ground_truth_answer,
-            "narrative": narrative,
-            "full_prompt": full_prompt,
-            "final_question": final_question,
-            "generation_timestamp": datetime.datetime.now().isoformat(),
-            "model": MODEL,
-            # Add fields required by validator
-            "narrative_with_question": full_prompt,
-            "ast": ast_prefix,
-            "ground_truth": ground_truth_answer
-        }
-        
-        logger.info(f"[Sample {sample_index + 1}] Sample generation complete!")
-        return sample_data
-        
-    except Exception as e:
-        logger.error(f"[Sample {sample_index + 1}] Unexpected error during sample generation: {e}", exc_info=True)
-        return None
 
 
 def main(

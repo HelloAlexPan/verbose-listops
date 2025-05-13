@@ -32,7 +32,7 @@ load_dotenv()
 
 # fmt: off
 # --- Batch Settings ---
-NUM_SAMPLES_TO_GENERATE = 1
+NUM_SAMPLES_TO_GENERATE = 10
 DEFAULT_MAX_WORKERS = 100
 MODEL = "google/gemini-2.5-flash-preview:thinking"
 STATIC_CHECKER_MODEL = "google/gemini-2.5-flash-preview:thinking"
@@ -418,6 +418,7 @@ FINAL_QUESTION_TEMPLATE = Template(
     "\n\n---\n\n**Question:** The story describes a sequence of operations that modify a quantifiable measure related to '$primary_object'. Following this entire sequence, what is the final, precise numerical value of this measure at the conclusion of all activities? Provide only the single integer."
 )
 
+
 # Ensure GenerationContext dataclass is defined and includes overall_ast_root
 @dataclass
 class GenerationContext:
@@ -627,26 +628,7 @@ def generate_narrative(
         overall_ground_truth_answer=overall_ground_truth_answer,
         overall_ast_root=ast,
     )
-
-    # ... rest of the generate_narrative function from your full script ...
-    # This includes the call to _generate_narrative_recursive, padding logic, etc.
-    # For brevity, I'm omitting the rest of the function body as the fix is about definitions.
-    # Ensure _generate_narrative_recursive is also defined or imported correctly.
-
-    # Placeholder for the recursive call and rest of the logic
-    # try:
-    #     _generate_narrative_recursive(ast, context, is_root=True)
-    # except BeatGenerationError as e:
-    #     logger_obj.error(f"Narrative generation aborted: {e}")
-    #     return None
-    # except Exception as e_rec:
-    #     logger_obj.error(f"Unexpected error in recursive gen: {e_rec}", exc_info=True)
-    #     return None
-
-    # if not context.scenes:
-    #     logger_obj.error("No scenes generated.")
-    #     return None
-
+    
     logger_obj.info(
         f"Successfully generated narrative for sample {sample_index + 1}. Final context tokens: {context.tokens_used}"
     )
@@ -1873,8 +1855,6 @@ def parse_llm_json_with_fallback(
         return default_value
 
 
-
-
 # --- Tuned Generate World Function ---
 def generate_world(
     num_characters: int = config.MIN_WORLD_CHARS,
@@ -1897,8 +1877,8 @@ def generate_world(
         "Your task is to create fictional world metadata.\n\n"
         "**CRITICAL JSON FORMATTING RULES (MUST FOLLOW EXACTLY):**\n"
         "1.  The entire output MUST be a single, valid JSON object.\n"
-        "2.  All string keys and string values within the JSON must be enclosed in double quotes (e.g., `\"name\": \"value\"`).\n"
-        "3.  **If a string value itself needs to contain a double quote character (e.g., a nickname within a name), that internal double quote MUST be escaped with a backslash (`\\`)**. For example, if a character's name is `Dr. \"Nickname\" Who`, it must be represented in the JSON string as `\"name\": \"Dr. \\\"Nickname\\\" Who\"`.\n"
+        '2.  All string keys and string values within the JSON must be enclosed in double quotes (e.g., `"name": "value"`).\n'
+        '3.  **If a string value itself needs to contain a double quote character (e.g., a nickname within a name), that internal double quote MUST be escaped with a backslash (`\\`)**. For example, if a character\'s name is `Dr. "Nickname" Who`, it must be represented in the JSON string as `"name": "Dr. \\"Nickname\\" Who"`.\n'
         # CORRECTED LINE BELOW
         "4.  Ensure all commas, colons, curly braces `{{}}`, and square brackets `[]` are correctly placed according to standard JSON syntax.\n"
         "5.  Do not include any text, explanations, or markdown (like ```json) before or after the single JSON object.\n\n"
@@ -1984,18 +1964,17 @@ def generate_world(
                     logger.info(f"Retrying world generation in {delay:.2f} seconds...")
                     time.sleep(delay)
                 continue
-            
+
             # Attempt to strip markdown ```json ... ``` if present
             cleaned_text_for_parsing = text.strip()
             if cleaned_text_for_parsing.startswith("```json"):
-                cleaned_text_for_parsing = cleaned_text_for_parsing[len("```json"):]
+                cleaned_text_for_parsing = cleaned_text_for_parsing[len("```json") :]
             if cleaned_text_for_parsing.endswith("```"):
-                cleaned_text_for_parsing = cleaned_text_for_parsing[:-len("```")]
+                cleaned_text_for_parsing = cleaned_text_for_parsing[: -len("```")]
             cleaned_text_for_parsing = cleaned_text_for_parsing.strip()
 
-
             world = parse_llm_json_with_fallback(
-                cleaned_text_for_parsing, # Use the potentially cleaned text
+                cleaned_text_for_parsing,  # Use the potentially cleaned text
                 {},  # Empty dict will trigger the keys validation check right after
                 f"in world generation attempt {attempt+1}",
             )
@@ -2014,16 +1993,23 @@ def generate_world(
                     f"World Gen Attempt {attempt + 1}: 'characters' key is not a non-empty list."
                 )
                 raise ValueError("'characters' key is not a non-empty list")
-            
+
             # Additional validation for character structure
             for char_idx, char_obj in enumerate(world.get("characters", [])):
                 if not isinstance(char_obj, dict):
-                    logger.warning(f"World Gen Attempt {attempt + 1}: Character at index {char_idx} is not a dictionary.")
-                    raise ValueError(f"Character at index {char_idx} is not a dictionary.")
+                    logger.warning(
+                        f"World Gen Attempt {attempt + 1}: Character at index {char_idx} is not a dictionary."
+                    )
+                    raise ValueError(
+                        f"Character at index {char_idx} is not a dictionary."
+                    )
                 if not all(k_char in char_obj for k_char in ["name", "role", "quirk"]):
-                    logger.warning(f"World Gen Attempt {attempt + 1}: Character at index {char_idx} is missing required keys (name, role, quirk). Found: {char_obj.keys()}")
-                    raise ValueError(f"Character at index {char_idx} missing required keys.")
-
+                    logger.warning(
+                        f"World Gen Attempt {attempt + 1}: Character at index {char_idx} is missing required keys (name, role, quirk). Found: {char_obj.keys()}"
+                    )
+                    raise ValueError(
+                        f"Character at index {char_idx} missing required keys."
+                    )
 
             logger.debug(
                 f"World Gen Attempt {attempt + 1}: Successfully generated and parsed world JSON."
@@ -2047,6 +2033,7 @@ def generate_world(
             time.sleep(delay)
     logger.error(f"Failed to generate valid world JSON after {max_retries} attempts.")
     raise RuntimeError("World generation failed: Could not get valid JSON from LLM.")
+
 
 # --- Number Extraction (Enhanced with Inflect for Words up to MAX_VALUE) ---
 DIGIT_REGEX = re.compile(r"\b-?\d+\b")
@@ -2284,11 +2271,13 @@ def make_number_validator(
     operand_count: int,
     correct_result_for_beat: int | None,
     strict_zero: bool = False,
-    enforce_result_presence: bool = True, # Note: This will be effectively False due to logic in _generate_narrative_recursive
+    enforce_result_presence: bool = True,  # Note: This will be effectively False due to logic in _generate_narrative_recursive
     operation_type: str | None = None,
     overall_ground_truth_answer: int | None = None,
     is_root_node_being_validated: bool = False,
-    conceptual_input_values: Set[int] | None = None, # Retained for potential future use, not actively used in v6 logic
+    conceptual_input_values: (
+        Set[int] | None
+    ) = None,  # Retained for potential future use, not actively used in v6 logic
     config_obj: Config = config,
     logger_obj: logging.Logger = logger,
 ) -> Callable[[str], bool]:
@@ -2323,20 +2312,32 @@ def make_number_validator(
 
     def validate(text: str) -> bool:
         found_numbers = extract_numbers_from_text(text)
-        text_preview = text[:100].replace("\n", " ") + ("..." if len(text) > 100 else "")
+        text_preview = text[:100].replace("\n", " ") + (
+            "..." if len(text) > 100 else ""
+        )
         logger_obj.debug(f'Validator Input Text: "{text_preview}"')
         logger_obj.debug(f"Validator Found Numbers: {found_numbers}")
 
         validation_report = {
-            "status": "PASS", "reason": "All validation checks passed",
-            "operation_type": operation_type, "text_preview": text_preview,
-            "found_numbers": list(found_numbers), "allowed_atoms": list(allowed_atoms), # Original allowed_atoms for reporting
-            "required_atoms_for_check": list(required_atoms_for_validation), # The set actually used for checking
-            "operand_count": operand_count, "correct_result": correct_result_for_beat,
+            "status": "PASS",
+            "reason": "All validation checks passed",
+            "operation_type": operation_type,
+            "text_preview": text_preview,
+            "found_numbers": list(found_numbers),
+            "allowed_atoms": list(
+                allowed_atoms
+            ),  # Original allowed_atoms for reporting
+            "required_atoms_for_check": list(
+                required_atoms_for_validation
+            ),  # The set actually used for checking
+            "operand_count": operand_count,
+            "correct_result": correct_result_for_beat,
             "is_root_node": is_root_node_being_validated,
             "enforce_result_presence_flag": enforce_result_presence,
             "overall_ground_truth_answer_for_this_validation_context": overall_ground_truth_answer,
-            "missing_required": [], "forbidden_extras": [], "details": []
+            "missing_required": [],
+            "forbidden_extras": [],
+            "details": [],
         }
 
         if strict_zero:
@@ -2346,13 +2347,18 @@ def make_number_validator(
                 validation_report["status"] = "FAIL"
                 validation_report["reason"] = "STRICT_ZERO_VIOLATION"
                 validation_report["forbidden_extras"] = list(disallowed_in_strict_zero)
-                validation_report["details"].append(f"Strict zero mode: Found {disallowed_in_strict_zero} not in {allowed_for_strict_zero}.")
+                validation_report["details"].append(
+                    f"Strict zero mode: Found {disallowed_in_strict_zero} not in {allowed_for_strict_zero}."
+                )
                 _log_failed_validation(text, validation_report, logger_obj)
                 return False
             return True
 
         # Rule 1: IMPLICIT RESULT HANDLING (enforce_result_presence is always False in current setup)
-        if correct_result_for_beat is not None and correct_result_for_beat in found_numbers:
+        if (
+            correct_result_for_beat is not None
+            and correct_result_for_beat in found_numbers
+        ):
             if operation_type == "MED":
                 validation_report["status"] = "FAIL"
                 validation_report["reason"] = "MED_RESULT_STATED_EXPLICITLY_VIOLATION"
@@ -2366,7 +2372,7 @@ def make_number_validator(
                     f"Python Validator: Result {correct_result_for_beat} (Op: {operation_type}) found, but it's also a required input. "
                     f"Allowing presence; LLM must check narrative framing."
                 )
-            else: # Result found, not MED, and not an input atom
+            else:  # Result found, not MED, and not an input atom
                 validation_report["status"] = "FAIL"
                 validation_report["reason"] = "IMPLICIT_RESULT_STATED_EXPLICITLY"
                 validation_report["details"].append(
@@ -2391,19 +2397,32 @@ def make_number_validator(
         truly_forbidden_and_found = set()
         potentially_forbidden_found = found_numbers & forbidden_atoms
         for num in potentially_forbidden_found:
-            if num in required_atoms_for_validation: continue
-            if num == correct_result_for_beat: continue # Rule 1 handled its presence/absence based on context
-            if num in config_obj.ALWAYS_ALLOWED_PHRASING_NUMBERS_SET: continue
-            if num == operand_count: continue
-            if num in IMPLICITLY_ALLOWED_SMALL_NUMBERS: continue
-            truly_forbidden_and_found.add((num, "from prior results/GT and not otherwise allowed"))
+            if num in required_atoms_for_validation:
+                continue
+            if num == correct_result_for_beat:
+                continue  # Rule 1 handled its presence/absence based on context
+            if num in config_obj.ALWAYS_ALLOWED_PHRASING_NUMBERS_SET:
+                continue
+            if num == operand_count:
+                continue
+            if num in IMPLICITLY_ALLOWED_SMALL_NUMBERS:
+                continue
+            truly_forbidden_and_found.add(
+                (num, "from prior results/GT and not otherwise allowed")
+            )
 
         if truly_forbidden_and_found:
-            formatted_forbidden = ", ".join([f"{n}({reason})" for n, reason in truly_forbidden_and_found])
+            formatted_forbidden = ", ".join(
+                [f"{n}({reason})" for n, reason in truly_forbidden_and_found]
+            )
             validation_report["status"] = "FAIL"
             validation_report["reason"] = "FORBIDDEN_NUMBERS_FOUND"
-            validation_report["forbidden_extras"] = [n for n, r in truly_forbidden_and_found]
-            validation_report["details"].append(f"Forbidden_Found: {{ {formatted_forbidden} }}.")
+            validation_report["forbidden_extras"] = [
+                n for n, r in truly_forbidden_and_found
+            ]
+            validation_report["details"].append(
+                f"Forbidden_Found: {{ {formatted_forbidden} }}."
+            )
             _log_failed_validation(text, validation_report, logger_obj)
             return False
 
@@ -2427,9 +2446,13 @@ def make_number_validator(
             _log_failed_validation(text, validation_report, logger_obj)
             return False
 
-        logger_obj.debug(f"Validation PASS (Strict Python Validator for Op: {operation_type})")
+        logger_obj.debug(
+            f"Validation PASS (Strict Python Validator for Op: {operation_type})"
+        )
         return True
+
     return validate
+
 
 # Add a helper function to save failed validation attempts
 def _log_failed_validation(
@@ -3046,302 +3069,32 @@ Respond in structured JSON format ONLY."""
         return False, f"Outer exception in LLM beat validation: {e}"
 
 
-# --- NEW FUNCTION: _generate_and_llm_validate_beat (Iterative LLM Validation Loop) ---
-# verbose-listops.py
+# --- Iterative LLM Validation Loop ---
+# In verbose-listops.py
 
-# ... (imports, Config, etc.) ...
+# Ensure FEW_SHOT_EXAMPLES_STRICT is defined globally before this function, e.g.:
+# FEW_SHOT_EXAMPLES_STRICT = [
+#     ( (rules_text_0, good_narrative_0, bad_narrative_0, bad_reasoning_0) ),
+#     ( (rules_text_1, good_narrative_1, bad_narrative_1, bad_reasoning_1) ), # Median example 1
+#     ( (rules_text_2, good_narrative_2, bad_narrative_2, bad_reasoning_2) ), # Median example 2
+#     ...
+# ]
+# (The content of FEW_SHOT_EXAMPLES_STRICT is already in your provided script)
 
+# In verbose-listops.py
 
-def _generate_and_llm_validate_beat(
-    original_user_message_for_generator: str,
-    system_prompt_for_generator: str,
-    world_info: dict,
-    current_op_node: OpNode,
-    # Inputs for LLM Validator prompt construction:
-    conceptual_inputs_str_for_llm_validator: str,
-    atomic_inputs_words_str_for_llm_validator: str,
-    action_description_for_llm_validator: str,
-    expected_beat_result_words_for_llm_validator: str | None,
-    ultra_strict_instruction_for_llm_validator_context: str,
-    # Other parameters:
-    current_max_beat_completion_tokens: int,
-    sample_index: int,
-    context_config: Config,
-    logger_obj: logging.Logger,
-    encoder_obj: any,
-    is_current_beat_root_node: bool = False,
-    overall_ground_truth_answer_val: int | None = None,
-    primary_object_name: str = "items",
-    forbidden_prior_results_and_gt_for_llm_validator: Set[int] = None,
-    correct_result_val: int | None = None,
-    direct_atom_values_val: Set[int] = None,  # Changed from field(default_factory=set)
-) -> str | None:
+# ... (all your imports, Config class, Node definitions, helper functions like postorder, eval_node, etc.) ...
+# ... (make_number_validator, _generate_and_llm_validate_beat, etc.) ...
 
-# Replacement for the entire body of _generate_and_llm_validate_beat
-# (Function signature: def _generate_and_llm_validate_beat(...):)
-
-    if forbidden_prior_results_and_gt_for_llm_validator is None:
-        forbidden_prior_results_and_gt_for_llm_validator = set()
-    if direct_atom_values_val is None:
-        direct_atom_values_val = set()
-
-    current_op_arity = len(current_op_node.children) # Calculate arity here
-    logger_obj.debug(f"LLMValidateBeat: Op={current_op_node.op}, Arity={current_op_arity}, CorrectResult={correct_result_val}")
-
-
-    history_of_attempts = []
-    history_of_critiques = []
-    current_generator_user_prompt_for_iteration = original_user_message_for_generator
-
-    for iteration in range(1, context_config.MAX_LLM_VALIDATION_ITERATIONS + 1):
-        logger_obj.info(
-            f"[Sample {sample_index+1}, Beat Op: {current_op_node.op}] LLM Validation Loop Iteration: {iteration}/{context_config.MAX_LLM_VALIDATION_ITERATIONS}"
-        )
-
-        generator_temp = context_config.BEAT_GEN_TEMP
-        if iteration > 1:
-            generator_temp = context_config.BEAT_REVISION_TEMP
-            history_prompt_addition = "\n\n--- FAILED ATTEMPT REVIEW & REVISION TASK ---\n"
-            last_attempt_text = history_of_attempts[-1] if history_of_attempts else "N/A (Error in prior generation)"
-            last_critique = history_of_critiques[-1] if history_of_critiques else {}
-            history_prompt_addition += f"**Your Previous Attempt (Attempt {iteration-1}):**\n{last_attempt_text}\n\n"
-            explanation = last_critique.get("explanation_for_generator", "No detailed explanation.")
-            summary_for_gen = last_critique.get("overall_revision_summary_for_generator_prompt", "Please revise.")
-            history_prompt_addition += f"**Validator Feedback for Your Previous Attempt:**\n  - Summary: {summary_for_gen}\n  - Details: {explanation}\n\n"
-            history_prompt_addition += (
-                f"**Current Revision Task (Attempt {iteration}):**\n"
-                f"1. Review the feedback. 2. Re-read original task & ALL number rules. 3. Fix ALL issues. 4. Ensure narrative logic. 5. Output ONLY revised narrative.\n\n"
-                f"**Key Original Rules (Reminder - see full initial prompt for all details):\n**"
-                f"{ultra_strict_instruction_for_llm_validator_context}\n"
-            )
-            # This reconstruction of prompt for revision might need adjustment based on how original_user_message_for_generator is structured
-            # A simple prepend might be:
-            current_generator_user_prompt_for_iteration = f"{original_user_message_for_generator}\n\n{history_prompt_addition}"
-            # Or a more structured insertion if possible. For now, simple prepend.
-        else: # First iteration
-            # Add MED few-shot examples if applicable (logic from your original code)
-            if current_op_node.op == "MED" and context_config.FEW_SHOT_EXAMPLES >= 1:
-                med_examples_to_use = [FEW_SHOT_EXAMPLES_STRICT[1], FEW_SHOT_EXAMPLES_STRICT[2]] # Example selection
-                few_shot_addition = "\n\n--- CRITICAL FEW-SHOT EXAMPLES FOR MEDIAN OPERATIONS ---\n"
-                # (Loop through med_examples_to_use and format them as in your original code)
-                for idx, med_ex in enumerate(med_examples_to_use):
-                    few_shot_addition += f"**EXAMPLE {idx+1} RULES:**\n{med_ex[0].replace('\\\\n', '\\n')}\n\n"
-                    few_shot_addition += f"**EXAMPLE {idx+1} GOOD:**\n{med_ex[1]}\n\n"
-                    few_shot_addition += f"**WHY GOOD:**\n{('This example succeeds because it mentions all the required atomic inputs (seventy-two, eighty-four, ninety-one, ninety-five) clearly, but NEVER explicitly states the median value (eighty-nine). Instead, it refers to the median conceptually...' if idx == 0 else 'This example succeeds because it lists all the atomic inputs EXCEPT the median value (eighty-seven)... At no point does the explicit number eighty-seven appear...')}\n\n"
-                    few_shot_addition += f"**EXAMPLE {idx+1} BAD:**\n{med_ex[2]}\n\n"
-                    few_shot_addition += f"**WHY BAD FAILS:**\n{med_ex[3]}\n\n"
-
-                few_shot_addition += "**CRITICAL MED OPERATION RULE:**\nFor MED operations, the median value must NEVER appear explicitly in the text...\n\n"
-                # Insert few_shot_addition into current_generator_user_prompt_for_iteration
-                # (Logic for inserting it at the right place, e.g., after task description)
-                # For simplicity, appending here, but ideally inserted more strategically:
-                current_generator_user_prompt_for_iteration += "\n\n" + few_shot_addition
-                logger_obj.info(f"Added MED operation few-shot examples for iteration {iteration}")
-
-
-        generated_text_cleaned = ""
-        try:
-            log_prompt(
-                header=f"LLM Beat Generator Prompt (Op: {current_op_node.op}, Iter: {iteration})",
-                prompt=f"System: {system_prompt_for_generator}\nUser:\n{current_generator_user_prompt_for_iteration}",
-                sample_index=sample_index
-            )
-            resp_gen = _chat_completion_call(
-                model=MODEL,
-                messages=[
-                    {"role": "system", "content": system_prompt_for_generator},
-                    {"role": "user", "content": current_generator_user_prompt_for_iteration},
-                ],
-                max_completion_tokens=current_max_beat_completion_tokens,
-                temperature=generator_temp,
-                reasoning={"exclude": True},
-            )
-            raw_gen_text = ""
-            if resp_gen and resp_gen.choices and resp_gen.choices[0].message:
-                raw_gen_text = resp_gen.choices[0].message.content or ""
-            log_prompt(
-                header=f"LLM Beat Generator Raw Response (Op: {current_op_node.op}, Iter: {iteration})",
-                prompt=f"Raw Output:\n{raw_gen_text}",
-                sample_index=sample_index
-            )
-            generated_text_cleaned = raw_gen_text.strip()
-            if not generated_text_cleaned or generated_text_cleaned.lower().startswith(("i cannot", "i'm sorry", "i am unable")):
-                logger_obj.warning(f"Generator refusal or empty in iter {iteration}. Raw: '{raw_gen_text}'")
-                generated_text_cleaned = "" # Ensure it's empty for history
-
-            history_of_attempts.append(generated_text_cleaned if generated_text_cleaned else "GENERATION_EMPTY_OR_REFUSED")
-            if not generated_text_cleaned:
-                history_of_critiques.append({
-                    "is_valid": False,
-                    "explanation_for_generator": "The generation was empty or an API refusal.",
-                    "overall_revision_summary_for_generator_prompt": "Previous attempt was empty/refused. Please generate the scene as per original instructions.",
-                })
-                continue
-        except Exception as e_gen:
-            logger_obj.error(f"Error generating beat in LLM loop iter {iteration}: {e_gen}", exc_info=True)
-            history_of_attempts.append(f"ERROR_DURING_GENERATION: {str(e_gen)[:200]}")
-            history_of_critiques.append({
-                "is_valid": False, "explanation_for_generator": f"Exception during generation: {e_gen}",
-                "overall_revision_summary_for_generator_prompt": "Error in previous generation. Retry task.",
-            })
-            if iteration < context_config.MAX_LLM_VALIDATION_ITERATIONS:
-                time.sleep(context_config.RETRY_INITIAL_DELAY)
-                continue
-            else:
-                return None
-
-        validator_system_prompt = """You are an AI numerical compliance checker.
-Your ONLY task is to evaluate a story 'beat' against strict numerical rules.
-You MUST output your response as a valid JSON object and NOTHING ELSE, adhering to the provided schema.
-Do not include any text, explanations, or markdown (like ```json) before or after the single JSON object.
-Start with '{' and end with '}'."""
-
-        # --- Prepare detailed strings for Validator Prompt (using 'word (digit)' format) ---
-        temp_atomic_detailed_for_validator = []
-        if direct_atom_values_val:
-            for atom_int in sorted(list(direct_atom_values_val)):
-                temp_atomic_detailed_for_validator.append(f"'{num_to_words(atom_int)}' ({atom_int})")
-        llm_val_atomic_inputs_final_str = ", ".join(temp_atomic_detailed_for_validator) if temp_atomic_detailed_for_validator else "None"
-
-        llm_val_expected_beat_result_final_str = "N/A"
-        if correct_result_val is not None:
-            llm_val_expected_beat_result_final_str = f"'{num_to_words(correct_result_val)}' ({correct_result_val})"
-
-        temp_forbidden_detailed_for_validator_prompt = []
-        if forbidden_prior_results_and_gt_for_llm_validator:
-            for n_forbidden in sorted(list(forbidden_prior_results_and_gt_for_llm_validator)):
-                 temp_forbidden_detailed_for_validator_prompt.append(f"'{num_to_words(n_forbidden)}' ({n_forbidden})")
-        forbidden_values_str_for_validator_prompt = ", ".join(temp_forbidden_detailed_for_validator_prompt) if temp_forbidden_detailed_for_validator_prompt else "None specifically identified"
-
-        temp_phrasing_detailed_for_validator_prompt = [f"'{num_to_words(n)}' ({n})" for n in context_config.ALWAYS_ALLOWED_PHRASING_NUMBERS_SET]
-        phrasing_numbers_str_for_validator_prompt = ", ".join(sorted(temp_phrasing_detailed_for_validator_prompt))
-
-        gt_word_val_for_validator_prompt = "N/A"
-        if overall_ground_truth_answer_val is not None:
-            gt_word_val_for_validator_prompt = f"'{num_to_words(overall_ground_truth_answer_val)}' ({overall_ground_truth_answer_val})"
-        
-        current_op_arity_word_val_for_validator_prompt = f"'{num_to_words(current_op_arity)}' ({current_op_arity})"
-
-        is_result_also_atomic_input_for_validator = False
-        if correct_result_val is not None and direct_atom_values_val:
-            if correct_result_val in direct_atom_values_val:
-                is_result_also_atomic_input_for_validator = True
-        
-        # conceptual_inputs_str_for_llm_validator is already just names like "'ConceptA', 'ConceptB'"
-
-        validator_user_prompt = f"""You are an AI numerical compliance checker. Evaluate the 'Generated Beat Text' below with ABSOLUTE PRECISION regarding its numerical content and adherence to storytelling rules.
-
-**Primary Goal:** Verify the text strictly adheres to all numerical rules. Specifically, ensure:
-1.  The numerical result of the current operation is NOT explicitly stated *as the result*.
-2.  If the numerical result happens to be identical to an atomic input, its presence as an input is fine, but it must not be framed as the operation's outcome (unless it's a MEDIAN operation, where the result value must never appear).
-3.  Prior results (if used as inputs) are referenced only by their conceptual names, not their numerical values.
-4.  Only explicitly permitted numbers appear; all others are forbidden.
-
-**Context for Your Evaluation:**
-- Operation Type: {current_op_node.op} ({OP_LABELS.get(current_op_node.op, current_op_node.op)})
-- Conceptual Names for Prior Results (if any were inputs to this step): {conceptual_inputs_str_for_llm_validator}
-- New Specific Numbers for This Step (Atomic Inputs): {llm_val_atomic_inputs_final_str}
-- Numerical Result of THIS Operation (Must be Implied, NOT Stated as Result): {llm_val_expected_beat_result_final_str}
-- Overall Final Answer of Entire Story (for context): {gt_word_val_for_validator_prompt}
-- Is this beat's numerical result also one of its atomic inputs? {'Yes' if is_result_also_atomic_input_for_validator else 'No'}
-
-**VALIDATION ALGORITHM - FOLLOW EXACTLY:**
-1.  Identify ALL numbers (words or digits) in the 'Generated Beat Text'.
-2.  **RULE A: REQUIRED ATOMIC INPUTS (All these specific numbers MUST be present in the text):**
-    -   {llm_val_atomic_inputs_final_str}
-    -   *Exception for MEDIAN Operations:* If a number listed above is ALSO the median result for this step (i.e., it matches '{llm_val_expected_beat_result_final_str}'), then that specific number MUST NOT be present. This is a critical override.
-3.  **RULE B: ADDITIONALLY ALLOWED NUMBERS (These MAY be present IF NOT FORBIDDEN by Rule C):**
-    -   Small numbers for general phrasing: {phrasing_numbers_str_for_validator_prompt}.
-    -   The number {current_op_arity_word_val_for_validator_prompt} IF used exclusively to count the direct inputs/items involved in THIS specific operation.
-4.  **RULE C: FORBIDDEN NUMBERS & VALUES (These MUST NOT APPEAR, or must adhere to specific conditions):**
-    -   **C.1. The numerical result of THIS current operation ({llm_val_expected_beat_result_final_str}):**
-        -   If this operation is MEDIAN: This value ({llm_val_expected_beat_result_final_str}) MUST NOT appear ANYWHERE in the text. Its presence is an automatic FAIL.
-        -   If this operation is NOT MEDIAN, AND this result value ({llm_val_expected_beat_result_final_str}) is ALSO one of the Required Atomic Inputs (Rule A, as indicated by context above): Its presence in the text (as an input) is PERMITTED. However, you must then critically evaluate if the narrative *frames* this number as the explicit *outcome/result* of the operation. If it does, it's a FAIL. If it's only mentioned as an input and the outcome is implied conceptually, it's OKAY on this point.
-        -   If this operation is NOT MEDIAN, AND this result value ({llm_val_expected_beat_result_final_str}) is NOT one of the Required Atomic Inputs: This value MUST NOT appear ANYWHERE in the text. Its presence is a FAIL.
-    -   **C.2. Numerical values of prior results or the overall story answer, if they are not part of this beat's specific allowed numbers (Rule A & B):** {forbidden_values_str_for_validator_prompt}.
-    -   **C.3. For SM Operations Specifically:** If a number is the known value of a conceptual input (e.g., if '{conceptual_inputs_str_for_llm_validator}' included 'ConceptAlpha' which represents 50), then 'fifty' (50) MUST NOT appear if it's clearly referring to 'ConceptAlpha'. The text must use the conceptual name only.
-    -   **C.4. Any other number** not explicitly covered as REQUIRED (Rule A) or ALLOWED (Rule B).
-
-**VALIDATION RESPONSE (Output JSON only, using the schema provided):**
-Based on the algorithm above:
--   `is_valid` (boolean): True if ALL rules (A, B, C) are met, False otherwise.
--   `explanation_for_generator` (string): Detailed step-by-step reasoning for failure, referencing specific rules (A, B, C.1-C.4) and numbers found/missing. If valid, explain why it meets all criteria, especially how Rule C.1 was handled if the result value was also an input.
--   `explanation_for_audit` (string, only if `is_valid` is true): Brief summary of why it's valid.
--   `overall_revision_summary_for_generator_prompt` (string): Concise instruction.
--   `suggested_revisions` (array of strings, optional).
-
-**Generated Beat Text to Evaluate:**
----
-{generated_text_cleaned}
----
-"""
-        try:
-            log_prompt(
-                header=f"LLM Validator Prompt (Op: {current_op_node.op}, Iter: {iteration})",
-                prompt=f"System: {validator_system_prompt}\nUser:\n{validator_user_prompt}",
-                sample_index=sample_index
-            )
-            api_call_params_for_validator = {
-                "model": context_config.LLM_VALIDATOR_MODEL,
-                "messages": [
-                    {"role": "system", "content": validator_system_prompt},
-                    {"role": "user", "content": validator_user_prompt},
-                ],
-                "max_completion_tokens": context_config.BEAT_MAX_TOKENS, # Should be sufficient for JSON
-                "temperature": context_config.LLM_VALIDATOR_TEMP,
-                "reasoning": {"exclude": True},
-                "json_schema": VALIDATOR_RESPONSE_SCHEMA,
-            }
-            resp_val = _chat_completion_call(**api_call_params_for_validator)
-            validator_raw_output = ""
-            if resp_val and resp_val.choices and resp_val.choices[0].message:
-                validator_raw_output = resp_val.choices[0].message.content or ""
-            log_prompt(
-                header=f"LLM Validator Raw Response (Op: {current_op_node.op}, Iter: {iteration})",
-                prompt=f"Raw Output:\n{validator_raw_output}",
-                sample_index=sample_index
-            )
-            
-            validation_result = parse_llm_json_with_fallback(
-                validator_raw_output,
-                {
-                    "is_valid": False,
-                    "explanation_for_generator": "Validator response was not valid JSON or was empty. Please try again with clearer numerical information.",
-                    "overall_revision_summary_for_generator_prompt": "The validator had trouble processing your text. Try generating a new beat with clearer numerical presentation.",
-                },
-                f"in LLM validator iteration {iteration}",
-            )
-            history_of_critiques.append(validation_result)
-
-            if validation_result.get("is_valid"):
-                logger_obj.info(
-                    f"LLM Validator PASSED beat in iter {iteration}. Audit: {validation_result.get('explanation_for_audit', 'N/A')}"
-                )
-                return generated_text_cleaned
-            else:
-                logger_obj.warning(
-                    f"LLM Validator FAILED beat in iter {iteration}. Feedback: {validation_result.get('explanation_for_generator', 'No explanation.')}"
-                )
-        except Exception as e_val_call:
-            logger_obj.error(f"Error during LLM validation call/processing iter {iteration}: {e_val_call}", exc_info=True)
-            if len(history_of_critiques) < len(history_of_attempts):
-                history_of_critiques.append({
-                    "is_valid": False, "explanation_for_generator": f"Exception during validation: {e_val_call}",
-                    "overall_revision_summary_for_generator_prompt": "System error during validation. Retry task.",
-                })
-            if iteration < context_config.MAX_LLM_VALIDATION_ITERATIONS:
-                time.sleep(context_config.RETRY_INITIAL_DELAY)
-                continue
-            else:
-                return None
-    logger_obj.error(
-        f"Beat failed LLM validation after {context_config.MAX_LLM_VALIDATION_ITERATIONS} iterations for Op: {current_op_node.op}."
-    )
-    return
-
-
-# --- Narrative Generation with Parent Operator Prompting ---
-# verbose-listops.py
+# >>> PLACE THE ENTIRE DEFINITION OF _generate_narrative_recursive HERE <<<
+# (The one you provided in the previous turn, starting with:
+# def _generate_narrative_recursive(
+# node: Node,
+# context: "GenerationContext",
+# is_root: bool,
+# ):
+# ... and ending with its last line of code)
+# I will re-paste it here for completeness, assuming it's the correct version from our previous discussion.
 
 def _generate_narrative_recursive(
     node: Node,
@@ -3355,269 +3108,241 @@ def _generate_narrative_recursive(
     narrative_anchor_map = context.narrative_anchor_map
 
     node_id = id(node)
-    # current_node_conceptual_name is the thematic name for the *result* of the current OpNode
-    current_node_conceptual_name = "this_step_s_outcome" # Default for Atom or if lookup fails
+    current_node_conceptual_name = "this_step_s_outcome"
     if isinstance(node, OpNode):
         current_node_conceptual_name = narrative_anchor_map.get(
-            node_id, f"the_unnamed_{node.op}_outcome_{node_id % 100}"
+            node_id, f"the_unnamed_{node.op}_result_{node_id % 100}"
         )
 
-    op_for_log = getattr(node, "op", "OpNode_No_Op_Attr")
+    op_for_log = getattr(node, "op", "AtomNode")
     logger_obj.debug(
         f"[Sample {context.sample_index + 1}] _generate_narrative_recursive: "
-        f"Processing OpNode: {op_for_log}, Conceptual Name for its result: '{current_node_conceptual_name}', Root: {is_root}, "
-        f"Beat: {context.beat_counter['current'] + 1}/{context.beat_counter['total']}"
+        f"Processing Node Type: {type(node).__name__}, Op: {op_for_log}, Conceptual Name: '{current_node_conceptual_name}', IsRoot: {is_root}, "
+        f"Beat: {context.beat_counter['current'] + 1 if isinstance(node, OpNode) else '-'}/{context.beat_counter['total']}"
     )
 
     if isinstance(node, Atom):
         logger_obj.debug(f"Node is Atom ({node.n}), value is {node.value}. Returning.")
-        # Atom nodes don't generate scenes themselves; their values are used by parent OpNodes.
         return
 
-    # --- Recursive calls for children to process them first (post-order traversal) ---
-    child_conceptual_names_and_values = {} # Stores {child_anchor_string: numeric_value}
-    child_conceptual_names_list = [] # Stores just [child_anchor_string]
+    child_op_node_results_as_conceptual_inputs = {}
+    child_conceptual_names_list = []
 
     for child_index, child in enumerate(node.children):
-        logger_obj.debug(
-            f"Recursively processing child {child_index+1}/{len(node.children)} of {node.op} (current node's result concept: '{current_node_conceptual_name}')"
-        )
-        _generate_narrative_recursive(child, context, is_root=False) # Child is never the overall root
-
+        _generate_narrative_recursive(child, context, is_root=False) # Recursive call
         if isinstance(child, OpNode):
-            # This child was an operation, its result is conceptual.
-            # Its conceptual name should have been generated and stored in narrative_anchor_map.
             child_anchor_str = narrative_anchor_map.get(id(child))
             if child_anchor_str:
                 child_conceptual_names_list.append(child_anchor_str)
-                if child.value is not None: # child.value is its numerical result from eval_node
-                    child_conceptual_names_and_values[child_anchor_str] = child.value
+                if child.value is not None:
+                    child_op_node_results_as_conceptual_inputs[child_anchor_str] = (
+                        child.value
+                    )
                 else:
                     logger_obj.error(
-                        f"Child OpNode {child.op} (Conceptual Name: {child_anchor_str}) has no evaluated value! AST eval issue."
+                        f"Child OpNode {child.op} ('{child_anchor_str}') has no value!"
                     )
             else:
                 logger_obj.warning(
-                    f"OpNode child {child.op} of parent {node.op} has no conceptual name in map. Naming fallback might occur."
+                    f"OpNode child {child.op} of {node.op} has no conceptual name."
                 )
-        # If child is Atom, its numerical value (child.n) will be part of 'direct_atom_children' of the current 'node'.
-
-        # Token budget check after each child is processed
-        if (context.tokens_used >= context.config.MAX_TOTAL_TOKENS - context.config.MAX_TOKENS_BUFFER):
+        if (
+            context.tokens_used
+            >= config_obj.MAX_TOTAL_TOKENS - config_obj.MAX_TOKENS_BUFFER
+        ):
             logger_obj.warning(
-                f"TOKEN LIMIT REACHED after processing child for {node.op} ('{current_node_conceptual_name}'). Halting further generation for this branch."
+                f"TOKEN LIMIT after child for {node.op} ('{current_node_conceptual_name}')."
             )
-            raise BeatGenerationError("Token limit reached during child processing, cannot complete current operation beat.")
+            raise BeatGenerationError("Token limit reached during child processing.")
 
-    logger_obj.debug(
-        f"Finished processing children for {node.op} ('{current_node_conceptual_name}'). Now generating beat for this node itself."
-    )
     context.beat_counter["current"] += 1
     logger_obj.info(
-        f"Generating beat {context.beat_counter['current']}/{context.beat_counter['total']} for operator {node.op} (Conceptual Name for its result: '{current_node_conceptual_name}')"
+        f"Generating beat {context.beat_counter['current']}/{context.beat_counter['total']} for {node.op} ('{current_node_conceptual_name}')"
     )
 
-    # --- Current Node's Details ---
     op_label = OP_LABELS.get(node.op, node.op)
-    direct_atom_children = [c_atom for c_atom in node.children if isinstance(c_atom, Atom)]
-    current_op_arity = len(node.children) # Total inputs (conceptual + atomic)
-    direct_atom_values = {a.n for a in direct_atom_children} # Set of integer values of direct atomic inputs
-    correct_result = node.value # Integer result of current node, pre-calculated by eval_node
+    direct_atom_children = [
+        c_atom for c_atom in node.children if isinstance(c_atom, Atom)
+    ]
+    current_op_arity = len(node.children)
+    direct_atom_values = {a.n for a in direct_atom_children}
+    correct_result = node.value
 
-    # --- Prepare Context Strings for Generator Prompt ---
+    forbidden_for_current_beat_py_validator = set(
+        context.introduced_atoms
+    )
+    if context.overall_ast_root is not None:
+        for processed_node in postorder(
+            context.overall_ast_root
+        ):
+            if isinstance(processed_node, OpNode) and processed_node.value is not None:
+                if id(processed_node) == id(node):
+                    continue
+                is_direct_child = any(
+                    id(child_node) == id(processed_node)
+                    for child_node in node.children
+                    if isinstance(child_node, OpNode)
+                )
+                if is_direct_child:
+                    continue
+                forbidden_for_current_beat_py_validator.add(processed_node.value)
+    else:
+        logger_obj.warning(
+            "overall_ast_root is None in context, cannot accurately build full forbidden set from prior OpNode results."
+        )
 
-    # 1. Conceptual Inputs (Prior Results) for Generator's "Background" section
+    if context.overall_ground_truth_answer is not None:
+        if (
+            context.overall_ground_truth_answer != correct_result
+            and context.overall_ground_truth_answer not in direct_atom_values
+        ):
+            forbidden_for_current_beat_py_validator.add(
+                context.overall_ground_truth_answer
+            )
+    forbidden_for_current_beat_py_validator -= direct_atom_values
+    if correct_result is not None:
+        forbidden_for_current_beat_py_validator.discard(correct_result)
+    logger_obj.debug(
+        f"Forbidden numbers for Python validator (Op: {node.op}, Beat: {context.beat_counter['current']}): {sorted(list(forbidden_for_current_beat_py_validator))}"
+    )
+
     conceptual_inputs_context_list = []
-    if child_conceptual_names_and_values:
-        for name, val in child_conceptual_names_and_values.items():
+    if child_op_node_results_as_conceptual_inputs:
+        for name, val in child_op_node_results_as_conceptual_inputs.items():
             conceptual_inputs_context_list.append(
                 f"the concept known as '{name}' (which represents the numerical value {val})"
             )
     conceptual_inputs_context_str = (
-        ", ".join(conceptual_inputs_context_list) if conceptual_inputs_context_list
-        else "None (this operation uses only new numbers or is the first step)"
+        ", ".join(conceptual_inputs_context_list)
+        if conceptual_inputs_context_list
+        else "None (this is the first calculation or uses only new numbers)"
     )
 
-    # 2. Atomic Inputs (New Numbers for this step) for Generator's "Background" section
-    atomic_inputs_context_list = []
+    atomic_inputs_context_list_detailed = []
     if direct_atom_children:
-        for atom_node in direct_atom_children: # atom_node is an Atom object
-            atomic_inputs_context_list.append(f"'{num_to_words(atom_node.n)}' ({atom_node.n})")
-    atomic_inputs_context_str = (
-        ", ".join(atomic_inputs_context_list) if atomic_inputs_context_list
+        for atom_node in direct_atom_children:
+            atomic_inputs_context_list_detailed.append(
+                f"'{num_to_words(atom_node.n)}' ({atom_node.n})"
+            )
+    atomic_inputs_context_str_detailed = (
+        ", ".join(atomic_inputs_context_list_detailed)
+        if atomic_inputs_context_list_detailed
         else "None"
     )
 
-    # --- Build `ultra_strict_instruction` (Writing Guide) for Generator ---
-
-    # Rule 1: Numbers to Weave into THIS Scene's Actions (Atomic Inputs)
-    must_mention_rule_parts = []
+    must_mention_rule_parts_detailed = []
     special_med_input_clarification = ""
-    for atom_obj in direct_atom_children: # Iterate over Atom objects
+    for atom_obj in direct_atom_children:
         atom_word = num_to_words(atom_obj.n)
         atom_digit = atom_obj.n
-        is_problematic_med_input_and_result = False
-        if node.op == "MED" and correct_result is not None and atom_digit == correct_result:
-            is_problematic_med_input_and_result = True
+        is_problematic_med_input = False
+        if (
+            node.op == "MED"
+            and correct_result is not None
+            and atom_digit == correct_result
+        ):
+            is_problematic_med_input = True
+        if is_problematic_med_input:
+            continue
+        must_mention_rule_parts_detailed.append(f"'{atom_word}' ({atom_digit})")
 
-        if is_problematic_med_input_and_result:
-            # This atom is the median result AND an input; it MUST NOT be mentioned.
-            # The clarification note will explain this.
-            continue # Skip adding it to the "must_mention_rule_parts"
-        must_mention_rule_parts.append(f"'{atom_word}' ({atom_digit})")
-
-    must_mention_text = " and ".join(must_mention_rule_parts) if must_mention_rule_parts else "No new numbers to explicitly state in this scene"
-
-    if node.op == "MED" and any(atom_obj.n == correct_result for atom_obj in direct_atom_children if correct_result is not None):
-        # This condition means the median result was among the direct atomic inputs.
+    must_mention_text_detailed = (
+        " and ".join(must_mention_rule_parts_detailed)
+        if must_mention_rule_parts_detailed
+        else "No new numbers to explicitly state"
+    )
+    if node.op == "MED" and any(
+        atom_obj.n == correct_result
+        for atom_obj in direct_atom_children
+        if correct_result is not None
+    ):
         special_med_input_clarification = (
             f" (Important MEDIAN Note: The value '{num_to_words(correct_result)}' ({correct_result}), "
-            f"although technically an input number for this step, is also the median result. Due to critical MEDIAN rules, this specific value "
-            f"MUST NOT be mentioned at all in your narrative. Only mention the *other* new numbers listed above, if any. "
-            f"The detailed task description will guide you on how to handle this special case.)"
+            f"though an input, is also the median result. It MUST NOT be mentioned at all. "
+            f"Only mention the *other* new numbers listed above, if any. See task description.)"
         )
-        if not must_mention_rule_parts: # If all inputs were the median value (e.g. MED [4,4,4] -> 4)
-            must_mention_text = (
-                f"No new numbers to explicitly state (due to special MEDIAN rules where all inputs like '{num_to_words(correct_result)}' ({correct_result}) "
-                f"are also the median result and thus must not be mentioned. See task description.)"
-            )
+        if not must_mention_rule_parts_detailed:
+            must_mention_text_detailed = f"No new numbers to explicitly state (due to special MEDIAN rules where input '{num_to_words(correct_result)}' ({correct_result}) is also the result and must not be mentioned)"
 
-    # Rule 2: Outcome of THIS Scene's Action
     result_handling_rule_text = (
-        f"The numerical result of THIS operation ({op_label}) — which is '{num_to_words(correct_result)}' ({correct_result}) — "
-        f"MUST NOT be explicitly stated in the text (as a word or digit). It must only be implied by the events described. "
-        f"This implied result will be known conceptually as '{current_node_conceptual_name}' for any future story steps that might reference it."
+        f"The numerical result of THIS operation ({op_label}) -- which is '{num_to_words(correct_result)}' ({correct_result}) -- MUST NOT be explicitly stated in the text. "
+        f"It must only be implied by events. This implied result will be known conceptually as '{current_node_conceptual_name}' for future steps."
     )
     if node.op == "MED":
-        result_handling_rule_text += f" ⚠️ CRITICAL MED RULE: For MEDIAN operations, NEVER explicitly write the median value '{num_to_words(correct_result)}' ({correct_result}) anywhere. Focus on implying the concept of '{current_node_conceptual_name}' through descriptions of centrality or balance."
-
-    # Rule 3: Numbers You MAY Use for Flavor
-    temp_phrasing_words_detailed = [f"'{num_to_words(n)}' ({n})" for n in context.config.ALWAYS_ALLOWED_PHRASING_NUMBERS_SET]
-    phrasing_numbers_gen_str_detailed = ", ".join(sorted(temp_phrasing_words_detailed))
-    # --- Calculate forbidden numbers for Python validator ---
-    # This includes:
-    # 1. All atoms introduced in *any* previous beat (context.introduced_atoms)
-    # 2. Results of all *prior distinct operations* that are not direct inputs to *this* operation
-    # 3. The overall_ground_truth_answer, unless this IS the root node (where it's the target)
-    #    or if GT happens to be a current direct atomic input or the current beat's result
-    forbidden_for_current_beat_py_validator = set(context.introduced_atoms)
-    
-    # Add results of *all* OpNodes processed so far that are NOT direct conceptual inputs to this node
-    if context.overall_ast_root is not None:
-        for op_node_id, anchor_name in narrative_anchor_map.items():
-            # Find the node object with safety check
-            processed_op_node = next(
-                (n for n in postorder(context.overall_ast_root) if id(n) == op_node_id),
-                None,
-            )
-            if processed_op_node and processed_op_node.value is not None:
-                # If this processed_op_node's result is NOT a conceptual input to the current `node`
-                is_conceptual_input_to_current = any(
-                    child_op
-                    for child_op in node.children
-                    if isinstance(child_op, OpNode) and id(child_op) == op_node_id
-                )
-                if (
-                    not is_conceptual_input_to_current and processed_op_node != node
-                ):  # Don't forbid current node's own result
-                    forbidden_for_current_beat_py_validator.add(processed_op_node.value)
-    else:
-        logger_obj.warning(
-            "overall_ast_root is None, skipping processing of prior OpNode results"
+        result_handling_rule_text += f" ⚠️ CRITICAL MED RULE: NEVER explicitly write the median value '{num_to_words(correct_result)}' ({correct_result}) anywhere. Imply '{current_node_conceptual_name}' conceptually."
+    elif correct_result is not None and correct_result in direct_atom_values:
+        result_handling_rule_text += (
+            f" (Special Note: The result value '{num_to_words(correct_result)}' ({correct_result}) is also one of your required atomic inputs. "
+            f"While you MUST mention it as an input (Rule 1), ensure your narrative does NOT frame it as the *outcome* of this operation. "
+            f"The outcome '{current_node_conceptual_name}' must still be implied conceptually.)"
         )
-    
-    # Add overall_ground_truth_answer if needed
-    if context.overall_ground_truth_answer is not None:
-        if not is_root:  # If not root, GT is generally forbidden
-            # Unless GT is a direct atomic input for this beat, or the result of this beat
-            if not (
-                context.overall_ground_truth_answer in direct_atom_values
-                or context.overall_ground_truth_answer == correct_result
-            ):
-                forbidden_for_current_beat_py_validator.add(
-                    context.overall_ground_truth_answer
-                )
-    
-    # Remove any numbers that are required_atoms for the current beat from the forbidden list
-    # Also remove the current beat's result if it's on there by mistake
-    forbidden_for_current_beat_py_validator -= direct_atom_values
-    if correct_result is not None:
-        forbidden_for_current_beat_py_validator.discard(correct_result)
 
-    may_use_gen_parts_detailed = [
-        f"small numbers like {phrasing_numbers_gen_str_detailed} for general narrative phrasing (e.g., 'two guards', 'a single path') if they don't conflict with other rules"
+    temp_phrasing_words_detailed_for_rule3 = [
+        f"'{num_to_words(n)}' ({n})"
+        for n in config_obj.ALWAYS_ALLOWED_PHRASING_NUMBERS_SET
     ]
-    # Operand count (arity) allowance - check if arity is forbidden
-    # forbidden_for_current_beat_py_validator is a set of integers.
-    # This set is calculated before the call to _generate_and_llm_validate_beat.
-    # We need to ensure it's available here or recalculate a similar set for this check.
-    # For simplicity, let's assume a basic check here. A more robust check would use the full forbidden set.
-    arity_is_problematic_forbidden = current_op_arity in (forbidden_for_current_beat_py_validator or set()) and \
-        current_op_arity not in context.config.ALWAYS_ALLOWED_PHRASING_NUMBERS_SET
+    phrasing_numbers_gen_str_detailed_for_rule3 = ", ".join(
+        sorted(temp_phrasing_words_detailed_for_rule3)
+    )
+    may_use_gen_parts_detailed = [
+        f"small numbers like {phrasing_numbers_gen_str_detailed_for_rule3} for general narrative phrasing (e.g., 'two guards')"
+    ]
 
+    arity_is_problematic_forbidden = (
+        current_op_arity in forbidden_for_current_beat_py_validator
+        and current_op_arity not in config_obj.ALWAYS_ALLOWED_PHRASING_NUMBERS_SET
+    )
     if current_op_arity > 0:
         if not arity_is_problematic_forbidden:
             may_use_gen_parts_detailed.append(
-                f"the number '{num_to_words(current_op_arity)}' ({current_op_arity}) IF it's genuinely used to count the direct items/inputs involved in THIS specific action and not a forbidden prior result"
+                f"the number '{num_to_words(current_op_arity)}' ({current_op_arity}) IF it's genuinely used to count the items/inputs involved in THIS specific action"
             )
         else:
             may_use_gen_parts_detailed.append(
                 f"the number '{num_to_words(current_op_arity)}' ({current_op_arity}) ONLY if essential for counting and clearly distinct from its forbidden meaning (use with extreme caution or avoid)"
             )
     may_use_gen_clause_content_detailed = "; ".join(may_use_gen_parts_detailed)
-    # gt_counting_caution_for_gen logic (if overall_ground_truth_answer is a small number and also forbidden)
+
     gt_counting_caution_for_gen = ""
-    if context.overall_ground_truth_answer is not None and \
-        context.overall_ground_truth_answer in (forbidden_for_current_beat_py_validator or set()) and \
-        context.config.MIN_ALLOWED_SMALL_NUMBER <= context.overall_ground_truth_answer <= context.config.MAX_ALLOWED_SMALL_NUMBER and \
-        context.overall_ground_truth_answer not in context.config.ALWAYS_ALLOWED_PHRASING_NUMBERS_SET:
+    if (
+        context.overall_ground_truth_answer is not None
+        and context.overall_ground_truth_answer
+        in forbidden_for_current_beat_py_validator
+        and config_obj.MIN_ALLOWED_SMALL_NUMBER
+        <= context.overall_ground_truth_answer
+        <= config_obj.MAX_ALLOWED_SMALL_NUMBER
+        and context.overall_ground_truth_answer
+        not in config_obj.ALWAYS_ALLOWED_PHRASING_NUMBERS_SET
+    ):
         gt_word = num_to_words(context.overall_ground_truth_answer)
         gt_counting_caution_for_gen = (
             f"- Special Caution: The number '{gt_word}' ({context.overall_ground_truth_answer}) is the overall story's final answer and generally forbidden here. "
             f"Avoid using it even for incidental counting unless absolutely unavoidable and clearly unrelated to the final answer.\n"
         )
 
-
-    # Rule 4: Numbers to STRICTLY AVOID Mentioning
-    temp_forbidden_detailed_list = []
-    # forbidden_for_current_beat_py_validator should be calculated based on context.introduced_atoms, prior OpNode results, and GT.
-    # This logic exists in your original code before calling _generate_and_llm_validate_beat.
-    # We need to ensure it's correctly calculated and available here.
-    # For now, assuming forbidden_for_current_beat_py_validator is correctly populated.
-    if forbidden_for_current_beat_py_validator:
-        for n_forbidden in sorted(list(forbidden_for_current_beat_py_validator)):
-            # Do not list numbers that are allowed for phrasing if they happen to be forbidden for other reasons.
-            # The "MAY USE" rule gives them an out if used for phrasing.
-            # However, if a phrasing number is ALSO the current beat's result, it's forbidden by Rule 2.
-            if n_forbidden == correct_result: # If a forbidden number is also the current result, Rule 2's "MUST NOT STATE" is paramount.
-                continue # Rule 2 already covers this.
-            if n_forbidden in context.config.ALWAYS_ALLOWED_PHRASING_NUMBERS_SET and n_forbidden != current_op_arity :
-                # If it's an allowed phrasing number (and not arity, which has its own condition),
-                # it's covered by "MAY USE". Don't list as "STRICTLY FORBIDDEN" if its only forbidden aspect
-                # was being a prior result but it's now allowed for phrasing.
-                # This is tricky. The intent is: if it's a prior result, it's generally forbidden.
-                # But if that prior result value (e.g., 2) is now needed for phrasing ("two guards"), it's okay.
-                # The "STRICTLY FORBIDDEN" list should primarily be for numbers that have no valid use in this beat.
-                pass # Let "MAY USE" handle these.
-            else:
-                temp_forbidden_detailed_list.append(f"'{num_to_words(n_forbidden)}' ({n_forbidden})")
-
+    temp_forbidden_detailed_list_for_rule4 = []
+    for n_forbidden in sorted(
+        list(forbidden_for_current_beat_py_validator)
+    ):
+        temp_forbidden_detailed_list_for_rule4.append(
+            f"'{num_to_words(n_forbidden)}' ({n_forbidden})"
+        )
     must_avoid_str_for_generator_prompt_detailed = (
-        ", ".join(temp_forbidden_detailed_list)
-        if temp_forbidden_detailed_list
+        ", ".join(temp_forbidden_detailed_list_for_rule4)
+        if temp_forbidden_detailed_list_for_rule4
         else "None specifically (beyond the general rule against unlisted numbers and unstated results)"
     )
 
-    # Rule 5: ABSOLUTELY NO OTHER NUMBERS
     no_other_numbers_rule_text = "Do not introduce any other numerical values (digits or words) beyond those explicitly covered by rules 1-4 above. No intermediate sums or calculations should be shown."
 
-    # Rule 6: Referring to Prior Results (Conceptual Inputs)
     prior_results_handling_rule = ""
     if child_conceptual_names_list:
-        prior_results_names_str = ", ".join([f"'{name}'" for name in child_conceptual_names_list])
+        prior_results_names_str_for_rule6 = ", ".join(
+            [f"'{name}'" for name in child_conceptual_names_list]
+        )
         prior_results_handling_rule = (
             f"6.  **Referring to Quantities from Previous Events:** When your story needs to mention quantities that resulted from previous events/calculations "
-            f"(which are conceptually known as {prior_results_names_str}), "
+            f"(which are conceptually known as {prior_results_names_str_for_rule6}), "
             f"you MUST use these exact conceptual names/phrases. DO NOT state the underlying numerical values these concepts represent, even if those values were provided for your context in the 'Background' section. "
             f"For example, if a prior step resulted in 'The Dragon's Hoard' (representing 500 coins), refer to it only as 'The Dragon's Hoard', not '500 coins'.\n"
         )
@@ -3625,7 +3350,7 @@ def _generate_narrative_recursive(
     ultra_strict_instruction = (
         f"**ULTRA-STRICT NUMBER RULES FOR THIS SCENE (Your Writing Guide):**\n"
         f"As the storyteller, your main goal is to weave a compelling scene. However, for this specific task, you must precisely control how numbers are mentioned:\n\n"
-        f"1.  **Numbers to Weave into THIS Scene's Actions (as words, e.g., 'seven'):** {must_mention_text}{special_med_input_clarification}\n"
+        f"1.  **Numbers to Weave into THIS Scene's Actions (as words, e.g., 'seven'):** {must_mention_text_detailed}{special_med_input_clarification}\n"
         f"2.  **Outcome of THIS Scene's Action:** {result_handling_rule_text}\n"
         f"3.  **Numbers You MAY Use for Flavor (if needed, as words):** {may_use_gen_clause_content_detailed}\n"
         f"{gt_counting_caution_for_gen.rstrip() + ('\\n' if gt_counting_caution_for_gen.strip() else '')}"
@@ -3635,39 +3360,63 @@ def _generate_narrative_recursive(
         f"Focus on clear storytelling that naturally implies the calculations based on these strict number rules."
     )
 
-    # --- Build `action_description` for Generator ---
     primary_object = world["object"]
-    safe_primary_object_for_fstring = str(primary_object).replace("{", "{{").replace("}", "}}")
-    conceptual_input_names_only_list_for_action = [f"'{name}'" for name in child_conceptual_names_list]
-    conceptual_input_names_only_str_for_action = ", ".join(conceptual_input_names_only_list_for_action) if conceptual_input_names_only_list_for_action else "no prior calculated quantities"
+    safe_primary_object_for_fstring = (
+        str(primary_object).replace("{", "{{").replace("}", "}}")
+    )
+
+    conceptual_input_names_only_list_for_action = [
+        f"'{name}'" for name in child_conceptual_names_list
+    ]
+    conceptual_input_names_only_str_for_action = (
+        ", ".join(conceptual_input_names_only_list_for_action)
+        if conceptual_input_names_only_list_for_action
+        else "no prior calculated quantities"
+    )
 
     action_description_parts = [
         f"Your task is to write a scene where the characters engage in an activity that mirrors the '{op_label}' operation. This activity involves:"
     ]
-    if child_conceptual_names_list: # If there are inputs from prior operations
+    if child_conceptual_names_list:
         action_description_parts.append(
-            f"  - Using or considering quantities from previous story events. These are conceptually known as {conceptual_input_names_only_str_for_action}."
-            f" (Remember: In your narrative, refer to these using ONLY these conceptual names/phrases, NOT their underlying numerical values which were provided in the 'Background' section for your context only)."
+            f"  - Using or considering quantities from previous story events, which are conceptually known as {conceptual_input_names_only_str_for_action}."
+            f" (Remember: In your narrative, refer to these using ONLY these conceptual names, NOT their underlying numbers which were provided in the 'Background' section for your context only)."
         )
-    if direct_atom_children: # If there are new numbers introduced in this step
+    if direct_atom_children:
         action_description_parts.append(
-            f"  - Introducing or encountering new specific numbers relevant to this action: {atomic_inputs_context_str}." # atomic_inputs_context_str has 'word' (digit)
+            f"  - Introducing or encountering new specific numbers relevant to this action: {atomic_inputs_context_str_detailed}."
         )
-    if not child_conceptual_names_list and not direct_atom_children: # Unlikely for ListOps, but good to cover
+
+    if node.op == "SUM" and child_conceptual_names_list:
+        action_description_parts.append(
+            f"  - For this SUM operation, your narrative must clearly show that the quantity/quantities represented by {conceptual_input_names_only_str_for_action} are being directly combined or added together with any new numbers ({atomic_inputs_context_str_detailed if direct_atom_children else 'if any'})."
+        )
+    elif not child_conceptual_names_list and not direct_atom_children:
         action_description_parts.append(
             f"  - This action seems to operate without specific numerical inputs or prior results, perhaps establishing an initial state or a count of zero (if applicable and allowed by rules)."
         )
-
 
     action_description_parts.append(
         f"\nThe outcome of this action should lead to a new understanding or quantity, which will be conceptually known as '{current_node_conceptual_name}'. "
         f"This concept ('{current_node_conceptual_name}') corresponds to the numerical value {correct_result} ('{num_to_words(correct_result)}')."
     )
     action_description_parts.append(
-        f"CRITICAL: Your narrative MUST NOT explicitly state the number '{num_to_words(correct_result)}' ({correct_result}). "
+        f"CRITICAL: Your narrative MUST NOT explicitly state the number '{num_to_words(correct_result)}' ({correct_result}) AS THE RESULT of this operation. "
         f"Instead, the story should imply this outcome through the characters' actions, discoveries, or the state of the '{safe_primary_object_for_fstring}', "
-        f"so that '{current_node_conceptual_name}' becomes the way to think about this new state/quantity."
+        f"so that '{current_node_conceptual_name}' becomes the way to think about this new state."
     )
+
+    if (
+        node.op != "MED"
+        and correct_result is not None
+        and correct_result in direct_atom_values
+    ):
+        action_description_parts.append(
+            f"IMPORTANT NARRATIVE CHALLENGE: The numerical value of this operation's outcome ('{num_to_words(correct_result)}') is ALSO one of the numbers you need to mention as an input. "
+            f"Your story must carefully distinguish its role. Mention '{num_to_words(correct_result)}' ({correct_result}) when describing the initial items/quantities. "
+            f"However, when describing the *result* of the operation, you must only imply it conceptually as '{current_node_conceptual_name}' and NOT restate '{num_to_words(correct_result)}' as the outcome."
+        )
+
     action_description_parts.append(
         f"All numbers that ARE explicitly mentioned (only those listed in Rule 1 of your Writing Guide) must be written as words (e.g., 'seven' not '7')."
     )
@@ -3678,173 +3427,206 @@ def _generate_narrative_recursive(
             f"\n**Special Instructions for this MEDIAN Scene:** "
             f"To imply the median (conceptually '{current_node_conceptual_name}') without stating its number ('{num_to_words(correct_result)}'), "
             f"describe characters identifying a 'central element', 'balancing point', or 'middle value' from the available items/numbers. "
-            f"DO NOT use the word '{num_to_words(correct_result)}' or the digit '{correct_result}' anywhere in your narrative."
+            f"DO NOT use the word '{num_to_words(correct_result)}' or the digit '{correct_result}' anywhere."
         )
         if is_median_also_input:
             action_description_parts.append(
-                f"  ⚠️ VERY IMPORTANT: The number '{num_to_words(correct_result)}' ({correct_result}) is both the median outcome AND one of the initial numbers involved in this step. "
+                f"  ⚠️ VERY IMPORTANT: The number '{num_to_words(correct_result)}' ({correct_result}) is both the median outcome AND one of the initial numbers involved. "
                 f"Because of this, you MUST NOT mention '{num_to_words(correct_result)}' ({correct_result}) AT ALL in this scene, not even when listing the initial numbers. "
-                f"Your Writing Guide (Rule 1) has been adjusted to reflect this; describe the set of initial numbers by listing only the *other* numbers and referring to this specific one indirectly if absolutely necessary (e.g., '...and one particular item whose nature was central...'), or better yet, focus only on the other inputs."
+                f"Describe the set of initial numbers by listing the *other* numbers and referring to this specific one indirectly (e.g., '...and one particular item whose nature was central...'). Your Writing Guide (Rule 1) has been adjusted for this."
             )
     elif node.op == "SM":
         action_description_parts.append(
             f"\n**Special Instructions for this SUM MODULO 10 Scene:** "
-            f"The characters' actions should represent combining all involved quantities (the new numbers for this step: {atomic_inputs_context_str}; and any prior results referred to by their conceptual names: {conceptual_input_names_only_str_for_action}) "
+            f"The characters' actions should represent combining all involved quantities (the new numbers: {atomic_inputs_context_str_detailed if direct_atom_children else 'none'}; and any prior results referred to by their conceptual names: {conceptual_input_names_only_str_for_action}) "
             f"and then finding a core essence or pattern related to this total, equivalent to taking the sum modulo 10. "
-            f"Remember to refer to prior results using ONLY their conceptual names. Do not state any intermediate sums. "
+            f"Remember to refer to prior results using ONLY their conceptual names. No intermediate sums should be stated. "
             f"The final conceptual outcome is '{current_node_conceptual_name}' (representing '{num_to_words(correct_result)}' ({correct_result})), which must be implied, not stated numerically."
         )
     action_description = "\n".join(action_description_parts)
 
-    # --- Prepare `initial_user_message_for_generator` ---
-    context_snippet = clean_snippet(context.last_scene_text, max_len=context.config.BEAT_CONTEXT)
+    context_snippet = clean_snippet(
+        context.last_scene_text, max_len=config_obj.BEAT_CONTEXT
+    )
 
-    initial_user_message_for_generator = (
+    initial_user_message_parts = [
         f"Story Scene Task: Create the narrative for the step resulting in '{current_node_conceptual_name}' (Scene {context.beat_counter['current']}/{context.beat_counter['total']})\n\n"
         f"**Background for Your Scene (Context for you, the writer - follow strict rules below for what appears in the story):**\n"
         f"- Genre: {world.get('genre', 'N/A')}\n"
         f"- Setting: {world.get('setting', 'N/A')}\n"
         f"- Central Items in the Story: {primary_object}\n"
-        f"- Quantities from Previous Events (Conceptual Names & their values for your understanding): {conceptual_inputs_context_str}\n"
-        f"- New Numbers Introduced in this Scene (Values for your understanding): {atomic_inputs_context_str}\n\n"
+        f"- Quantities from Previous Events (Conceptual Names & their values for your understanding - DO NOT use these values in the story): {conceptual_inputs_context_str}\n"
+        f"- New Numbers Introduced in this Scene (Values for your understanding - Use word form in story): {atomic_inputs_context_str_detailed}\n\n"
         f"**Your Scene's Core Action & Narrative Goal (Follow this closely):**\n{action_description}\n\n"
-        f"{ultra_strict_instruction}\n\n" # This is the "Writing Guide"
-        f"**Continue From (End of last scene):**\n\"...{context_snippet}...\"\n\n"
-        f"**Your Response:**\nWrite ONLY the narrative text for this new scene, continuing smoothly. Do not add titles, notes, or anything outside the story itself."
-    )
+        f"{ultra_strict_instruction}\n\n"
+    ]
 
-    # --- Python Strict Validator Setup ---
-    # Ensure forbidden_for_current_beat_py_validator is correctly calculated before this point.
-    # This involves context.introduced_atoms, results of *all* prior OpNodes not direct inputs here,
-    # and overall_ground_truth_answer (conditionally).
-    # This logic should be robust from your existing setup.
-    py_validator_enforce_result_presence = False # Always implicit for all operations
+    if node.op == "MED" and config_obj.FEW_SHOT_EXAMPLES > 0:
+        curated_median_examples_indices = []
+        if len(FEW_SHOT_EXAMPLES_STRICT) > 1:
+            curated_median_examples_indices.append(1)
+        if len(FEW_SHOT_EXAMPLES_STRICT) > 2:
+            curated_median_examples_indices.append(2)
+        
+        indices_to_use = curated_median_examples_indices[:config_obj.FEW_SHOT_EXAMPLES]
+        examples_to_actually_use = [FEW_SHOT_EXAMPLES_STRICT[i] for i in indices_to_use]
+
+        if examples_to_actually_use:
+            few_shot_section = ["--- CRITICAL FEW-SHOT EXAMPLES FOR MEDIAN OPERATIONS ---"]
+            few_shot_section.append(
+                "These examples illustrate how to handle the strict numerical rules when the operation is MEDIAN. Pay close attention to how input numbers are mentioned (or not mentioned if they are the median value) and how the result is implied.\n"
+            )
+
+            for ex_idx, (example_rules_text, good_narrative, bad_narrative, bad_reasoning) in enumerate(examples_to_actually_use):
+                why_good_text = "This example correctly follows the MEDIAN rules by mentioning necessary inputs (excluding the median value itself if it was an input that was also the median) and implying the median result conceptually without stating its numerical value."
+                if "eighty-nine" in example_rules_text and "seventy-two" in example_rules_text:
+                    why_good_text = "This example succeeds. The example's rules state inputs include 'seventy-two, eighty-four, eighty-nine, ninety-one, and ninety-five' and the median is 'eighty-nine'. Because 'eighty-nine' is an input AND the median value, the good narrative correctly OMITS 'eighty-nine' from the mentioned numbers. It mentions the other inputs (72, 84, 91, 95). The median result ('eighty-nine') is only implied conceptually as 'the balanced keystone'. This demonstrates the critical MEDIAN rule: if an input is also the median, that input number is NOT stated."
+                elif "eighty-seven" in example_rules_text and "seventy-three" in example_rules_text:
+                    why_good_text = "This example also succeeds. The example's rules state inputs include 'seventy-three, eighty-five, eighty-seven, eighty-eight, eighty-nine, ninety-one' and the median is 'eighty-seven'. Because 'eighty-seven' is an input AND the median value, the good narrative correctly OMITS 'eighty-seven' from the mentioned numbers. It mentions the other inputs (73, 85, 88, 89, 91). The median result ('eighty-seven') is only implied conceptually. This again demonstrates the critical MEDIAN rule."
+
+                few_shot_section.append(f"**EXAMPLE {ex_idx + 1} RULES (from a hypothetical different problem):**\n{example_rules_text.replace('\\\\n', '\\n')}\n")
+                few_shot_section.append(f"**EXAMPLE {ex_idx + 1} GOOD NARRATIVE:**\n{good_narrative}\n")
+                few_shot_section.append(f"**WHY GOOD:**\n{why_good_text}\n")
+                few_shot_section.append(f"**EXAMPLE {ex_idx + 1} BAD NARRATIVE:**\n{bad_narrative}\n")
+                few_shot_section.append(f"**WHY BAD (Reason for failure):**\n{bad_reasoning}\n")
+            
+            few_shot_section.append("**REMEMBER THE CRITICAL MEDIAN RULE FOR *YOUR* CURRENT TASK:**")
+            few_shot_section.append(
+                "For MEDIAN operations, the median value itself must NEVER appear explicitly in the text. If an atomic input number for *your current task* happens to BE the median value, that specific input number must ALSO NOT be mentioned. Refer to your 'ULTRA-STRICT NUMBER RULES' section in the main prompt for the specific numbers and rules for *your current scene*.\n"
+            )
+            initial_user_message_parts.append("\n".join(few_shot_section))
+            logger_obj.info(
+                f"Added {len(examples_to_actually_use)} MEDIAN-specific few-shot examples to the initial generator prompt for Op: {node.op}."
+            )
+
+    initial_user_message_parts.append(f'**Continue From (End of last scene):**\n"...{context_snippet}..."\n\n')
+    initial_user_message_parts.append(f"**Your Response:**\nWrite ONLY the narrative text for this new scene, continuing smoothly. Do not add titles, notes, or anything outside the story itself.")
+    
+    initial_user_message_for_generator = "".join(initial_user_message_parts)
+
+    py_validator_enforce_result_presence = False
     validate_beat_numbers = make_number_validator(
-        allowed_atoms=direct_atom_values, # Set of current beat's atomic input integers
-        forbidden_atoms=forbidden_for_current_beat_py_validator, # Set of forbidden integers
+        allowed_atoms=direct_atom_values,
+        forbidden_atoms=forbidden_for_current_beat_py_validator,
         operand_count=current_op_arity,
-        correct_result_for_beat=correct_result, # Integer result of current beat
-        enforce_result_presence=py_validator_enforce_result_presence, # Always False
+        correct_result_for_beat=correct_result,
+        enforce_result_presence=py_validator_enforce_result_presence,
         operation_type=node.op,
         overall_ground_truth_answer=context.overall_ground_truth_answer,
         is_root_node_being_validated=is_root,
-        config_obj=context.config,
+        conceptual_input_values=set(
+            child_op_node_results_as_conceptual_inputs.values()
+        ),
+        config_obj=config_obj,
         logger_obj=logger_obj,
     )
 
-    # --- Call Iterative LLM Validation Loop ---
     system_prompt_for_generator = (
-        f"You are a master {world.get('genre', 'Fantasy')} storyteller. Your task is to write a single, coherent scene that contributes to an ongoing story. "
-        f"Focus solely on advancing the tale as specified in the user's message. Do not include explanations, titles, or any analysis outside the narrative itself. "
-        f"The story involves events that correspond to calculations. Pay extremely careful attention to the detailed 'ULTRA-STRICT NUMBER RULES (Your Writing Guide)' provided. Produce ONLY clean narrative text."
+        f"You are a master {world.get('genre', 'Fantasy')} storyteller crafting a narrative. Your task is to write a single scene contributing to an ongoing story. "
+        f"Focus solely on advancing the tale as specified. Do not include explanations or analysis. "
+        f"The story involves mathematical operations via narrative actions. Pay extremely careful attention to the detailed 'ULTRA-STRICT NUMBER RULES (Your Writing Guide)' provided. Produce ONLY clean narrative text."
     )
-    current_max_beat_completion_tokens = context.config.BEAT_MAX_TOKENS
+    current_max_beat_completion_tokens = config_obj.BEAT_MAX_TOKENS
     beat_text_final_validated = None
 
-    # Prepare inputs for the _generate_and_llm_validate_beat function
-    # These are for the VALIDATOR'S context and rules.
-    llm_val_conceptual_input_names_only = ( # Pass only names of conceptual inputs
+    llm_val_conceptual_input_names_only = (
         ", ".join([f"'{name_val}'" for name_val in child_conceptual_names_list])
         if child_conceptual_names_list
         else "None"
     )
-    llm_val_atomic_inputs_detailed = atomic_inputs_context_str # Pass 'word (digit)' string
-
-    llm_val_expected_beat_result_detailed = "N/A"
+    llm_val_atomic_inputs_detailed_for_validator = atomic_inputs_context_str_detailed
+    llm_val_expected_beat_result_detailed_for_validator = "N/A"
     if correct_result is not None:
-        llm_val_expected_beat_result_detailed = f"'{num_to_words(correct_result)}' ({correct_result})"
+        llm_val_expected_beat_result_detailed_for_validator = (
+            f"'{num_to_words(correct_result)}' ({correct_result})"
+        )
 
-    for attempt_outer in range(1, context.config.MAX_BEAT_RETRIES + 1):
+    for attempt_outer in range(1, config_obj.MAX_BEAT_RETRIES + 1):
         logger_obj.info(
-            f"[Sample {context.sample_index+1}, Beat Op: {node.op}, Result Concept: '{current_node_conceptual_name}'] Outer Beat Gen Attempt: {attempt_outer}/{context.config.MAX_BEAT_RETRIES}"
+            f"[Sample {context.sample_index+1}, Beat Op: {node.op}, Result Concept: '{current_node_conceptual_name}'] Outer Beat Gen Attempt: {attempt_outer}/{config_obj.MAX_BEAT_RETRIES}"
         )
         llm_validated_beat_text = _generate_and_llm_validate_beat(
             original_user_message_for_generator=initial_user_message_for_generator,
             system_prompt_for_generator=system_prompt_for_generator,
             world_info=world,
-            current_op_node=node, # Pass the OpNode object
-            # For LLM Validator prompt context:
+            current_op_node=node,
             conceptual_inputs_str_for_llm_validator=llm_val_conceptual_input_names_only,
-            atomic_inputs_words_str_for_llm_validator=llm_val_atomic_inputs_detailed,
-            action_description_for_llm_validator=action_description, # Pass the full generator action description
-            expected_beat_result_words_for_llm_validator=llm_val_expected_beat_result_detailed,
-            ultra_strict_instruction_for_llm_validator_context=ultra_strict_instruction, # Pass the full generator rules
-            # Other params:
+            atomic_inputs_words_str_for_llm_validator=llm_val_atomic_inputs_detailed_for_validator,
+            action_description_for_llm_validator=action_description,
+            expected_beat_result_words_for_llm_validator=llm_val_expected_beat_result_detailed_for_validator,
+            ultra_strict_instruction_for_llm_validator_context=ultra_strict_instruction,
             current_max_beat_completion_tokens=current_max_beat_completion_tokens,
             sample_index=context.sample_index,
-            context_config=context.config,
+            context_config=config_obj,
             logger_obj=logger_obj,
             encoder_obj=encoder,
             is_current_beat_root_node=is_root,
-            overall_ground_truth_answer_val=context.overall_ground_truth_answer, # int
-            primary_object_name=primary_object, # string
-            forbidden_prior_results_and_gt_for_llm_validator=forbidden_for_current_beat_py_validator, # Set[int]
-            correct_result_val=correct_result, # int
-            direct_atom_values_val=direct_atom_values, # Set[int]
+            overall_ground_truth_answer_val=context.overall_ground_truth_answer,
+            primary_object_name=primary_object,
+            forbidden_prior_results_and_gt_for_llm_validator=forbidden_for_current_beat_py_validator,
+            correct_result_val=correct_result,
+            direct_atom_values_val=direct_atom_values,
         )
 
         if llm_validated_beat_text:
-            if validate_beat_numbers(llm_validated_beat_text): # Python strict validation
+            if validate_beat_numbers(llm_validated_beat_text):
                 beat_text_final_validated = llm_validated_beat_text
                 logger_obj.info(
                     f"[Sample {context.sample_index+1}, Beat Op: {node.op}] Python validator PASSED LLM-validated beat."
                 )
-                break # Success for this beat
+                break
             else:
                 logger_obj.warning(
-                    f"[Sample {context.sample_index+1}, Beat Op: {node.op}] Python validator FAILED for LLM-validated beat. Outer attempt {attempt_outer} failed. Will retry outer loop."
+                    f"[Sample {context.sample_index+1}, Beat Op: {node.op}] Python validator FAILED for LLM-validated beat. Outer attempt {attempt_outer} failed."
                 )
-                # _log_failed_validation is called inside make_number_validator
         else:
             logger_obj.warning(
-                f"[Sample {context.sample_index+1}, Beat Op: {node.op}] Iterative LLM validation loop returned None. Outer attempt {attempt_outer} failed. Will retry outer loop."
+                f"[Sample {context.sample_index+1}, Beat Op: {node.op}] Iterative LLM validation loop returned None. Outer attempt {attempt_outer} failed."
             )
 
-        if attempt_outer < context.config.MAX_BEAT_RETRIES:
-            time.sleep(context.config.RETRY_INITIAL_DELAY * (2 ** (attempt_outer - 1)))
+        if attempt_outer < config_obj.MAX_BEAT_RETRIES:
+            time.sleep(
+                config_obj.RETRY_INITIAL_DELAY * (2 ** (attempt_outer - 1))
+            )
 
     if not beat_text_final_validated:
         logger_obj.error(
-            f"Operator {node.op} (Result Concept: '{current_node_conceptual_name}') failed after {context.config.MAX_BEAT_RETRIES} outer attempts (incl. LLM validation loops). Aborting narrative generation for this sample."
+            f"Operator {node.op} (Result Concept: '{current_node_conceptual_name}') failed after {config_obj.MAX_BEAT_RETRIES} outer attempts (incl. LLM validation loops). Aborting narrative generation for this sample."
         )
         raise BeatGenerationError(
             f"Failed to generate narrative beat for operator {node.op} (Result Concept: '{current_node_conceptual_name}') after all outer retries."
         )
 
-    # --- Process successful beat ---
     beat_text = beat_text_final_validated
     btoks = len(encoder.encode(beat_text))
     context.scenes.append(beat_text)
     context.tokens_used += btoks
     context.last_scene_text = beat_text
-    context.introduced_atoms.update(direct_atom_values) # Add only current beat's direct atomic inputs
+    context.introduced_atoms.update(direct_atom_values)
     logger_obj.debug(
         f"Beat {context.beat_counter['current']} for Op {node.op} successful. Introduced atoms updated with current beat's direct atoms: {direct_atom_values}"
     )
-    logger_obj.debug(f"Total introduced atoms so far: {context.introduced_atoms}")
 
-
-    # --- Padding Logic ---
     if not is_root:
-        # Calculate forbidden numbers for this specific padding slot
-        forbidden_for_padding_slot = set(context.introduced_atoms) # All atoms mentioned so far
-        if correct_result is not None: # Current beat's result (which was implicit)
+        forbidden_for_padding_slot = set(context.introduced_atoms)
+        if correct_result is not None:
             forbidden_for_padding_slot.add(correct_result)
-        if context.overall_ground_truth_answer is not None: # Overall final answer
+        if context.overall_ground_truth_answer is not None:
             forbidden_for_padding_slot.add(context.overall_ground_truth_answer)
 
         validate_padding = make_number_validator(
-            allowed_atoms=set(), # Padding should introduce no new required numbers
+            allowed_atoms=set(),
             forbidden_atoms=forbidden_for_padding_slot,
-            operand_count=0, # No operation in padding
-            correct_result_for_beat=None, # No result in padding
-            strict_zero=True, # Aim for zero numbers, or only very limited phrasing
+            operand_count=0,
+            correct_result_for_beat=None,
+            strict_zero=True,
             enforce_result_presence=False,
             operation_type="PADDING",
             overall_ground_truth_answer=context.overall_ground_truth_answer,
-            is_root_node_being_validated=False, # Padding is not a root node
-            config_obj=context.config,
-            logger_obj=context.logger,
+            is_root_node_being_validated=False,
+            conceptual_input_values=None,
+            config_obj=config_obj,
+            logger_obj=logger_obj,
         )
 
         current_padding_total_overall = context.padding_stats["total_padding_tokens"]
@@ -3852,36 +3634,52 @@ def _generate_narrative_recursive(
         padding_budget_this_slot = context.padding_stats["padding_per_slot"]
         padding_tokens_added_this_slot = 0
         local_padding_segments_added_this_slot = 0
-        padding_termination_reason = "Loop completed (max segments or slot budget likely met)."
+        padding_termination_reason = (
+            "Loop completed (max segments or slot budget likely met)."
+        )
 
         logger_obj.info(
             f"PADDING SLOT INIT [After Op: {node.op}, Result Concept: '{current_node_conceptual_name}']: Slot Budget: {padding_budget_this_slot if padding_budget_this_slot > 0 else 'N/A'}, Overall Budget Rem: {max_padding_allowed_overall - current_padding_total_overall}."
         )
 
-        if padding_budget_this_slot > 0: # Only add padding if there's a budget for this slot
-            for _ in range(context.max_pad_paragraphs): # Loop up to max allowed padding paragraphs per slot
-                if not (context.tokens_used < context.config.MAX_TOTAL_TOKENS - context.config.MAX_TOKENS_BUFFER and \
-                        current_padding_total_overall < max_padding_allowed_overall and \
-                        padding_tokens_added_this_slot < padding_budget_this_slot):
-                    padding_termination_reason = "Budget met (overall total, overall padding, or slot padding)."
+        if padding_budget_this_slot > 0:
+            for _ in range(
+                context.max_pad_paragraphs
+            ):
+                if not (
+                    context.tokens_used
+                    < config_obj.MAX_TOTAL_TOKENS - config_obj.MAX_TOKENS_BUFFER
+                    and current_padding_total_overall < max_padding_allowed_overall
+                    and padding_tokens_added_this_slot < padding_budget_this_slot
+                ):
+                    padding_termination_reason = (
+                        "Budget met (overall total, overall padding, or slot padding)."
+                    )
                     break
 
-                estimated_next_padding_segment_cost = context.config.PADDING_MAX_TOKENS + (context.config.MAX_TOKENS_BUFFER // 5)
-                if padding_tokens_added_this_slot + estimated_next_padding_segment_cost > padding_budget_this_slot:
+                estimated_next_padding_segment_cost = config_obj.PADDING_MAX_TOKENS + (
+                    config_obj.MAX_TOKENS_BUFFER // 5
+                )
+                if (
+                    padding_tokens_added_this_slot + estimated_next_padding_segment_cost
+                    > padding_budget_this_slot
+                ):
                     padding_termination_reason = f"Slot budget would be exceeded (est. {padding_tokens_added_this_slot + estimated_next_padding_segment_cost}/{padding_budget_this_slot})"
                     break
                 if would_exceed_budget(
                     context.tokens_used,
-                    context.config.PADDING_MAX_TOKENS, # Max potential cost of one padding segment
-                    context.config.MAX_TOTAL_TOKENS,
-                    context.config.MAX_TOKENS_BUFFER,
+                    config_obj.PADDING_MAX_TOKENS,
+                    config_obj.MAX_TOTAL_TOKENS,
+                    config_obj.MAX_TOKENS_BUFFER,
                 ):
-                    padding_termination_reason = "Overall token budget would be exceeded (pre-gen check)."
+                    padding_termination_reason = (
+                        "Overall token budget would be exceeded (pre-gen check)."
+                    )
                     break
 
                 padding_system_prompt = "You are a concise storyteller, skilled at adding brief, atmospheric paragraphs that bridge scenes without introducing new numbers or calculations."
                 cleaned_snippet_padding = clean_snippet(
-                    context.last_scene_text, max_len=context.config.PADDING_CONTEXT
+                    context.last_scene_text, max_len=config_obj.PADDING_CONTEXT
                 )
                 padding_user_prompt = (
                     f"The story is set in a {context.world.get('genre', 'mysterious world')} ({context.world.get('setting', 'unknown location')}).\n"
@@ -3896,48 +3694,658 @@ def _generate_narrative_recursive(
                 padding_text = generate_with_retry(
                     padding_system_prompt,
                     padding_user_prompt,
-                    context.config.PADDING_MAX_TOKENS,
-                    validate_padding, # Use the specifically created validator for this padding slot
-                    context.config.MAX_PAD_RETRIES,
+                    config_obj.PADDING_MAX_TOKENS,
+                    validate_padding,
+                    config_obj.MAX_PAD_RETRIES,
                     context.sample_index,
-                    context.config.CREATIVE_NARRATIVE_TEMP,
+                    config_obj.CREATIVE_NARRATIVE_TEMP,
                     {"exclude": True},
                 )
 
                 if padding_text:
                     ptoks = len(encoder.encode(padding_text))
-                    if not (context.tokens_used + ptoks <= context.config.MAX_TOTAL_TOKENS - context.config.MAX_TOKENS_BUFFER):
+                    if not (
+                        context.tokens_used + ptoks
+                        <= config_obj.MAX_TOTAL_TOKENS - config_obj.MAX_TOKENS_BUFFER
+                    ):
                         padding_termination_reason = "Overall total token limit would be exceeded by actual padding tokens."
                         break
-                    if not (current_padding_total_overall + ptoks <= max_padding_allowed_overall):
-                        padding_termination_reason = "Overall padding token limit would be exceeded."
+                    if not (
+                        current_padding_total_overall + ptoks
+                        <= max_padding_allowed_overall
+                    ):
+                        padding_termination_reason = (
+                            "Overall padding token limit would be exceeded."
+                        )
                         break
-                    if not (padding_tokens_added_this_slot + ptoks <= padding_budget_this_slot):
-                        padding_termination_reason = "Padding slot budget would be exceeded."
+                    if not (
+                        padding_tokens_added_this_slot + ptoks
+                        <= padding_budget_this_slot
+                    ):
+                        padding_termination_reason = (
+                            "Padding slot budget would be exceeded."
+                        )
                         break
 
                     local_padding_segments_added_this_slot += 1
                     context.scenes.append(padding_text)
                     context.tokens_used += ptoks
-                    context.last_scene_text = padding_text # Update last scene text for next potential padding or beat
+                    context.last_scene_text = padding_text
                     context.padding_stats["total_padding_tokens"] += ptoks
-                    current_padding_total_overall = context.padding_stats["total_padding_tokens"]
+                    current_padding_total_overall = context.padding_stats[
+                        "total_padding_tokens"
+                    ]
                     context.padding_stats["padding_segments_added"] += 1
                     padding_tokens_added_this_slot += ptoks
                 else:
-                    padding_termination_reason = "Padding generation or validation failed for this segment."
-                    break # Stop trying to add padding in this slot if one segment fails
+                    padding_termination_reason = (
+                        "Padding generation or validation failed for this segment."
+                    )
+                    break
 
             if local_padding_segments_added_this_slot > 0:
                 logger_obj.info(
                     f"PADDING SLOT SUMMARY [After Op: {node.op}, Result Concept: '{current_node_conceptual_name}']: Added {local_padding_segments_added_this_slot} segments, using {padding_tokens_added_this_slot}/{padding_budget_this_slot} tokens. Termination Reason: {padding_termination_reason}."
                 )
-            elif padding_budget_this_slot > 0 : # Log only if padding was attempted for this slot
-                 logger_obj.info(
+            elif padding_budget_this_slot > 0:
+                logger_obj.info(
                     f"PADDING SLOT SUMMARY [After Op: {node.op}, Result Concept: '{current_node_conceptual_name}']: No padding segments added. Termination Reason: {padding_termination_reason}."
                 )
 
-    logger_obj.debug(f"Exiting _generate_narrative_recursive for Op {op_for_log} ('{current_node_conceptual_name}'). Total tokens used: {context.tokens_used}")
+    logger_obj.debug(
+        f"Exiting _generate_narrative_recursive for Op {op_for_log} ('{current_node_conceptual_name}'). Total tokens used: {context.tokens_used}"
+    )
+
+
+# --- Main Narrative Generation Function ---
+def generate_narrative(
+    ast: Node,
+    world: dict,
+    config: Config, # Note: this is the global config object, not context.config
+    encoder, # Global encoder
+    p_inflect, # Global p_inflect
+    logger, # Global logger
+    sample_index: int,
+    overall_ground_truth_answer: int,
+) -> GenerationContext | None: # Return GenerationContext or None
+    """
+    Generate a structured narrative representation of the AST.
+    Each operation is represented by a scene, carefully sequenced with
+    intermediate node anchor names. Uses STRICT recursive generation.
+    """
+    logger.info(f"[Sample {sample_index + 1}] Starting narrative generation.")
+    logger.debug(f"DEBUG: Using model: {MODEL}") # Uses global MODEL
+    logger.debug(f"DEBUG: AST: {ast_to_prefix(ast)}")
+
+    # --- Initial Setup ---
+    # all_operator_nodes = [node_iter for node_iter in postorder(ast) if not isinstance(node_iter, Atom)] # Corrected variable name
+    all_atoms = set()
+    for node_iter in postorder(ast): # Corrected variable name
+        if isinstance(node_iter, Atom):
+            all_atoms.add(node_iter.n)
+    logger.debug(f"DEBUG: All atoms in AST: {sorted(list(all_atoms))}")
+    logger.debug(
+        f"DEBUG: Overall ground truth (final answer): {overall_ground_truth_answer}"
+    )
+
+    operator_nodes_for_anchor_gen = [] # Used to collect nodes for anchor generation and logging
+    narrative_anchor_map = {}
+    # intro_text = None # Defined later
+    scenes = []
+    tokens_used = 0
+
+    # --- Generate narrative anchors for op nodes ---
+    if config.USE_NARRATIVE_ANCHORS:
+
+        def generate_anchor_for_node(op_node_arg): # Renamed op_node to op_node_arg
+            if not config.USE_NARRATIVE_ANCHORS: # Check global config
+                return f"the_{op_node_arg.op.lower()}_result_{id(op_node_arg) % 1000:03d}"
+
+            all_anchors_list = list(narrative_anchor_map.values())
+            try:
+                # Pass the global logger to generate_narrative_anchor_with_llm if it needs one,
+                # or ensure it uses its own or the context's logger.
+                # For now, assuming generate_narrative_anchor_with_llm handles its logging.
+                anchor = generate_narrative_anchor_with_llm(
+                    world, op_node_arg, all_anchors_list, sample_index=sample_index
+                )
+
+                if anchor:
+                    return anchor
+                else:
+                    logger.warning( # Use global logger
+                        f"Failed to generate LLM anchor for {op_node_arg.op}. Using deterministic fallback."
+                    )
+                    return f"the_{op_node_arg.op.lower()}_result_{id(op_node_arg) % 1000:03d}"
+            except Exception as e:
+                logger.error(f"Error in narrative anchor generation: {e}") # Use global logger
+                return f"the_{op_node_arg.op.lower()}_result_{id(op_node_arg) % 1000:03d}"
+
+        for node_iter_anchor in postorder(ast): 
+            if isinstance(node_iter_anchor, OpNode):
+                anchor = generate_anchor_for_node(node_iter_anchor)
+                narrative_anchor_map[id(node_iter_anchor)] = anchor
+                operator_nodes_for_anchor_gen.append(node_iter_anchor) # Add to list for logging
+                logger.debug( # Use global logger
+                    f"Added narrative anchor '{anchor}' for {node_iter_anchor.op} node"
+                )
+    else:
+        for node_iter_anchor in postorder(ast):
+            if isinstance(node_iter_anchor, OpNode):
+                narrative_anchor_map[id(node_iter_anchor)] = (
+                    f"the_{node_iter_anchor.op.lower()}_result_{id(node_iter_anchor) % 1000:03d}"
+                )
+                operator_nodes_for_anchor_gen.append(node_iter_anchor) # Add to list for logging
+
+    logger.info(f"Generated {len(narrative_anchor_map)} narrative anchors.") # Use global logger
+    if operator_nodes_for_anchor_gen: # Check if list is not empty
+        log_str = "Narrative anchors: " + ", ".join(
+            [
+                f"'{narrative_anchor_map.get(id(op_node_log), 'MISSING')}' ({op_node_log.op})"
+                for op_node_log in operator_nodes_for_anchor_gen # Iterate over the collected list
+            ]
+        )
+        logger.debug(log_str) # Use global logger
+    else:
+        logger.debug("No operator nodes found to generate anchors for.")
+
+
+    # Pass global config and logger to generate_introduction_scene
+    intro_text = generate_introduction_scene(world, sample_index=sample_index, config_obj=config, logger_obj=logger)
+
+    if intro_text:
+        intro_tokens = len(encoder.encode(intro_text)) # Use global encoder
+        # Use global config for MAX_TOTAL_TOKENS and SAFETY_MARGIN
+        if intro_tokens <= config.MAX_TOTAL_TOKENS - SAFETY_MARGIN:
+            scenes.append(intro_text)
+            tokens_used += intro_tokens
+            logger.info( # Use global logger
+                f"Generated and added introductory scene ({intro_tokens} tokens)."
+            )
+        else:
+            logger.warning( # Use global logger
+                f"Generated introductory scene ({intro_tokens} tokens) was too long and would exceed budget. "
+                f"Not adding to narrative. Budget: {config.MAX_TOTAL_TOKENS}, Safety: {SAFETY_MARGIN}"
+            )
+            intro_text = None # Reset intro_text if not used
+    else:
+        logger.warning( # Use global logger
+            "Failed to generate valid introductory scene. Starting narrative without intro."
+        )
+
+    last_scene_text = intro_text if intro_text else "The story begins..."
+    introduced_atoms_during_generation = set()
+    # total_beats should be based on the nodes that will actually generate beats
+    # This is typically all OpNodes.
+    total_beats = sum(1 for n in postorder(ast) if isinstance(n, OpNode))
+    beat_counter = {"current": 0, "total": total_beats}
+
+    # Create the GenerationContext
+    # Note: context.config will be the global config object passed to generate_narrative
+    # context.logger will be the global logger object passed to generate_narrative
+    context = GenerationContext(
+        world=world,
+        config=config, # Pass the global config
+        encoder=encoder, # Pass the global encoder
+        p_inflect=p_inflect, # Pass the global p_inflect
+        logger=logger, # Pass the global logger
+        narrative_anchor_map=narrative_anchor_map,
+        all_atoms=all_atoms,
+        introduced_atoms=introduced_atoms_during_generation,
+        scenes=scenes,
+        tokens_used=tokens_used,
+        last_scene_text=last_scene_text,
+        beat_counter=beat_counter,
+        sample_index=sample_index,
+        max_pad_paragraphs=config.MAX_PAD_PARAGRAPHS, # Use global config
+        overall_ground_truth_answer=overall_ground_truth_answer,
+        overall_ast_root=ast,
+    )
+
+    tokens_available_for_narrative_and_padding = (
+        config.MAX_TOTAL_TOKENS - tokens_used - SAFETY_MARGIN # Use global config
+    )
+    max_padding_allowed = int(
+        tokens_available_for_narrative_and_padding * config.PADDING_MAX_TOK_PERCENT # Use global config
+    )
+    context.padding_stats["max_padding_allowed"] = max_padding_allowed
+
+    num_padding_slots = total_beats - 1 if total_beats > 1 else 0
+    if num_padding_slots > 0:
+        padding_per_slot_calculated = max_padding_allowed // num_padding_slots
+        context.padding_stats["padding_per_slot"] = padding_per_slot_calculated
+        logger.info( # Use global logger
+            f"Calculated padding per slot: {padding_per_slot_calculated} tokens ({max_padding_allowed} total / {num_padding_slots} slots)"
+        )
+    else:
+        context.padding_stats["padding_per_slot"] = 0
+        logger.info( # Use global logger
+            f"No padding slots available (total_beats: {total_beats}). Padding per slot set to 0."
+        )
+
+    logger.info( # Use global logger
+        f"PADDING BUDGET INITIALIZED: Tokens after intro: {tokens_used}, "
+        f"Available for narrative+padding: {tokens_available_for_narrative_and_padding}, "
+        f"Max padding %: {config.PADDING_MAX_TOK_PERCENT*100:.1f}%, "
+        f"Max padding tokens allowed: {max_padding_allowed}, "
+        f"Padding per slot: {context.padding_stats['padding_per_slot']}, "
+        f"Max padding segments per beat: {config.MAX_PAD_PARAGRAPHS}" # Use global config
+    )
+
+    try:
+        # _generate_narrative_recursive will use the logger and config from the context object
+        _generate_narrative_recursive(
+            ast,
+            context, # Pass the fully initialized context
+            is_root=True,
+        )
+    except BeatGenerationError as e:
+        logger.error(f"Narrative generation aborted due to beat failure: {e}") # Use global logger
+        return None
+    except Exception as e:
+        logger.error( # Use global logger
+            f"Unexpected error during recursive narrative generation: {e}",
+            exc_info=True,
+        )
+        return None
+
+    if not context.scenes:
+        logger.error("Narrative generation resulted in no scenes.") # Use global logger
+        return None
+
+    # narrative_body = "\n\n".join(context.scenes).strip() # This is local, not returned directly
+    final_token_count = len(encoder.encode("\n\n".join(context.scenes).strip())) # Use global encoder
+    if final_token_count > config.MAX_TOTAL_TOKENS: # Use global config
+        logger.warning( # Use global logger
+            f"Final generated narrative ({final_token_count} tokens) exceeds MAX_TOTAL_TOKENS ({config.MAX_TOTAL_TOKENS}). Truncation might occur."
+        )
+
+    total_padding_tokens = context.padding_stats["total_padding_tokens"]
+    padding_segments_added = context.padding_stats["padding_segments_added"]
+    padding_percentage_of_max = (
+        (total_padding_tokens / context.padding_stats["max_padding_allowed"] * 100)
+        if context.padding_stats["max_padding_allowed"] > 0
+        else 0
+    )
+    padding_percentage_of_total_narrative = (
+        (total_padding_tokens / context.tokens_used * 100)
+        if context.tokens_used > 0
+        else 0
+    )
+    logger.info( # Use global logger
+        f"PADDING FINAL SUMMARY: "
+        f"Padding tokens: {total_padding_tokens}/{context.padding_stats['max_padding_allowed']} ({padding_percentage_of_max:.1f}% of max allowed for padding), "
+        f"Padding percentage of total narrative tokens: {padding_percentage_of_total_narrative:.1f}%, "
+        f"Padding segments added: {padding_segments_added}"
+    )
+
+    failed_validations_dir = os.path.join(LOG_DIR, "failed_validations") # Uses global LOG_DIR
+    if os.path.exists(failed_validations_dir):
+        validation_files = [
+            f_name
+            for f_name in os.listdir(failed_validations_dir)
+            if f_name.startswith(f"validation_fail_") # No sample_index specific filtering here, could be added if needed
+        ] # Removed sample_index specific filtering for this general summary
+
+        if validation_files: # This summary is now general, not per-sample
+            failures_by_reason = {}
+            failures_by_op = {}
+            for file_name in validation_files:
+                try:
+                    # Basic parsing, might need adjustment if filenames are complex
+                    parts = file_name.split("_") 
+                    if len(parts) >= 4: # e.g., validation_fail_OP_REASON_timestamp.json
+                        op_type = parts[2]
+                        reason_code = parts[3] 
+                        failures_by_reason[reason_code] = (
+                            failures_by_reason.get(reason_code, 0) + 1
+                        )
+                        failures_by_op[op_type] = failures_by_op.get(op_type, 0) + 1
+                except IndexError:
+                    logger.warning( # Use global logger
+                        f"Could not parse validation failure filename: {file_name}"
+                    )
+            logger.info(f"[Sample {sample_index + 1}] VALIDATION FAILURES SUMMARY (for this sample, based on files in failed_validations):") # Clarify scope
+            logger.info( # Use global logger
+                f"  Total validation failures logged (may include other samples if not filtered by sample_index in filename): {len(validation_files)}"
+            )
+            if failures_by_reason:
+                logger.info(f"  Failures by reason: {failures_by_reason}") # Use global logger
+            if failures_by_op:
+                logger.info(f"  Failures by operation: {failures_by_op}") # Use global logger
+        else:
+            logger.info( # Use global logger
+                f"[Sample {sample_index + 1}] No validation failure files found in general log dir (or matching this sample's pattern if implemented)."
+            )
+
+    logger.info( # Use global logger
+        f"Successfully generated narrative for sample {sample_index + 1}. Final context tokens: {context.tokens_used}, Narrative tokens: {final_token_count}"
+    )
+    return context # Return the GenerationContext object
+
+# --- Narrative Generation with Parent Operator Prompting ---
+def _generate_and_llm_validate_beat(
+    original_user_message_for_generator: str, # This will now contain MEDIAN few-shots if applicable
+    system_prompt_for_generator: str,
+    world_info: dict,
+    current_op_node: OpNode,
+    # Inputs for LLM Validator prompt construction:
+    conceptual_inputs_str_for_llm_validator: str,
+    atomic_inputs_words_str_for_llm_validator: str, 
+    action_description_for_llm_validator: str,
+    expected_beat_result_words_for_llm_validator: str | None, 
+    ultra_strict_instruction_for_llm_validator_context: str, 
+    # Other parameters:
+    current_max_beat_completion_tokens: int,
+    sample_index: int,
+    context_config: Config, 
+    logger_obj: logging.Logger, 
+    encoder_obj: any, 
+    is_current_beat_root_node: bool = False,
+    overall_ground_truth_answer_val: int | None = None, 
+    primary_object_name: str = "items", 
+    forbidden_prior_results_and_gt_for_llm_validator: Set[int] = None, 
+    correct_result_val: int | None = None, 
+    direct_atom_values_val: Set[int] = None, 
+) -> str | None:
+
+    if forbidden_prior_results_and_gt_for_llm_validator is None:
+        forbidden_prior_results_and_gt_for_llm_validator = set()
+    if direct_atom_values_val is None:
+        direct_atom_values_val = set()
+
+    current_op_arity = len(current_op_node.children)
+    logger_obj.debug(
+        f"LLMValidateBeat: Op={current_op_node.op}, Arity={current_op_arity}, CorrectResult={correct_result_val}"
+    )
+
+    history_of_attempts = []
+    history_of_critiques = []
+    current_generator_user_prompt_for_iteration = original_user_message_for_generator
+
+    for iteration in range(1, context_config.MAX_LLM_VALIDATION_ITERATIONS + 1):
+        logger_obj.info(
+            f"[Sample {sample_index+1}, Beat Op: {current_op_node.op}] LLM Validation Loop Iteration: {iteration}/{context_config.MAX_LLM_VALIDATION_ITERATIONS}"
+        )
+
+        generator_temp = context_config.BEAT_GEN_TEMP
+        
+        if iteration > 1: # This is a revision attempt
+            generator_temp = context_config.BEAT_REVISION_TEMP
+            history_prompt_addition = (
+                "\n\n--- FAILED ATTEMPT REVIEW & REVISION TASK ---\n"
+            )
+            last_attempt_text = (
+                history_of_attempts[-1]
+                if history_of_attempts
+                else "N/A (Error in prior generation)"
+            )
+            last_critique = history_of_critiques[-1] if history_of_critiques else {}
+            history_prompt_addition += f"**Your Previous Attempt (Attempt {iteration-1}):**\n{last_attempt_text}\n\n"
+            explanation = last_critique.get(
+                "explanation_for_generator", "No detailed explanation."
+            )
+            summary_for_gen = last_critique.get(
+                "overall_revision_summary_for_generator_prompt", "Please revise."
+            )
+            history_prompt_addition += f"**Validator Feedback for Your Previous Attempt:**\n  - Summary: {summary_for_gen}\n  - Details: {explanation}\n\n"
+            history_prompt_addition += (
+                f"**Current Revision Task (Attempt {iteration}):**\n"
+                f"1. Review the feedback. 2. Re-read original task & ALL number rules. 3. Fix ALL issues. 4. Ensure narrative logic. 5. Output ONLY revised narrative.\n\n"
+                f"**Key Original Rules (Reminder - see full initial prompt for all details, especially the ULTRA-STRICT NUMBER RULES section which contains the specific numbers for *your* current scene):\n**"
+                f"{ultra_strict_instruction_for_llm_validator_context[:1000]}...\n" 
+            )
+            current_generator_user_prompt_for_iteration = (
+                f"{original_user_message_for_generator}\n\n{history_prompt_addition}"
+            )
+        # else: # First iteration: current_generator_user_prompt_for_iteration is already original_user_message_for_generator
+            # The MEDIAN few-shot examples are now part of original_user_message_for_generator if applicable.
+            # No need to add them here.
+
+        generated_text_cleaned = ""
+        try:
+            log_prompt(
+                header=f"LLM Beat Generator Prompt (Op: {current_op_node.op}, Iter: {iteration})",
+                prompt=f"System: {system_prompt_for_generator}\nUser:\n{current_generator_user_prompt_for_iteration}",
+                sample_index=sample_index,
+            )
+            resp_gen = _chat_completion_call(
+                model=MODEL,
+                messages=[
+                    {"role": "system", "content": system_prompt_for_generator},
+                    {
+                        "role": "user",
+                        "content": current_generator_user_prompt_for_iteration,
+                    },
+                ],
+                max_completion_tokens=current_max_beat_completion_tokens,
+                temperature=generator_temp,
+                reasoning={"exclude": True},
+            )
+            raw_gen_text = ""
+            if resp_gen and resp_gen.choices and resp_gen.choices[0].message:
+                raw_gen_text = resp_gen.choices[0].message.content or ""
+            
+            log_prompt(
+                header=f"LLM Beat Generator Raw Response (Op: {current_op_node.op}, Iter: {iteration})",
+                prompt=f"Raw Output:\n{raw_gen_text}",
+                sample_index=sample_index,
+            )
+
+            generated_text_cleaned = raw_gen_text.strip()
+            if not generated_text_cleaned or generated_text_cleaned.lower().startswith(
+                ("i cannot", "i'm sorry", "i am unable")
+            ):
+                logger_obj.warning(
+                    f"Generator refusal or empty in iter {iteration}. Raw: '{raw_gen_text}'"
+                )
+                generated_text_cleaned = "" 
+
+            history_of_attempts.append(
+                generated_text_cleaned
+                if generated_text_cleaned
+                else "GENERATION_EMPTY_OR_REFUSED"
+            )
+            if not generated_text_cleaned:
+                history_of_critiques.append(
+                    {
+                        "is_valid": False,
+                        "explanation_for_generator": "The generation was empty or an API refusal.",
+                        "overall_revision_summary_for_generator_prompt": "Previous attempt was empty/refused. Please generate the scene as per original instructions.",
+                        "explanation_for_audit": "N/A - Generation failed.",
+                        "suggested_revisions": []
+                    }
+                )
+                continue
+        except Exception as e_gen:
+            logger_obj.error(
+                f"Error generating beat in LLM loop iter {iteration}: {e_gen}",
+                exc_info=True,
+            )
+            history_of_attempts.append(f"ERROR_DURING_GENERATION: {str(e_gen)[:200]}")
+            history_of_critiques.append(
+                {
+                    "is_valid": False,
+                    "explanation_for_generator": f"Exception during generation: {e_gen}",
+                    "overall_revision_summary_for_generator_prompt": "System error during previous generation attempt. Please retry the original task, carefully following all instructions.",
+                    "explanation_for_audit": "N/A - Generation exception.",
+                    "suggested_revisions": []
+                }
+            )
+            if iteration < context_config.MAX_LLM_VALIDATION_ITERATIONS:
+                time.sleep(context_config.RETRY_INITIAL_DELAY) 
+                continue
+            else:
+                return None
+
+        validator_system_prompt = """You are an AI numerical compliance checker.
+Your ONLY task is to evaluate a story 'beat' against strict numerical rules.
+You MUST output your response as a valid JSON object and NOTHING ELSE, adhering to the provided schema.
+Do not include any text, explanations, or markdown (like ```json) before or after the single JSON object.
+Start with '{' and end with '}'."""
+        
+        temp_forbidden_detailed_for_validator_prompt = []
+        if forbidden_prior_results_and_gt_for_llm_validator:
+            for n_forbidden in sorted(
+                list(forbidden_prior_results_and_gt_for_llm_validator)
+            ):
+                temp_forbidden_detailed_for_validator_prompt.append(
+                    f"'{num_to_words(n_forbidden)}' ({n_forbidden})"
+                )
+        forbidden_values_str_for_validator_prompt = (
+            ", ".join(temp_forbidden_detailed_for_validator_prompt)
+            if temp_forbidden_detailed_for_validator_prompt
+            else "None specifically identified beyond general rules"
+        )
+
+        temp_phrasing_detailed_for_validator_prompt = [
+            f"'{num_to_words(n)}' ({n})"
+            for n in context_config.ALWAYS_ALLOWED_PHRASING_NUMBERS_SET
+        ]
+        phrasing_numbers_str_for_validator_prompt = ", ".join(
+            sorted(temp_phrasing_detailed_for_validator_prompt)
+        )
+
+        gt_word_val_for_validator_prompt = "N/A"
+        if overall_ground_truth_answer_val is not None:
+            gt_word_val_for_validator_prompt = f"'{num_to_words(overall_ground_truth_answer_val)}' ({overall_ground_truth_answer_val})"
+        
+        current_op_arity_word_val_for_validator_prompt = (
+            f"'{num_to_words(current_op_arity)}' ({current_op_arity})" if current_op_arity > 0 else "N/A (no direct inputs)"
+        )
+
+        is_result_also_atomic_input_for_validator = False
+        if correct_result_val is not None and direct_atom_values_val:
+            if correct_result_val in direct_atom_values_val:
+                is_result_also_atomic_input_for_validator = True
+        
+        validator_user_prompt = f"""You are an AI numerical compliance checker. Evaluate the 'Generated Beat Text' below with ABSOLUTE PRECISION regarding its numerical content and adherence to storytelling rules.
+
+**Primary Goal:** Verify the text strictly adheres to all numerical rules provided in the 'ULTRA-STRICT NUMBER RULES (Generator's Writing Guide)' section below.
+
+**Context for Your Evaluation (Derived from Generator's Task):**
+- Operation Type: {current_op_node.op} ({OP_LABELS.get(current_op_node.op, current_op_node.op)})
+- Conceptual Names for Prior Results (if any were inputs to this step): {conceptual_inputs_str_for_llm_validator}
+- New Specific Numbers for This Step (Atomic Inputs, as given to Generator): {atomic_inputs_words_str_for_llm_validator}
+- Numerical Result of THIS Operation (as known to Generator, was to be Implied): {expected_beat_result_words_for_llm_validator}
+- Overall Final Answer of Entire Story (for context): {gt_word_val_for_validator_prompt}
+- Is this beat's numerical result also one of its atomic inputs? {'Yes' if is_result_also_atomic_input_for_validator else 'No'}
+
+**ULTRA-STRICT NUMBER RULES (Generator's Writing Guide - THIS IS THE GROUND TRUTH FOR YOUR VALIDATION):**
+---
+{ultra_strict_instruction_for_llm_validator_context}
+---
+
+**VALIDATION ALGORITHM - FOLLOW EXACTLY, using the Generator's Writing Guide above as the source of truth for allowed/forbidden numbers for THIS beat:**
+1.  Identify ALL numbers (words or digits) in the 'Generated Beat Text'.
+2.  **RULE A (Required Atomic Inputs):**
+    -   Does the text mention ALL numbers listed in Rule 1 of the Generator's Writing Guide?
+    -   *MEDIAN Exception Handling:* If the operation is MEDIAN, and Rule 1 (or Rule 2) of the Generator's Writing Guide indicates that a specific input number (which is also the median result) MUST NOT be mentioned, verify its ABSENCE. All OTHER numbers listed in Rule 1 must still be present.
+3.  **RULE B (Outcome Handling):**
+    -   Does the text adhere to Rule 2 of the Generator's Writing Guide regarding the explicit statement (or non-statement) of the numerical result?
+    -   *MEDIAN Exception Handling:* For MEDIAN, the numerical result MUST NEVER be stated.
+4.  **RULE C (Additionally Allowed Numbers):**
+    -   Are any numbers present that are ONLY allowed under Rule 3 of the Generator's Writing Guide (e.g., phrasing numbers, arity count)? Are they used appropriately as per those rules?
+5.  **RULE D (Forbidden Numbers & Values):**
+    -   Does the text avoid ALL numbers listed as forbidden in Rule 4 of the Generator's Writing Guide?
+    -   Does the text avoid any other numbers not covered by Rules 1-4, as per Rule 5?
+6.  **RULE E (Prior Result Handling):**
+    -   If Rule 6 (Referring to Quantities from Previous Events) is present in the Generator's Writing Guide, does the text adhere to it by using conceptual names for prior results and NOT their numerical values?
+
+**VALIDATION RESPONSE (Output JSON only, using the schema provided):**
+Based on the algorithm above:
+-   `is_valid` (boolean): True if ALL rules (A-E, based on the Generator's Writing Guide) are met, False otherwise.
+-   `explanation_for_generator` (string): Detailed step-by-step reasoning for failure, referencing specific rules (A-E) from the Generator's Writing Guide and numbers found/missing. If valid, explain why it meets all criteria, especially how MEDIAN exceptions were handled if applicable.
+-   `explanation_for_audit` (string, only if `is_valid` is true): Brief summary of why it's valid.
+-   `overall_revision_summary_for_generator_prompt` (string): Concise instruction for the generator if invalid. If valid, state "No revision needed."
+-   `suggested_revisions` (array of strings, optional).
+
+**Generated Beat Text to Evaluate:**
+---
+{generated_text_cleaned}
+---
+"""
+        try:
+            log_prompt(
+                header=f"LLM Validator Prompt (Op: {current_op_node.op}, Iter: {iteration})",
+                prompt=f"System: {validator_system_prompt}\nUser:\n{validator_user_prompt}",
+                sample_index=sample_index,
+            )
+            api_call_params_for_validator = {
+                "model": context_config.LLM_VALIDATOR_MODEL,
+                "messages": [
+                    {"role": "system", "content": validator_system_prompt},
+                    {"role": "user", "content": validator_user_prompt},
+                ],
+                "max_completion_tokens": context_config.BEAT_MAX_TOKENS, 
+                "temperature": context_config.LLM_VALIDATOR_TEMP,
+                "reasoning": {"exclude": True},
+                "json_schema": VALIDATOR_RESPONSE_SCHEMA,
+            }
+            resp_val = _chat_completion_call(**api_call_params_for_validator)
+            
+            validator_raw_output = ""
+            if resp_val and resp_val.choices and resp_val.choices[0].message:
+                validator_raw_output = resp_val.choices[0].message.content or ""
+            
+            log_prompt(
+                header=f"LLM Validator Raw Response (Op: {current_op_node.op}, Iter: {iteration})",
+                prompt=f"Raw Output:\n{validator_raw_output}",
+                sample_index=sample_index,
+            )
+
+            validation_result = parse_llm_json_with_fallback(
+                validator_raw_output,
+                { 
+                    "is_valid": False,
+                    "explanation_for_generator": "Validator response was not valid JSON or was empty. This might be due to an issue with the generated text or the validator itself. Please try generating the scene again, ensuring all numerical rules are meticulously followed.",
+                    "overall_revision_summary_for_generator_prompt": "Validator had trouble processing the previous text. Please regenerate the scene, focusing on extreme clarity and adherence to all numerical constraints.",
+                    "explanation_for_audit": "Validator output parsing error.",
+                    "suggested_revisions": []
+                },
+                f"in LLM validator iteration {iteration} for Op: {current_op_node.op}"
+            )
+            history_of_critiques.append(validation_result)
+
+            if validation_result.get("is_valid"):
+                logger_obj.info(
+                    f"LLM Validator PASSED beat in iter {iteration}. Audit: {validation_result.get('explanation_for_audit', 'N/A')}"
+                )
+                return generated_text_cleaned
+            else:
+                logger_obj.warning(
+                    f"LLM Validator FAILED beat in iter {iteration}. Feedback for generator: {validation_result.get('overall_revision_summary_for_generator_prompt', 'No summary.')}"
+                )
+                logger_obj.debug(f"Detailed explanation from validator: {validation_result.get('explanation_for_generator', 'No detailed explanation.')}")
+
+        except Exception as e_val_call:
+            logger_obj.error(
+                f"Error during LLM validation call/processing iter {iteration} for Op {current_op_node.op}: {e_val_call}",
+                exc_info=True,
+            )
+            if len(history_of_critiques) < len(history_of_attempts):
+                history_of_critiques.append(
+                    {
+                        "is_valid": False,
+                        "explanation_for_generator": f"A system error occurred during the validation phase: {str(e_val_call)[:200]}. Please try to regenerate the scene, carefully adhering to all original instructions and numerical rules.",
+                        "overall_revision_summary_for_generator_prompt": "System error during validation. Please retry the original task, focusing on strict rule adherence.",
+                        "explanation_for_audit": f"N/A - Exception during validation: {e_val_call}",
+                        "suggested_revisions": []
+                    }
+                )
+            if iteration < context_config.MAX_LLM_VALIDATION_ITERATIONS:
+                time.sleep(context_config.RETRY_INITIAL_DELAY) 
+                continue
+            else:
+                return None
+
+    logger_obj.error(
+        f"Beat failed LLM validation after {context_config.MAX_LLM_VALIDATION_ITERATIONS} iterations for Op: {current_op_node.op}."
+    )
+    if history_of_critiques:
+        last_fail_critique = history_of_critiques[-1]
+        logger_obj.error(f"Last critique for Op {current_op_node.op} (failed): {json.dumps(last_fail_critique, indent=2)}")
+    return None
 
 def generate_introduction_scene(
     world_info: dict,
@@ -4020,270 +4428,6 @@ def generate_introduction_scene(
         return None
 
 
-# ... (rest of the code, including the second definition of generate_narrative) ...
-
-
-def generate_narrative(
-    ast: Node,
-    world: dict,
-    config: Config,
-    encoder,
-    p_inflect,
-    logger,
-    sample_index: int,
-    overall_ground_truth_answer: int,  # ADDED: Receive the overall ground truth
-) -> str | None:
-    """
-    Generate a structured narrative representation of the AST.
-    Each operation is represented by a scene, carefully sequenced with
-    intermediate node anchor names. Uses STRICT recursive generation.
-    """
-    logger.info(f"[Sample {sample_index + 1}] Starting narrative generation.")
-    logger.debug(f"DEBUG: Using model: {MODEL}")
-    logger.debug(f"DEBUG: AST: {ast_to_prefix(ast)}")
-
-    # --- Initial Setup ---
-    all_operator_nodes = [node for node in postorder(ast) if not isinstance(node, Atom)]
-    all_atoms = set()
-    for node in postorder(ast):
-        if isinstance(node, Atom):
-            all_atoms.add(node.n)
-    logger.debug(f"DEBUG: All atoms in AST: {sorted(list(all_atoms))}")
-    # Add the final answer to the log for debugging
-    logger.debug(
-        f"DEBUG: Overall ground truth (final answer): {overall_ground_truth_answer}"
-    )
-
-    operator_nodes = []
-    narrative_anchor_map = {}
-    intro_text = None
-    scenes = []
-    tokens_used = 0
-
-    # --- Generate narrative anchors for op nodes ---
-    if config.USE_NARRATIVE_ANCHORS:
-
-        def generate_anchor_for_node(op_node):
-            # If not using LLM anchors at all (config setting)
-            if not config.USE_NARRATIVE_ANCHORS:
-                # Use deterministic naming if not using LLM
-                return f"the_{op_node.op.lower()}_result_{id(op_node) % 1000:03d}"
-
-            all_anchors_list = list(narrative_anchor_map.values())
-            try:
-                anchor = generate_narrative_anchor_with_llm(
-                    world, op_node, all_anchors_list, sample_index=sample_index
-                )
-
-                if anchor:
-                    return anchor
-                else:
-                    logger.warning(
-                        f"Failed to generate LLM anchor for {op_node.op}. Using deterministic fallback."
-                    )
-                    return f"the_{op_node.op.lower()}_result_{id(op_node) % 1000:03d}"
-            except Exception as e:
-                logger.error(f"Error in narrative anchor generation: {e}")
-                return f"the_{op_node.op.lower()}_result_{id(op_node) % 1000:03d}"
-
-        # Process nodes in postorder for anchors (bottom-up)
-        for node_iter in postorder(ast):  # Renamed node to node_iter to avoid conflict
-            if isinstance(node_iter, OpNode):
-                # Use helper to generate anchor names
-                anchor = generate_anchor_for_node(node_iter)
-                narrative_anchor_map[id(node_iter)] = anchor
-                operator_nodes.append(node_iter)
-                logger.debug(
-                    f"Added narrative anchor '{anchor}' for {node_iter.op} node"
-                )
-    else:
-        # Without narrative anchors, just use basic names
-        for node_iter in postorder(ast):  # Renamed node to node_iter
-            if isinstance(node_iter, OpNode):
-                narrative_anchor_map[id(node_iter)] = (
-                    f"the_{node_iter.op.lower()}_result_{id(node_iter) % 1000:03d}"
-                )
-                operator_nodes.append(node_iter)
-
-    logger.info(f"Generated {len(narrative_anchor_map)} narrative anchors.")
-    log_str = "Narrative anchors: " + ", ".join(
-        [
-            f"'{anchor}' ({op_node.op})"  # Changed node to op_node
-            for op_node, anchor in [  # Changed node to op_node
-                (n, narrative_anchor_map.get(id(n), "MISSING")) for n in operator_nodes
-            ]
-        ]
-    )
-    logger.debug(log_str)
-
-    intro_text = generate_introduction_scene(world, sample_index=sample_index)
-
-    if intro_text:
-        intro_tokens = len(encoder.encode(intro_text))
-        if intro_tokens <= config.MAX_TOTAL_TOKENS - SAFETY_MARGIN:
-            scenes.append(intro_text)
-            tokens_used += intro_tokens
-            logger.info(
-                f"Generated and added introductory scene ({intro_tokens} tokens)."
-            )
-        else:
-            logger.warning(
-                f"Generated introductory scene ({intro_tokens} tokens) was too long and would exceed budget. "
-                f"Not adding to narrative. Budget: {config.MAX_TOTAL_TOKENS}, Safety: {SAFETY_MARGIN}"
-            )
-            intro_text = None
-    else:
-        logger.warning(
-            "Failed to generate valid introductory scene. Starting narrative without intro."
-        )
-
-    last_scene_text = intro_text if intro_text else "The story begins..."
-    introduced_atoms_during_generation = set()
-    total_beats = len(operator_nodes)
-    beat_counter = {"current": 0, "total": total_beats}
-
-    context = GenerationContext(
-        world=world,
-        config=config,
-        encoder=encoder,
-        p_inflect=p_inflect,
-        logger=logger,
-        narrative_anchor_map=narrative_anchor_map,
-        all_atoms=all_atoms,
-        introduced_atoms=introduced_atoms_during_generation,
-        scenes=scenes,
-        tokens_used=tokens_used,
-        last_scene_text=last_scene_text,
-        beat_counter=beat_counter,
-        sample_index=sample_index,
-        max_pad_paragraphs=config.MAX_PAD_PARAGRAPHS,
-        overall_ground_truth_answer=overall_ground_truth_answer,
-        overall_ast_root=ast,  # Explicitly pass the root AST
-    )
-
-    tokens_available_for_narrative_and_padding = (
-        config.MAX_TOTAL_TOKENS - tokens_used - SAFETY_MARGIN
-    )
-    max_padding_allowed = int(
-        tokens_available_for_narrative_and_padding * config.PADDING_MAX_TOK_PERCENT
-    )
-    context.padding_stats["max_padding_allowed"] = max_padding_allowed
-
-    # --- NEW: Calculate padding_per_slot ---
-    num_padding_slots = total_beats - 1 if total_beats > 1 else 0
-    if num_padding_slots > 0:
-        padding_per_slot_calculated = max_padding_allowed // num_padding_slots
-        context.padding_stats["padding_per_slot"] = padding_per_slot_calculated
-        logger.info(
-            f"Calculated padding per slot: {padding_per_slot_calculated} tokens ({max_padding_allowed} total / {num_padding_slots} slots)"
-        )
-    else:
-        context.padding_stats["padding_per_slot"] = 0
-        logger.info(
-            f"No padding slots available (total_beats: {total_beats}). Padding per slot set to 0."
-        )
-    # --- END NEW ---
-
-    logger.info(
-        f"PADDING BUDGET INITIALIZED: Tokens after intro: {tokens_used}, "
-        f"Available for narrative+padding: {tokens_available_for_narrative_and_padding}, "
-        f"Max padding %: {config.PADDING_MAX_TOK_PERCENT*100:.1f}%, "
-        f"Max padding tokens allowed: {max_padding_allowed}, "
-        f"Padding per slot: {context.padding_stats['padding_per_slot']}, "
-        f"Max padding segments per beat: {config.MAX_PAD_PARAGRAPHS}"
-    )
-
-    try:
-        _generate_narrative_recursive(
-            ast,
-            context,
-            is_root=True,
-        )
-    except BeatGenerationError as e:
-        logger.error(f"Narrative generation aborted due to beat failure: {e}")
-        return None
-    except Exception as e:
-        logger.error(
-            f"Unexpected error during recursive narrative generation: {e}",
-            exc_info=True,
-        )
-        return None
-
-    if not context.scenes:
-        logger.error("Narrative generation resulted in no scenes.")
-        return None
-
-    narrative_body = "\n\n".join(context.scenes).strip()
-    final_token_count = len(encoder.encode(narrative_body))
-    if final_token_count > config.MAX_TOTAL_TOKENS:
-        logger.warning(
-            f"Final generated narrative ({final_token_count} tokens) exceeds MAX_TOTAL_TOKENS ({config.MAX_TOTAL_TOKENS}). Truncation might occur."
-        )
-
-    total_padding_tokens = context.padding_stats["total_padding_tokens"]
-    padding_segments_added = context.padding_stats["padding_segments_added"]
-    padding_percentage_of_max = (
-        (total_padding_tokens / context.padding_stats["max_padding_allowed"] * 100)
-        if context.padding_stats["max_padding_allowed"] > 0
-        else 0
-    )
-    padding_percentage_of_total_narrative = (
-        (total_padding_tokens / context.tokens_used * 100)
-        if context.tokens_used > 0
-        else 0
-    )
-    logger.info(
-        f"PADDING FINAL SUMMARY: "
-        f"Padding tokens: {total_padding_tokens}/{context.padding_stats['max_padding_allowed']} ({padding_percentage_of_max:.1f}% of max allowed for padding), "
-        f"Padding percentage of total narrative tokens: {padding_percentage_of_total_narrative:.1f}%, "
-        f"Padding segments added: {padding_segments_added}"
-    )
-
-    failed_validations_dir = os.path.join(LOG_DIR, "failed_validations")
-    if os.path.exists(failed_validations_dir):
-        validation_files = [
-            f_name
-            for f_name in os.listdir(failed_validations_dir)  # Renamed f to f_name
-            if f_name.startswith(f"validation_fail_")
-            and f"sample_{sample_index+1}" in f_name  # Renamed f to f_name
-        ]
-
-        if validation_files:
-            failures_by_reason = {}
-            failures_by_op = {}
-            for file_name in validation_files:
-                try:
-                    parts = file_name.split("_")
-                    if len(parts) >= 4:
-                        op_type = parts[2]
-                        reason_code = parts[3]
-                        failures_by_reason[reason_code] = (
-                            failures_by_reason.get(reason_code, 0) + 1
-                        )
-                        failures_by_op[op_type] = failures_by_op.get(op_type, 0) + 1
-                except IndexError:
-                    logger.warning(
-                        f"Could not parse validation failure filename: {file_name}"
-                    )
-            logger.info(f"[Sample {sample_index + 1}] VALIDATION FAILURES SUMMARY:")
-            logger.info(
-                f"  Total validation failures for this sample: {len(validation_files)}"
-            )
-            if failures_by_reason:
-                logger.info(f"  Failures by reason: {failures_by_reason}")
-            if failures_by_op:
-                logger.info(f"  Failures by operation: {failures_by_op}")
-        else:
-            logger.info(
-                f"[Sample {sample_index + 1}] No validation failure files found for this sample."
-            )
-
-    logger.info(
-        f"Successfully generated narrative for sample {sample_index + 1}. Final context tokens: {context.tokens_used}, Narrative tokens: {final_token_count}"
-    )
-    # Instead of just the narrative string, return the whole context object
-    return context
-
 
 def node_to_dict(node: Node) -> dict:
     """Convert a Node to a dictionary representation."""
@@ -4347,9 +4491,8 @@ def count_ops(node: Node) -> int:
 
 # In verbose-listops.py
 
+
 def generate_single_sample(sample_index: int, config_obj: Config) -> dict | None:
-    # Use config_obj throughout this function instead of module-level 'config'
-    # This ensures the instance of Config being used is consistent.
     logger.info(
         f"[Sample {sample_index+1}] Starting generation with config: MAX_OPS={config_obj.MAX_OPS}, "
         f"MIN_ARITY={config_obj.MIN_ARITY}, MAX_TOTAL_TOKENS={config_obj.MAX_TOTAL_TOKENS}"
@@ -4358,7 +4501,7 @@ def generate_single_sample(sample_index: int, config_obj: Config) -> dict | None
         node = build_random_ast(
             max_ops=config_obj.MAX_OPS,
             max_branch=config_obj.MAX_BRANCH,
-            config_obj=config_obj, # Pass config_obj to build_random_ast
+            config_obj=config_obj,
         )
 
         world_data = generate_world(
@@ -4369,14 +4512,14 @@ def generate_single_sample(sample_index: int, config_obj: Config) -> dict | None
                 config_obj.MIN_WORLD_CONCEPTS, config_obj.MAX_WORLD_CONCEPTS
             ),
             sample_index=sample_index,
-            max_retries=config_obj.WORLDGEN_MAX_RETRIES, # generate_world uses config_obj for this
+            max_retries=config_obj.WORLDGEN_MAX_RETRIES,
         )
 
         if not node or not world_data:
             logger.error(f"AST or World gen failed for sample {sample_index+1}")
             return None
 
-        final_ast_answer = eval_node(node) # This populates .value in all nodes
+        final_ast_answer = eval_node(node)
 
         narrative_gen_context = generate_narrative(
             ast=node,
@@ -4397,52 +4540,54 @@ def generate_single_sample(sample_index: int, config_obj: Config) -> dict | None
 
         narrative_body_from_context = "\n\n".join(narrative_gen_context.scenes).strip()
 
-        # Construct the final question using the template
-        # FINAL_QUESTION_TEMPLATE is defined globally and should have been updated
-        final_question_text = FINAL_QUESTION_TEMPLATE.substitute(primary_object=world_data["object"])
-        narrative_with_question_text = narrative_body_from_context + final_question_text
+        # Ensure FINAL_QUESTION_TEMPLATE is defined globally and correctly substituted
+        # Example: FINAL_QUESTION_TEMPLATE = Template("... Question: ... '$primary_object' ...")
+        final_question_text = FINAL_QUESTION_TEMPLATE.substitute(
+            primary_object=world_data["object"]
+        )
+        full_text_for_eval_content = narrative_body_from_context + final_question_text
 
         sample = {
-            "sample_index": sample_index,
+            "id": str(sample_index),  # Canonical ID
             "timestamp": datetime.datetime.now().isoformat(),
-            "story": narrative_body_from_context, # Narrative without the question
-            "ast_prefix": ast_to_prefix(node),
+            "ast_str": ast_to_prefix(node),  # Canonical AST string
+            "ground_truth_value": narrative_gen_context.overall_ground_truth_answer,  # Canonical ground truth
+            "narrative": narrative_body_from_context,  # Story only
+            "question": final_question_text.strip(),  # Question only (strip leading/trailing whitespace from the template's output)
+            "full_text_for_eval": full_text_for_eval_content,  # Combined narrative + question
             "world_data": world_data,
-            "scenes": [
+            "scenes_detail": [  # Renamed for clarity from just "scenes"
                 {"scene_number": i + 1, "text": text}
                 for i, text in enumerate(narrative_gen_context.scenes)
             ],
             "num_operations": count_ops(node),
-            "total_tokens": narrative_gen_context.tokens_used,
-            "narrative_tokens": (
-                len(encoder.encode(narrative_body_from_context)) if encoder else 0
-            ),
-            "padding_tokens": narrative_gen_context.padding_stats[
-                "total_padding_tokens"
-            ],
-            "ground_truth_answer": narrative_gen_context.overall_ground_truth_answer,
-            "narrative_anchors": dict(narrative_gen_context.narrative_anchor_map),
-            "meta": {
-                "script_version": "verbose-listops_v_current", # Update as needed
-                "model_used_generation": MODEL, # Generator model
-                "model_used_iterative_validator": config_obj.LLM_VALIDATOR_MODEL,
-                # "allow_implicit_intermediate_results" is now always True by design
+            "token_counts": {  # Grouped token counts
+                "total_generated_context": narrative_gen_context.tokens_used,
+                "narrative_body": (
+                    len(encoder.encode(narrative_body_from_context)) if encoder else 0
+                ),
+                "padding": narrative_gen_context.padding_stats["total_padding_tokens"],
+            },
+            "conceptual_references": dict(
+                narrative_gen_context.narrative_anchor_map
+            ),  # Renamed from narrative_anchors
+            "generation_metadata": {  # Renamed from "meta"
+                "script_version": "verbose-listops_v_DRY_output_fix1",  # Updated version
+                "generation_model": MODEL,
+                "iterative_validator_model": config_obj.LLM_VALIDATOR_MODEL,
                 "always_allowed_phrasing_numbers": list(
                     config_obj.ALWAYS_ALLOWED_PHRASING_NUMBERS_SET
                 ),
-                "max_ops": config_obj.MAX_OPS,
-                "min_arity": config_obj.MIN_ARITY,
-                "max_total_tokens": config_obj.MAX_TOTAL_TOKENS,
-                "full_config_used": asdict(config_obj),
+                "config_params": {  # Nested config for clarity
+                    "max_ops": config_obj.MAX_OPS,
+                    "min_arity": config_obj.MIN_ARITY,
+                    "max_total_tokens": config_obj.MAX_TOTAL_TOKENS,
+                    # Add other key config params you want to quickly see
+                },
+                "full_config_snapshot": asdict(
+                    config_obj
+                ),  # Keep full config for reproducibility
             },
-
-            # Fields for validator.py compatibility
-            "id": str(sample_index),
-            "ast": ast_to_prefix(node),
-            "ground_truth": narrative_gen_context.overall_ground_truth_answer,
-            "narrative_with_question": narrative_with_question_text, # Uses the templated question
-            # Add narrative_prompt if validator.py expects it (story only)
-            "narrative_prompt": narrative_body_from_context,
         }
         return sample
 
@@ -4458,485 +4603,366 @@ def main(
     num_samples: int = NUM_SAMPLES_TO_GENERATE,
     max_workers: int = DEFAULT_MAX_WORKERS,
 ):
-    """Generate samples with strict validation."""
-    # Test log output to ensure logger is working properly
-    logger.info(
-        "START OF MAIN FUNCTION - THIS LOG SHOULD APPEAR IN verbose_listops.log"
-    )
+    logger.info("START OF MAIN FUNCTION")
 
-    # --- Fetch initial account usage --- ADD THIS BLOCK ---
-    initial_account_usage = None  # Initialize
-    if (
-        client
-        and OPENROUTER_API_KEY
-        and OPENROUTER_API_KEY != "YOUR_OPENROUTER_API_KEY_HERE"
-    ):
+    initial_account_usage = None
+    if client and OPENROUTER_API_KEY and OPENROUTER_API_KEY != "YOUR_OPENROUTER_API_KEY_HERE":
         logger.info("Fetching initial OpenRouter account usage...")
-        initial_account_usage = (
-            rate_limiter.update_limits_from_api()
-        )  # Call modified function
+        initial_account_usage = rate_limiter.update_limits_from_api()
         if initial_account_usage is not None:
-            logger.info(
-                f"Initial OpenRouter account usage: ${initial_account_usage:.4f}"
-            )
+            logger.info(f"Initial OpenRouter account usage: ${initial_account_usage:.4f}")
         else:
             logger.warning("Could not fetch initial OpenRouter account usage.")
     else:
-        logger.warning(
-            "Skipping initial OpenRouter account usage check: Client not initialized or API key missing/placeholder."
-        )
-    # --- END ADDED BLOCK ---
+        logger.warning("Skipping initial OpenRouter account usage check: Client not initialized or API key missing/placeholder.")
 
-    # --- Dynamic Filename Generation ---
+    # --- Dynamic Filename and Subfolder Generation ---
     sanitized_model_name = MODEL.replace("/", "_").replace(":", "-")
+    timestamp_str = datetime.datetime.now().strftime('%Y%m%d-%H%M%S')
 
-    # Ensure datasets directory exists
-    os.makedirs(DATASETS_DIR, exist_ok=True)
+    base_filename_parts = [
+        f"{config.MAX_TOTAL_TOKENS}tok",
+        f"{config.MAX_OPS}mxops",
+        f"{config.MIN_ARITY}minarity",
+        f"{config.MAX_BRANCH}mxbrch",
+        f"{sanitized_model_name}",
+        timestamp_str
+    ]
+    run_specific_identifier = "_".join(base_filename_parts)
 
-    output_file = os.path.join(
-        DATASETS_DIR,
-        f"DATASET_"
-        f"{config.MAX_TOTAL_TOKENS}tok_"
-        f"{config.MAX_OPS}-mxops_"
-        f"{config.MIN_ARITY}-arity_"
-        f"{config.MAX_BRANCH}-mxbrch_"
-        f"{sanitized_model_name}_"
-        f"{datetime.datetime.now().strftime('%Y%m%d-%H%M')}"
-        f".jsonl",
-    )
-    logger.info(f"Output filename (dynamic): {output_file}")
-    logger.info(
-        f"Script started. Generating {num_samples} samples using up to {max_workers} workers."
-    )
-    logger.info(
-        f"Using {config.FEW_SHOT_EXAMPLES} few-shot examples for narrative generation."
-    )
+    run_output_dir = os.path.join(DATASETS_DIR, run_specific_identifier)
+    os.makedirs(run_output_dir, exist_ok=True)
+    logger.info(f"All outputs for this run will be saved in: {run_output_dir}")
 
-    # Setup for time estimation and progress tracking
+    # 1. Filename for RESEARCHER_DETAIL (comprehensive raw generated data)
+    researcher_detail_basename = f"[1_RESEARCHER_DETAIL]_DATASET_{run_specific_identifier}.jsonl"
+    researcher_detail_output_file = os.path.join(run_output_dir, researcher_detail_basename)
+    logger.info(f"Researcher detail output will be saved to: {researcher_detail_output_file}")
+
+    # 2. Filename for EVAL_READY data (lean format for ALL successfully generated samples)
+    eval_ready_basename = f"[2_EVAL_READY]_DATASET_{run_specific_identifier}.jsonl"
+    eval_ready_output_file = os.path.join(run_output_dir, eval_ready_basename)
+    logger.info(f"Evaluation-ready output (all generated) will be saved to: {eval_ready_output_file}")
+    
+    # 3. Names for auxiliary files related to validator.py processing (if PROD_RUN is true)
+    validator_results_basename = f"[3.1_VALIDATOR_RESULTS]_{run_specific_identifier}.jsonl"
+    validator_results_path = os.path.join(run_output_dir, validator_results_basename)
+
+    validator_stdout_basename = f"[3.2_VALIDATOR_STDOUT]_{run_specific_identifier}.log"
+    validator_stdout_log_path = os.path.join(run_output_dir, validator_stdout_basename)
+
+    # 4. Filename for the final VALIDATOR_CLEANED dataset (lean format, only validator-passed samples)
+    # This is now the primary "final" dataset for evaluation.
+    final_cleaned_lean_basename = f"[4_FINAL_EVAL_CLEANED]_DATASET_{run_specific_identifier}.jsonl"
+    final_cleaned_lean_output_file = os.path.join(run_output_dir, final_cleaned_lean_basename)
+
+
+    # --- Generation Loop ---
+    # ... (generation loop is identical, populating generated_results with full dictionaries) ...
+    logger.info(f"Script started. Generating {num_samples} samples using up to {max_workers} workers.")
     samples_generated_successfully = 0
-    samples_failed = 0
+    samples_failed_generation = 0
     start_time = time.time()
-    results = []
+    generated_results = [] 
 
-    # Progress tracking with thread safety
     progress_lock = threading.Lock()
-    completed_samples = 0
+    completed_tasks = 0
     last_print_time = start_time
+    print_interval = max(5, min(30, max_workers // 10))
 
-    # Adjust print interval based on number of workers
-    # More workers = longer interval to avoid console spam
-    print_interval = max(
-        5, min(30, max_workers // 10)
-    )  # Between 5-30 seconds depending on workers
-
-    print(
-        f"Starting generation of {num_samples} samples using {max_workers} workers..."
-    )
-    print(f"Progress updates will be shown every {print_interval} seconds")
+    print(f"Starting generation of {num_samples} samples using {max_workers} workers...")
+    print(f"Progress updates will be shown every ~{print_interval} seconds")
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
         future_to_index = {
-            executor.submit(
-                generate_single_sample, i, config
-            ): i  # Changed config_obj to config
+            executor.submit(generate_single_sample, i, config): i
             for i in range(num_samples)
         }
 
         for future in concurrent.futures.as_completed(future_to_index):
             index = future_to_index[future]
             try:
-                sample_data = future.result()
-                with progress_lock:  # Thread safety for counters
+                sample_data = future.result() 
+                with progress_lock:
                     if sample_data:
-                        results.append(sample_data)
+                        generated_results.append(sample_data)
                         samples_generated_successfully += 1
                     else:
-                        samples_failed += 1
-                    completed_samples = samples_generated_successfully + samples_failed
+                        samples_failed_generation += 1
+                    completed_tasks = samples_generated_successfully + samples_failed_generation
             except Exception as exc:
-                logger.error(
-                    f"[Sample {index + 1}] task generated exception: {exc}",
-                    exc_info=True,
-                )
+                logger.error(f"[Sample {index + 1}] task generated exception: {exc}", exc_info=True)
                 with progress_lock:
-                    samples_failed += 1
-                    completed_samples = samples_generated_successfully + samples_failed
-
-            # Print progress update based on time interval, not per sample
+                    samples_failed_generation += 1
+                    completed_tasks = samples_generated_successfully + samples_failed_generation
+            
             current_time = time.time()
-            should_print = False
-
+            should_print_progress = False
             with progress_lock:
-                if (
-                    current_time - last_print_time >= print_interval
-                    or completed_samples == num_samples
-                ):
-                    should_print = True
+                if (current_time - last_print_time >= print_interval) or (completed_tasks == num_samples):
+                    should_print_progress = True
                     last_print_time = current_time
-
-            if should_print:
+            
+            if should_print_progress:
                 elapsed_time = current_time - start_time
-                if completed_samples > 0:
-                    # Calculate throughput as samples per minute
-                    throughput = completed_samples / (elapsed_time / 60)
+                if completed_tasks > 0:
+                    throughput = completed_tasks / (elapsed_time / 60) if elapsed_time > 0 else 0
+                    remaining_samples = num_samples - completed_tasks
+                    estimated_time_remaining_seconds = (remaining_samples / throughput * 60) if throughput > 0 else 0
+                    
+                    time_str = "N/A"
+                    if estimated_time_remaining_seconds > 0:
+                        if estimated_time_remaining_seconds >= 3600:
+                            time_str = f"{estimated_time_remaining_seconds/3600:.1f}h"
+                        elif estimated_time_remaining_seconds >= 60:
+                            time_str = f"{estimated_time_remaining_seconds/60:.1f}m"
+                        else:
+                            time_str = f"{estimated_time_remaining_seconds:.0f}s"
 
-                    # Estimate based on throughput
-                    remaining_samples = num_samples - completed_samples
-                    estimated_time_remaining = (
-                        (remaining_samples / throughput) * 60 if throughput > 0 else 0
-                    )
-
-                    # Format time remaining
-                    if estimated_time_remaining >= 3600:
-                        time_str = f"{estimated_time_remaining/3600:.1f} hours"
-                    elif estimated_time_remaining >= 60:
-                        time_str = f"{estimated_time_remaining/60:.1f} minutes"
-                    else:
-                        time_str = f"{estimated_time_remaining:.1f} seconds"
-
-                    success_rate = (
-                        (samples_generated_successfully / completed_samples) * 100
-                        if completed_samples > 0
-                        else 0
-                    )
-
+                    success_rate_generation = (samples_generated_successfully / completed_tasks * 100) if completed_tasks > 0 else 0
                     print(
-                        f"Progress: {completed_samples}/{num_samples} samples completed "
-                        f"({completed_samples/num_samples*100:.1f}%) - "
-                        f"Success rate: {success_rate:.1f}% - "
-                        f"Throughput: {throughput:.2f} samples/min - "
-                        f"Est. remaining: {time_str}"
+                        f"Progress: {completed_tasks}/{num_samples} ({completed_tasks/num_samples*100:.1f}%) | "
+                        f"Success: {samples_generated_successfully} ({success_rate_generation:.1f}%) | "
+                        f"Failed: {samples_failed_generation} | "
+                        f"Rate: {throughput:.2f} samples/min | "
+                        f"ETA: {time_str}"
                     )
 
-    logger.info(
-        f"Parallel generation complete. Writing {samples_generated_successfully} samples to {output_file}..."
-    )
-    try:
+    # --- Writing Initial Output Files ---
+    logger.info(f"Parallel generation complete. Writing {samples_generated_successfully} samples to initial output files...")
+    samples_written_researcher = 0
+    samples_written_eval_raw = 0 # For the [2_EVAL_READY] file
 
-        write_mode = "w"  # Or 'a' if you prefer appending
-        logger.info(f"Opening {output_file} in '{write_mode}' mode.")
-        with open(output_file, write_mode, encoding="utf-8") as f:
-            for (
-                sample_data
-            ) in results:  # Iterate through successfully generated results
-                try:
-                    f.write(json.dumps(sample_data, default=lambda o: list(o) if isinstance(o, set) else str(o), ensure_ascii=False) + "\n")
-                except TypeError as e:
-
-                    logger.error(
-                        f"Serialization failed for sample {sample_data.get('id', 'Unknown')}: {e}. Skipping write for this sample."
-                    )
-
-                    samples_failed += 1
-                    samples_generated_successfully -= (
-                        1  # Decrement success as it wasn't written
-                    )
-                except Exception as e:
-                    logger.error(
-                        f"Unexpected error writing sample {sample_data.get('id', 'Unknown')}: {e}. Skipping write."
-                    )
-                    samples_failed += 1
-                    samples_generated_successfully -= 1  # Decrement success
-    except IOError as e:
-        logger.error(f"Fatal file write error opening/writing {output_file}: {e}")
-
-        samples_failed += (
-            samples_generated_successfully  # All successful generations failed to write
-        )
-        samples_generated_successfully = 0
-    except Exception as e:
-        logger.error(f"Unexpected error during file writing phase: {e}", exc_info=True)
-        samples_failed += samples_generated_successfully
-        samples_generated_successfully = 0
-
-    end_time = time.time()
-    total_time = end_time - start_time
-    logger.info(f"--- Batch generation complete ---")
-    logger.info(f"Total samples attempted: {num_samples}")
-    logger.info(f"Successfully generated and written: {samples_generated_successfully}")
-    logger.info(f"Failed generations or writes: {samples_failed}")
-    total_count = num_samples
-    success_count = samples_generated_successfully
-    success_rate = (success_count / total_count * 100) if total_count else 0
-    logger.info(
-        f"Overall success rate (generated AND written): {success_rate:.2f}% ({success_count}/{total_count})"
-    )
-    logger.info(f"Total time: {total_time:.2f} seconds")
     if samples_generated_successfully > 0:
-        logger.info(f"Dataset output file: {output_file}")
-        print(f"\nDataset saved to: {output_file}")
+        try:
+            with open(researcher_detail_output_file, "w", encoding="utf-8") as f_researcher, \
+                 open(eval_ready_output_file, "w", encoding="utf-8") as f_eval_raw:
+                
+                for full_sample_data in generated_results:
+                    # Write the full data to the researcher file
+                    try:
+                        f_researcher.write(json.dumps(full_sample_data, default=lambda o: list(o) if isinstance(o, set) else str(o), ensure_ascii=False) + "\n")
+                        samples_written_researcher += 1
+                    except Exception as e:
+                        logger.error(f"Error writing full sample {full_sample_data.get('id', 'Unknown')} to researcher file: {e}. Skipping.")
+
+                    # Create and write the lean data to the initial eval_ready file
+                    eval_sample_data = {
+                        "id": full_sample_data.get("id"),
+                        "full_text_for_eval": full_sample_data.get("full_text_for_eval"),
+                        "ground_truth_value": full_sample_data.get("ground_truth_value"),
+                        "ast_str": full_sample_data.get("ast_str"),
+                        "num_operations": full_sample_data.get("num_operations"),
+                        "token_count_narrative": full_sample_data.get("token_counts", {}).get("narrative_body")
+                    }
+                    eval_sample_data_cleaned = {k: v for k, v in eval_sample_data.items() if v is not None}
+                    try:
+                        f_eval_raw.write(json.dumps(eval_sample_data_cleaned, ensure_ascii=False) + "\n")
+                        samples_written_eval_raw += 1
+                    except Exception as e:
+                        logger.error(f"Error writing initial eval sample {eval_sample_data_cleaned.get('id', 'Unknown')} to eval_raw file: {e}. Skipping.")
+
+            logger.info(f"Successfully wrote {samples_written_researcher} samples to {researcher_detail_output_file}.")
+            logger.info(f"Successfully wrote {samples_written_eval_raw} samples to {eval_ready_output_file} (initial eval-ready set).")
+
+        except IOError as e: # Catch file opening errors
+            logger.error(f"Fatal file write error opening/writing initial output files: {e}")
+        except Exception as e: # Catch other errors during this writing phase
+            logger.error(f"Unexpected error during initial output file writing phase: {e}", exc_info=True)
     else:
-        logger.warning(
-            f"No samples were successfully generated and written. Output file '{output_file}' may be empty or non-existent."
-        )
+        logger.info("No samples were successfully generated, so no initial output files will be written.")
 
-    # Print datasets directory location for user reference
-    print(f"\nDatasets are saved in: {os.path.abspath(DATASETS_DIR)}")
+    end_time_generation = time.time()
+    # ... (logging for generation phase summary - no change) ...
+    total_time_generation = end_time_generation - start_time
+    logger.info(f"--- Generation Phase Summary ---")
+    logger.info(f"Total samples attempted: {num_samples}")
+    logger.info(f"Successfully generated by verbose-listops: {samples_generated_successfully}")
+    logger.info(f"Successfully written to researcher detail file: {samples_written_researcher}")
+    logger.info(f"Successfully written to initial eval-ready file: {samples_written_eval_raw}")
+    logger.info(f"Failed generations: {samples_failed_generation}")
+    logger.info(f"Generation phase time: {total_time_generation:.2f} seconds")
 
-    # Add a clear console output showing total execution time
-    hours, remainder = divmod(total_time, 3600)
-    minutes, seconds = divmod(remainder, 60)
+    if samples_written_researcher > 0: print(f"\nResearcher Detail dataset saved to: {researcher_detail_output_file}")
+    if samples_written_eval_raw > 0: print(f"Initial Eval-Ready dataset saved to: {eval_ready_output_file}")
+    if samples_generated_successfully == 0: print(f"\nNo samples were successfully generated by verbose-listops.py.")
 
-    if hours > 0:
-        time_str = f"{int(hours)}h {int(minutes)}m {seconds:.2f}s"
-    elif minutes > 0:
-        time_str = f"{int(minutes)}m {seconds:.2f}s"
-    else:
-        time_str = f"{seconds:.2f}s"
 
-    print(f"\n✅ Total execution time: {time_str} ({total_time:.2f} seconds)")
+    # --- PROD_RUN: Validation and Creation of Final Cleaned Eval-Ready Dataset ---
+    bad_sample_ids_from_validator = set() 
 
-    # --- PROD_RUN: Validation and Cleaning Step ---
-    if (
-        PROD_RUN
-        and samples_generated_successfully > 0
-        and output_file
-        and os.path.exists(output_file)
-    ):
-        logger.info(
-            f"--- Starting PROD_RUN validation and cleaning for {output_file} ---"
-        )
-        # Assuming validator.py is in the same directory as verbose-listops.py
+    if PROD_RUN and samples_written_researcher > 0 and os.path.exists(researcher_detail_output_file):
+        logger.info(f"--- Starting PROD_RUN validation using {researcher_detail_output_file} ---")
         current_script_dir = os.path.dirname(os.path.abspath(__file__))
         validator_script_path = os.path.join(current_script_dir, "validator.py")
-        validator_results_path = output_file + ".validation_results.jsonl"
-
+        
         if not os.path.exists(validator_script_path):
-            logger.error(
-                f"Validator script not found at {validator_script_path}. Cannot perform cleaning."
-            )
+            logger.error(f"Validator script not found at {validator_script_path}. Cannot perform cleaning.")
         else:
             cmd = [
-                sys.executable,
-                validator_script_path,
-                output_file,
-                "--output-results",
-                validator_results_path,
+                sys.executable, validator_script_path,
+                researcher_detail_output_file, # Validator processes the comprehensive researcher file
+                "--output-results", validator_results_path, 
             ]
             try:
                 logger.info(f"Running validator command: {' '.join(cmd)}")
-                run_result = subprocess.run(
-                    cmd, check=True, capture_output=True, text=True, encoding="utf-8"
-                )
-                logger.info("Validator process stdout:")
-                for line in run_result.stdout.splitlines():
-                    logger.info(f"VALIDATOR_STDOUT: {line}")
+                with open(validator_stdout_log_path, "w", encoding="utf-8") as f_val_stdout:
+                    run_result = subprocess.run(cmd, check=True, stdout=f_val_stdout, stderr=subprocess.PIPE, text=True, encoding="utf-8")
+                # ... (logging validator stdout/stderr - no change) ...
+                if os.path.exists(validator_stdout_log_path):
+                    with open(validator_stdout_log_path, "r", encoding="utf-8") as f_val_stdout_read:
+                        logger.info(f"Validator process stdout (from {validator_stdout_log_path}):")
+                        for line in f_val_stdout_read: logger.info(f"VALIDATOR_STDOUT: {line.strip()}")
                 if run_result.stderr:
                     logger.warning("Validator process stderr:")
-                    for line in run_result.stderr.splitlines():
-                        logger.warning(f"VALIDATOR_STDERR: {line}")
-                logger.info(
-                    f"Validator finished. Results expected in {validator_results_path}"
-                )
+                    for line in run_result.stderr.splitlines(): logger.warning(f"VALIDATOR_STDERR: {line.strip()}")
+                logger.info(f"Validator finished. Detailed validation results saved to {validator_results_path}")
 
-                bad_sample_ids = set()
+
                 if os.path.exists(validator_results_path):
-                    with open(
-                        validator_results_path, "r", encoding="utf-8"
-                    ) as f_results:
+                    with open(validator_results_path, "r", encoding="utf-8") as f_results:
                         for line_num, res_line in enumerate(f_results, 1):
                             try:
                                 val_res = json.loads(res_line)
                                 if val_res.get("status") != "correct":
                                     sample_id_to_remove = val_res.get("id")
-                                    if sample_id_to_remove:
-                                        bad_sample_ids.add(sample_id_to_remove)
-                                    else:
-                                        logger.warning(
-                                            f"Validator result line {line_num} missing 'id': {res_line.strip()}"
-                                        )
+                                    if sample_id_to_remove: bad_sample_ids_from_validator.add(sample_id_to_remove)
                             except json.JSONDecodeError:
-                                logger.warning(
-                                    f"Could not parse validator result line {line_num}: {res_line.strip()}"
-                                )
-                    logger.info(
-                        f"Identified {len(bad_sample_ids)} samples to remove based on validator results."
-                    )
+                                logger.warning(f"Could not parse validator result line {line_num} from {validator_results_path}: {res_line.strip()}")
+                    logger.info(f"Identified {len(bad_sample_ids_from_validator)} samples to remove based on results from {validator_results_path}.")
 
-                    if bad_sample_ids:
-                        temp_cleaned_output_file = output_file + ".cleaned.tmp"
-                        good_samples_written = 0
-                        original_sample_count = 0
-
-                        with open(output_file, "r", encoding="utf-8") as f_orig, open(
-                            temp_cleaned_output_file, "w", encoding="utf-8"
-                        ) as f_temp:
-                            for line_num, dataset_line in enumerate(f_orig, 1):
-                                original_sample_count += 1
+                    # Create the [4_FINAL_EVAL_CLEANED] dataset (lean format, validator-passed)
+                    temp_final_cleaned_lean_file = final_cleaned_lean_output_file + ".tmp"
+                    good_samples_written_to_final_cleaned_lean = 0
+                    
+                    # We iterate through the *original full generated_results* list
+                    # because it's already in memory and contains all necessary fields
+                    # to construct the lean format for the good samples.
+                    with open(temp_final_cleaned_lean_file, "w", encoding="utf-8") as f_temp_lean:
+                        for full_sample_data in generated_results: # Iterate over the in-memory full data
+                            if full_sample_data.get("id") not in bad_sample_ids_from_validator:
+                                # Construct the lean eval format for this good sample
+                                eval_sample_data = {
+                                    "id": full_sample_data.get("id"),
+                                    "full_text_for_eval": full_sample_data.get("full_text_for_eval"),
+                                    "ground_truth_value": full_sample_data.get("ground_truth_value"),
+                                    "ast_str": full_sample_data.get("ast_str"),
+                                    "num_operations": full_sample_data.get("num_operations"),
+                                    "token_count_narrative": full_sample_data.get("token_counts", {}).get("narrative_body")
+                                }
+                                eval_sample_data_cleaned = {k: v for k, v in eval_sample_data.items() if v is not None}
                                 try:
-                                    sample_in_dataset = json.loads(dataset_line)
-
-                                    # Make sure each sample has all fields expected by validator
-                                    # Add these fields if missing but we have equivalent fields
-                                    if (
-                                        "narrative_with_question"
-                                        not in sample_in_dataset
-                                        and "full_prompt" in sample_in_dataset
-                                    ):
-                                        sample_in_dataset["narrative_with_question"] = (
-                                            sample_in_dataset["full_prompt"]
-                                        )
-
-                                    if (
-                                        "ast" not in sample_in_dataset
-                                        and "ast_prefix" in sample_in_dataset
-                                    ):
-                                        sample_in_dataset["ast"] = sample_in_dataset[
-                                            "ast_prefix"
-                                        ]
-
-                                    if (
-                                        "ground_truth" not in sample_in_dataset
-                                        and "ground_truth_answer" in sample_in_dataset
-                                    ):
-                                        sample_in_dataset["ground_truth"] = (
-                                            sample_in_dataset["ground_truth_answer"]
-                                        )
-
-                                    # Check if this sample should be kept
-                                    if (
-                                        sample_in_dataset.get("id")
-                                        not in bad_sample_ids
-                                    ):
-                                        # Write the sample with the added fields if needed
-                                        f_temp.write(
-                                            json.dumps(sample_in_dataset, default=lambda o: list(o) if isinstance(o, set) else str(o)) + "\n"
-                                        )
-                                        good_samples_written += 1
-                                    else:
-                                        logger.debug(
-                                            f"Removing sample {sample_in_dataset.get('id')} (from line {line_num}) due to validation status."
-                                        )
-                                except json.JSONDecodeError:
-                                    logger.warning(
-                                        f"Could not parse line {line_num} in original dataset '{output_file}' during filtering: {dataset_line.strip()}. Discarding this line."
-                                    )
-
-                        # Construct the new filename with [CLEAN] prefix
-                        output_dir = os.path.dirname(output_file)
-                        base_filename = os.path.basename(output_file)
-                        new_base_filename = f"[CLEAN]{base_filename}"
-                        new_output_file_path = os.path.join(
-                            output_dir, new_base_filename
-                        )
-
-                        # Move the temporary cleaned file to the new path instead of overwriting
-                        shutil.move(temp_cleaned_output_file, new_output_file_path)
-                        deleted_count = original_sample_count - good_samples_written
-                        logger.info(
-                            f"Removed {deleted_count} bad samples. {good_samples_written} cleaned samples saved to {new_output_file_path}."
-                        )
-                        logger.info(
-                            f"(Original dataset with all generated samples remains at: {output_file})"
-                        )  # Add note about original file
-                        print(
-                            f"PROD_RUN: After validation and cleaning, {good_samples_written} samples saved to {new_output_file_path}."
-                        )
-                        # Update samples_generated_successfully for any final tally if needed, though new print is clearer
-                        # samples_generated_successfully = good_samples_written
-                    else:
-                        logger.info(
-                            "No samples identified for removal by the validator (all were 'correct' or no IDs matched)."
-                        )
-                else:
-                    logger.warning(
-                        f"Validator results file not found at {validator_results_path}. Skipping removal of bad samples."
-                    )
-
+                                    f_temp_lean.write(json.dumps(eval_sample_data_cleaned, ensure_ascii=False) + "\n")
+                                    good_samples_written_to_final_cleaned_lean += 1
+                                except Exception as e_write_lean:
+                                    logger.error(f"Error writing lean sample {eval_sample_data_cleaned.get('id', 'Unknown')} to final cleaned eval file: {e_write_lean}")
+                    
+                    shutil.move(temp_final_cleaned_lean_file, final_cleaned_lean_output_file)
+                    logger.info(f"{good_samples_written_to_final_cleaned_lean} validator-passed samples (lean format) saved to {final_cleaned_lean_output_file}.")
+                    print(f"PROD_RUN: Final cleaned eval-ready dataset ({good_samples_written_to_final_cleaned_lean} samples) saved to {final_cleaned_lean_output_file}.")
+                
+                else: # validator_results_path does not exist
+                    logger.warning(f"Validator results file not found at {validator_results_path}. Cannot create final cleaned eval dataset.")
+            # ... (rest of except blocks for subprocess errors - largely the same) ...
             except FileNotFoundError:
-                logger.error(
-                    f"Validator script '{validator_script_path}' not found. Ensure it is in the correct directory. Skipping cleaning step."
-                )
+                logger.error(f"Validator script '{validator_script_path}' not found. Skipping cleaning step.")
             except subprocess.CalledProcessError as e:
-                logger.error(
-                    f"Validator script failed with exit code {e.returncode}. Skipping cleaning step."
-                )
-                logger.error("Validator stdout snapshot:")
-                stdout_snapshot = e.stdout.splitlines()
-                for i, line_e in enumerate(stdout_snapshot):
-                    if i < 50:  # Log first 50 lines of stdout
-                        logger.error(f"VALIDATOR_STDOUT_ERR: {line_e}")
-                    elif i == 50:
-                        logger.error(
-                            f"VALIDATOR_STDOUT_ERR: ... (stdout truncated after 50 lines)"
-                        )
-                        break
-                logger.error("Validator stderr snapshot:")
-                stderr_snapshot = e.stderr.splitlines()
-                for i, line_e in enumerate(stderr_snapshot):
-                    if i < 50:  # Log first 50 lines of stderr
-                        logger.error(f"VALIDATOR_STDERR_ERR: {line_e}")
-                    elif i == 50:
-                        logger.error(
-                            f"VALIDATOR_STDERR_ERR: ... (stderr truncated after 50 lines)"
-                        )
-                        break
+                logger.error(f"Validator script failed with exit code {e.returncode}. Skipping cleaning step.")
+                if os.path.exists(validator_stdout_log_path):
+                    with open(validator_stdout_log_path, "r", encoding="utf-8") as f_val_stdout_read_err:
+                        logger.error(f"Validator stdout on error (from {validator_stdout_log_path}):")
+                        for i, line_e in enumerate(f_val_stdout_read_err): logger.error(f"VAL_STDOUT_ERR: {line_e.strip()}")
+                stderr_snapshot = e.stderr.splitlines() if e.stderr else []
+                logger.error("Validator stderr snapshot on error:")
+                for i, line_e in enumerate(stderr_snapshot): logger.error(f"VAL_STDERR_ERR: {line_e}")
             except Exception as e:
-                logger.error(
-                    f"An unexpected error occurred during PROD_RUN validation or cleaning: {e}",
-                    exc_info=True,
-                )
-    elif PROD_RUN and (
-        samples_generated_successfully == 0
-        or not output_file
-        or not os.path.exists(output_file)
-    ):
-        logger.info(
-            "PROD_RUN was True, but no samples were successfully generated, output file is missing, or path is invalid. Skipping validation and cleaning."
-        )
+                logger.error(f"An unexpected error occurred during PROD_RUN validation or cleaning: {e}", exc_info=True)
 
-    # --- Final Cost Calculation and Logging --- ADD THIS SECTION ---
-    gen_prompt_tokens, gen_completion_tokens, gen_api_calls = (
-        generation_token_tracker.get_summary()
-    )
+    elif PROD_RUN and (samples_written_researcher == 0 or not os.path.exists(researcher_detail_output_file)):
+        logger.info("PROD_RUN was True, but no researcher detail samples were available for validation. Skipping validation and cleaning.")
+
+    # --- Final Summary ---
+    # ... (logging for total run time, token usage, cost - largely the same) ...
+    # Update print statements to reflect the new file names and purposes.
+    end_time_total = time.time()
+    total_run_time = end_time_total - start_time
+    
+    logger.info(f"--- Overall Run Summary ---")
+    logger.info(f"Total samples attempted for generation: {num_samples}")
+    logger.info(f"Successfully generated by verbose-listops: {samples_generated_successfully}")
+    logger.info(f"Successfully written to researcher detail file ({researcher_detail_basename}): {samples_written_researcher}")
+    logger.info(f"Successfully written to initial eval-ready file ({eval_ready_basename}): {samples_written_eval_raw}")
+
+    if PROD_RUN:
+        if final_cleaned_lean_output_file and os.path.exists(final_cleaned_lean_output_file):
+            try:
+                with open(final_cleaned_lean_output_file, 'r', encoding='utf-8') as f_cleaned_count:
+                    num_cleaned_samples = sum(1 for _ in f_cleaned_count)
+                logger.info(f"Samples in final cleaned eval-ready file ({final_cleaned_lean_basename}): {num_cleaned_samples}")
+                print(f"\nFinal Cleaned Eval-Ready dataset saved to: {final_cleaned_lean_output_file} ({num_cleaned_samples} samples)")
+            except Exception as e_count:
+                logger.error(f"Could not count samples in final cleaned eval-ready file {final_cleaned_lean_output_file}: {e_count}")
+                print(f"\nFinal Cleaned Eval-Ready dataset saved to: {final_cleaned_lean_output_file} (count error)")
+        else:
+            logger.info("Final Cleaned Eval-Ready dataset was not produced or path is invalid.")
+            print(f"\nFinal Cleaned Eval-Ready dataset was not produced due to issues in validation/cleaning or no samples passed.")
+    
+    logger.info(f"Total run time: {total_run_time:.2f} seconds")
+    
+    hours, rem = divmod(total_run_time, 3600)
+    minutes, seconds = divmod(rem, 60)
+    time_str_display = ""
+    if hours > 0: time_str_display += f"{int(hours)}h "
+    if minutes > 0 or hours > 0 : time_str_display += f"{int(minutes)}m "
+    time_str_display += f"{seconds:.2f}s"
+    print(f"\n✅ Total execution time: {time_str_display.strip()} ({total_run_time:.2f} seconds)")
+    print(f"\nAll datasets for this run are in subfolder: {run_output_dir}")
+
+    gen_prompt_tokens, gen_completion_tokens, gen_api_calls = generation_token_tracker.get_summary()
     estimated_generation_cost = generation_token_tracker.calculate_cost(
         DEFAULT_COST_PER_MILLION_PROMPT_TOKENS,
         DEFAULT_COST_PER_MILLION_COMPLETION_TOKENS,
     )
-
-    logger.info(f"--- Generation Token Usage & Estimated Cost ---")
+    logger.info(f"--- Generation Token Usage & Estimated Cost (verbose-listops.py) ---")
     logger.info(f"Total API calls (generation): {gen_api_calls}")
     logger.info(f"Total Prompt Tokens (generation): {gen_prompt_tokens}")
     logger.info(f"Total Completion Tokens (generation): {gen_completion_tokens}")
-    logger.info(
-        f"Estimated Cost (generation only): ${estimated_generation_cost:.4f} (using placeholder rates)"
-    )
-    logger.info(
-        f"Note: Costs are estimates. Actual costs depend on specific models and OpenRouter pricing."
-    )
+    logger.info(f"Estimated Cost (generation only): ${estimated_generation_cost:.4f}")
 
-    # --- Calculate and Log Total Run Cost via Usage Difference ---
-    if (
-        client
-        and OPENROUTER_API_KEY
-        and OPENROUTER_API_KEY != "YOUR_OPENROUTER_API_KEY_HERE"
-    ):
+    if PROD_RUN and os.path.exists(validator_stdout_log_path):
+        try:
+            with open(validator_stdout_log_path, "r", encoding="utf-8") as f_val_stdout:
+                val_stdout_content = f_val_stdout.read()
+                match = re.search(r"VALIDATOR_TOKEN_USAGE_SUMMARY:prompt_tokens=(\d+),completion_tokens=(\d+),api_calls=(\d+)", val_stdout_content)
+                if match:
+                    val_prompt_tokens = int(match.group(1))
+                    val_completion_tokens = int(match.group(2))
+                    val_api_calls = int(match.group(3))
+                    estimated_validation_cost = (val_prompt_tokens / 1_000_000 * DEFAULT_COST_PER_MILLION_PROMPT_TOKENS) + \
+                                                (val_completion_tokens / 1_000_000 * DEFAULT_COST_PER_MILLION_COMPLETION_TOKENS)
+                    logger.info(f"--- Validation Token Usage & Estimated Cost (from {validator_stdout_basename}) ---")
+                    logger.info(f"Total API calls (validation): {val_api_calls}")
+                    logger.info(f"Total Prompt Tokens (validation): {val_prompt_tokens}")
+                    logger.info(f"Total Completion Tokens (validation): {val_completion_tokens}")
+                    logger.info(f"Estimated Cost (validation only, using verbose-listops.py rates): ${estimated_validation_cost:.4f}")
+        except Exception as e_val_cost:
+            logger.warning(f"Could not parse token usage from validator stdout log ('{validator_stdout_log_path}'): {e_val_cost}")
+
+    if client and OPENROUTER_API_KEY and OPENROUTER_API_KEY != "YOUR_OPENROUTER_API_KEY_HERE":
         logger.info("Fetching final OpenRouter account usage...")
         final_account_usage = rate_limiter.update_limits_from_api()
         if final_account_usage is not None:
             logger.info(f"Final OpenRouter account usage: ${final_account_usage:.4f}")
             if initial_account_usage is not None:
-                total_run_cost_by_difference = (
-                    final_account_usage - initial_account_usage
-                )
-                logger.info(f"--- Total Run Cost (from Usage Difference) ---")
-                logger.info(
-                    f"TOTAL RUN COST (Generation + Validation): ${total_run_cost_by_difference:.4f}"
-                )
-            else:
-                logger.warning(
-                    "Cannot calculate total run cost by difference: Initial account usage was not fetched."
-                )
+                total_run_cost_by_difference = final_account_usage - initial_account_usage
+                logger.info(f"--- Total Run Cost (from API Usage Difference) ---")
+                logger.info(f"TOTAL RUN COST (Generation + Validation if validator.py used same key): ${total_run_cost_by_difference:.4f}")
         else:
-            logger.warning(
-                "Could not fetch final OpenRouter account usage. Cannot calculate total run cost by difference."
-            )
+            logger.warning("Could not fetch final OpenRouter account usage. Cannot calculate total run cost by difference.")
     else:
-        logger.warning(
-            "Skipping final OpenRouter account usage check for run cost: Client not initialized or API key missing/placeholder."
-        )
-    # --- END ADDED SECTION ---
-
+        logger.warning("Skipping final OpenRouter account usage check for run cost: Client not initialized or API key missing/placeholder.")
+    
+    logger.info("--- END OF MAIN FUNCTION ---")
     logging.shutdown()
 
 
@@ -4960,4 +4986,3 @@ if __name__ == "__main__":
         max_workers=DEFAULT_MAX_WORKERS,
         # initial_account_usage will be fetched inside main
     )
-

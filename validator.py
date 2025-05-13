@@ -30,7 +30,7 @@ else:
 # fmt: off
 
 # Recommended to use a fast and capable model for validation.
-MODEL_FOR_VALIDATION = os.environ.get("VALIDATION_MODEL", "google/gemini-2.5-pro-preview-03-25")
+MODEL_FOR_VALIDATION = os.environ.get("VALIDATION_MODEL", "google/gemini-2.5-pro-preview")
 MAX_WORKERS = int(os.environ.get("VALIDATION_MAX_WORKERS", 100))
 LOG_LEVEL = logging.DEBUG
 CONSOLE_LOG_LEVEL = logging.INFO  # Use INFO or WARNING for console to reduce verbosity
@@ -60,7 +60,9 @@ logger.setLevel(LOG_LEVEL)
 os.makedirs("logs", exist_ok=True)
 file_handler = logging.FileHandler("logs/validator_detailed.log")
 file_handler.setLevel(LOG_LEVEL)
-file_format = logging.Formatter("%(asctime)s - %(levelname)s - [%(threadName)s] - %(message)s")
+file_format = logging.Formatter(
+    "%(asctime)s - %(levelname)s - [%(threadName)s] - %(message)s"
+)
 file_handler.setFormatter(file_format)
 
 # Create and configure console handler for concise logs
@@ -72,6 +74,7 @@ console_handler.setFormatter(console_format)
 # Add both handlers to the logger
 logger.addHandler(file_handler)
 logger.addHandler(console_handler)
+
 
 # --- Token Cost Tracker (same as in verbose-listops.py) ---
 class TokenCostTracker:
@@ -112,7 +115,9 @@ validation_token_tracker = TokenCostTracker()
 client = None
 try:
     if not OPENROUTER_API_KEY or OPENROUTER_API_KEY == "YOUR_OPENROUTER_API_KEY_HERE":
-        logger.error("OpenRouter API key missing or invalid. Set OPENROUTER_API_KEY in .env file.")
+        logger.error(
+            "OpenRouter API key missing or invalid. Set OPENROUTER_API_KEY in .env file."
+        )
     else:
         logger.debug(f"Initializing client for model: {MODEL_FOR_VALIDATION}...")
         client = OpenAI(
@@ -256,10 +261,16 @@ class RateLimiter:
 
                 # Log detailed info to debug, but only critical info to console
                 logger.debug(", ".join(log_message_parts))
-                
+
                 # If there's a critical limit issue, log to console as warning
-                if limit_adjusted or (limit_val and limit_remaining and (limit_remaining / limit_val < 0.2)):
-                    logger.warning(f"OpenRouter limits adjusted - RPS: {current_rate_for_log:.1f}")
+                if limit_adjusted or (
+                    limit_val
+                    and limit_remaining
+                    and (limit_remaining / limit_val < 0.2)
+                ):
+                    logger.warning(
+                        f"OpenRouter limits adjusted - RPS: {current_rate_for_log:.1f}"
+                    )
             else:
                 logger.warning(
                     f"[ValidatorRateLimiter] Failed to get OpenRouter account status: HTTP {response.status_code}"
@@ -282,6 +293,8 @@ rate_limiter = RateLimiter(
 
 # --- System prompt for validation ---
 # Template-based JSON approach to force proper formatting
+# In validator.py
+
 VALIDATION_SYSTEM_PROMPT = """
 You are an expert AI system meticulously validating samples from the Verbose ListOps benchmark. This benchmark tests narrative reasoning in LLMs by embedding hierarchical ListOps computations (MAX, MIN, MED, SUM, AVG, SM) within lengthy, coherent narratives.
 
@@ -290,13 +303,14 @@ The benchmark's key characteristics:
 2. The narrative unfolds in post-order (inside-out) evaluation of the ListOps AST.
 3. Models must extract computational signals while filtering out relevant but task-irrelevant narrative content.
 4. **Crucially, intermediate numerical results of operations are NOT explicitly stated in the narrative.** Instead, they are referenced conceptually by thematic names or phrases (e.g., "The Sunstone's Core," "the outcome of the first analysis"). The LLM being evaluated must perform the computation and track these values internally.
-5. The narrative MUST explicitly state the direct atomic numerical inputs for the current operation step (as words).
+5. The narrative MUST explicitly state the direct atomic numerical inputs for the current operation step (as words), **with a special exception for MEDIAN operations where an input is also the result (see below).**
 
 CRITICAL TASK: For EACH `ast_evaluation_steps` entry, you must verify:
 1.  **Input Fidelity (`ast_inputs_verified` field):** Did the narrative segment for this operation correctly use ALL inputs specified by the AST for this node? This means:
     *   All direct atomic numbers for this step MUST be mentioned in the narrative for this step.
+        *   **SPECIAL EXCEPTION FOR MEDIAN OPERATIONS:** If the `operation_type` is "MED", AND an atomic number from `inputs_from_ast` is IDENTICAL to the `result_from_ast` (the median value), then this specific number SHOULD NOT be mentioned in the narrative. In this specific case, for `ast_inputs_verified` to be true regarding this number, you verify its *absence* from the narrative itemization. All *other* atomic inputs for that MEDIAN step must still be present.
     *   For inputs that are results from child operations: The narrative MUST reference these conceptually (e.g., using the thematic name introduced when that child operation was described). You should assume this conceptual reference correctly carries forward the `result_from_ast` of that child operation when evaluating the current step's inputs.
-    *   If the narrative describes an operation using a different set of inputs (e.g., ignores a conceptual reference to a child operation's result, invents new numbers not in the AST for this step, or fails to mention required atomic inputs), `ast_inputs_verified` MUST be `false`.
+    *   If the narrative describes an operation using a different set of inputs (e.g., ignores a conceptual reference, invents new numbers, or fails to mention required atomic inputs, considering the MEDIAN exception above), `ast_inputs_verified` MUST be `false`.
 2.  **Result Handling (`intermediate_result_implicit` field):** For this operation step (unless it's the very final operation of the entire AST), did the narrative correctly AVOID stating the numerical `result_from_ast` and instead imply it or associate it with a conceptual name? This should be `true` for all intermediate steps. For the final AST operation, this field can be "N/A" if the result is not stated, or `false` if it is stated (leading to VALID_BUT_TRIVIAL).
 3.  **Narrative Consistency (`narrative_consistent` field):** Based on the above, is the narrative segment for this step an accurate and clear representation of the AST operation, its *correct* inputs (atomic and conceptual), and its *implied* result (for intermediate steps)? If `ast_inputs_verified` is `false` or `intermediate_result_implicit` is `false` (for intermediate steps where it should be true), then `narrative_consistent` for this step MUST also be `false`.
 
@@ -319,8 +333,8 @@ Use this exact template, replacing values in [SQUARE_BRACKETS] with your analysi
       "ast_inputs_verified": [true or false],
       "intermediate_result_implicit": [true or false or "N/A"],
       "narrative_consistent": [true or false],
-      "itemization_complete": [true or false],
-      "explanation": "[BRIEF_EXPLANATION, detailing any input discrepancies or narrative issues for this step]"
+      "itemization_complete": [true or false], // Still useful to know if all *other* atoms were itemized
+      "explanation": "[BRIEF_EXPLANATION, detailing any input discrepancies or narrative issues for this step, explicitly note if MEDIAN exception applied]"
     }
     // Additional steps...
   ],
@@ -342,13 +356,12 @@ ListOps operators:
 - SM: Sum of inputs modulo 10 (result is sum % 10)
 
 Guidelines for `narrative_consistent` field in `ast_evaluation_steps`:
-- Mark `true` if the narrative segment for this step accurately and clearly conveys the operation, its AST-defined inputs (atoms mentioned, conceptual references used for prior results), and correctly implies the result without stating it numerically (for intermediate steps).
+- Mark `true` if the narrative segment for this step accurately and clearly conveys the operation, its AST-defined inputs (atoms mentioned according to rules including MEDIAN exception, conceptual references used for prior results), and correctly implies the result without stating it numerically (for intermediate steps).
 - Mark `false` if `ast_inputs_verified` is `false`, or if `intermediate_result_implicit` is `false` for an intermediate step where it should be true, or for significant ambiguity or misleading information.
 - **FOR THE FINAL EVALUATION STEP ONLY:** The narrative is designed to lead up to the final answer but *NOT* explicitly state it. `intermediate_result_implicit` can be marked "N/A" or `true` for this final step if the result is not stated. If the narrative segment for this final step *does* explicitly state the numerical result of this final operation, then `narrative_consistent` for this final step MUST be marked `false`, and your `explanation` for this step must clearly state: "Final answer revealed in narrative." In this specific scenario (math correct, prior steps consistent, but final answer revealed), set `overall_status` to `VALID_BUT_TRIVIAL`.
 
 DO NOT write any text outside of this JSON format.
 """
-
 
 # --- JSON Schema for validation output ---
 # In validator.py (typically near VALIDATION_SYSTEM_PROMPT)
@@ -361,13 +374,22 @@ VALIDATION_OUTPUT_SCHEMA = {
             "type": "string",
             "enum": [
                 "VALID",
-                "INVALID_NARRATIVE", # This will now encompass math errors if they lead to narrative inconsistency
+                "INVALID_NARRATIVE",  # This will now encompass math errors if they lead to narrative inconsistency
                 "VALID_BUT_TRIVIAL",
             ],
         },
-        "final_ast_value": {"type": "integer", "description": "The ground truth result from evaluating the AST."},
-        "matches_ground_truth": {"type": "boolean", "description": "Does the 'final_ast_value' field match the 'ground_truth' provided in the input sample?"},
-        "narrative_consistent": {"type": "boolean", "description": "Overall narrative consistency based on all steps."},
+        "final_ast_value": {
+            "type": "integer",
+            "description": "The ground truth result from evaluating the AST.",
+        },
+        "matches_ground_truth": {
+            "type": "boolean",
+            "description": "Does the 'final_ast_value' field match the 'ground_truth' provided in the input sample?",
+        },
+        "narrative_consistent": {
+            "type": "boolean",
+            "description": "Overall narrative consistency based on all steps.",
+        },
         "ast_evaluation_steps": {
             "type": "array",
             "items": {
@@ -399,8 +421,11 @@ VALIDATION_OUTPUT_SCHEMA = {
                         "type": "boolean",
                         "description": "Whether the narrative segment correctly used all inputs_from_ast (direct atoms mentioned, conceptual references for children ops used)",
                     },
-                    "intermediate_result_implicit": { # NEW FIELD
-                        "type": ["boolean", "string"], # boolean true/false, or string "N/A"
+                    "intermediate_result_implicit": {  # NEW FIELD
+                        "type": [
+                            "boolean",
+                            "string",
+                        ],  # boolean true/false, or string "N/A"
                         "description": "True if an intermediate result was NOT stated numerically. 'N/A' for the final AST operation step if its result is not stated.",
                     },
                     "narrative_consistent": {
@@ -424,7 +449,7 @@ VALIDATION_OUTPUT_SCHEMA = {
                     "inputs_from_ast",
                     "result_from_ast",
                     "ast_inputs_verified",
-                    "intermediate_result_implicit", # ADDED
+                    "intermediate_result_implicit",  # ADDED
                     "narrative_consistent",
                     "itemization_complete",
                     "explanation",
@@ -439,8 +464,14 @@ VALIDATION_OUTPUT_SCHEMA = {
                 "inconsistencies": {"type": "array", "items": {"type": "string"}},
             },
         },
-        "detailed_reason": {"type": "string", "description": "Overall detailed explanation if not VALID."},
-        "summary": {"type": "string", "description": "One-sentence summary of the validation outcome."},
+        "detailed_reason": {
+            "type": "string",
+            "description": "Overall detailed explanation if not VALID.",
+        },
+        "summary": {
+            "type": "string",
+            "description": "One-sentence summary of the validation outcome.",
+        },
     },
     "required": [
         "id",
@@ -458,61 +489,54 @@ VALIDATION_OUTPUT_SCHEMA = {
 def construct_user_prompt(sample: dict) -> str:
     """
     Formats the sample data into a concise, structured user prompt for the LLM.
+    Reads canonical field names as output by verbose-listops.py's DRY generate_single_sample.
     """
-    # Don't include a preview - we need the full narrative for proper validation
-    prompt_data = {
-        "id": sample.get("id", ""),
-        "ast_prefix": sample.get("ast", ""),
-        "ground_truth_answer": sample.get("ground_truth", ""),
-    }
+    sample_id = sample.get("id", "Unknown_ID_from_validator")
+    ast_representation = sample.get(
+        "ast_str", "AST_STR_MISSING_IN_SAMPLE"
+    )  # EXPECTS 'ast_str'
+    ground_truth_val = sample.get(
+        "ground_truth_value", "GT_VALUE_MISSING_IN_SAMPLE"
+    )  # EXPECTS 'ground_truth_value'
 
-    # Prioritize using "narrative_prompt" (story only) if available.
-    # Fall back to "narrative_with_question" for older formats or if "narrative_prompt" is missing.
-    narrative_content_for_validation = sample.get(
-        "narrative_prompt", sample.get("narrative_with_question", "")
-    )
-    if not narrative_content_for_validation and "full_prompt" in sample:
-        # Further fallback if both are empty but full_prompt (which should be story + q) exists
-        # This case might indicate an issue with how the sample was written, but we try to use what's there.
-        # For the validator's purpose of checking the *story* part, we'd still prefer just the story.
-        # However, if only full_prompt exists, we have to assume it's the best available narrative content.
+    # The validator LLM needs the full narrative context including the question.
+    # verbose-listops.py now outputs this directly as 'full_text_for_eval'.
+    narrative_with_question_for_validator = sample.get("full_text_for_eval", "")
+
+    if not ast_representation or ast_representation == "AST_STR_MISSING_IN_SAMPLE":
+        logger.warning(f"[{sample_id}] 'ast_str' field missing or empty in sample.")
+    if (
+        ground_truth_val is None or ground_truth_val == "GT_VALUE_MISSING_IN_SAMPLE"
+    ):  # Check for None specifically
         logger.warning(
-            f"[{prompt_data['id']}] 'narrative_prompt' and 'narrative_with_question' are empty/missing. Falling back to 'full_prompt' for narrative content. This might include the question."
+            f"[{sample_id}] 'ground_truth_value' field missing or empty in sample."
         )
-        narrative_content_for_validation = sample.get("full_prompt", "")
-    elif not narrative_content_for_validation:
-        logger.error(
-            f"[{prompt_data['id']}] No narrative content found in 'narrative_prompt', 'narrative_with_question', or 'full_prompt'. Validation will likely be impaired."
-        )
-        narrative_content_for_validation = (
-            ""  # Ensure it's an empty string if nothing is found
+    if not narrative_with_question_for_validator:
+        logger.warning(
+            f"[{sample_id}] 'full_text_for_eval' field missing or empty in sample. Validator LLM will get empty narrative."
         )
 
-    # Simple prompt that highlights the structure needed
     user_prompt = f"""
 Validate this ListOps dataset sample. Your response must be ONLY valid JSON:
 
-ID: {prompt_data['id']}
-AST: {prompt_data['ast_prefix']}
-Expected Answer: {prompt_data['ground_truth_answer']}
+ID: {sample_id}
+AST: {ast_representation}
+Expected Answer: {ground_truth_val if ground_truth_val not in [None, "GT_VALUE_MISSING_IN_SAMPLE"] else "N/A"}
 
-Narrative (full version used for validation):
-{narrative_content_for_validation}
+Narrative (full version used for validation, including the question):
+{narrative_with_question_for_validator}
 
-Perform a detailed evaluation:
-1. Evaluate each step of the AST, showing your work. For each step, identify the operation type, its inputs, and its result.
-2. For each step, check if the narrative correctly represents the operation and numbers with particular attention to:
-   - `itemization_complete`: Does the narrative explicitly list all numerical inputs for the current operation?
-   - `correct_aggregate_provided`: Does the narrative state an aggregate value (e.g., "totaling X", "resulting in X") that IS THE CORRECT RESULT of the current ListOps operation on all its inputs (including results from sub-operations)? This is key. If true, the step is mathematically sound for progression, even if itemization was incomplete.
-3. Analyze the narrative for strengths, weaknesses, and inconsistencies.
-4. Provide detailed reasoning for any issues found.
-
-Key Validation Principle:
-- "Incomplete Itemization with Correct Aggregation": If the narrative provides an explicit aggregate that IS the correct result of the current operation, the step is valid for calculation purposes, even if not all individual inputs were listed.
-- `narrative_consistent`: Judge if the narrative for the step is clear and mathematically sound. Minor stylistic issues are okay. Major issues include ambiguity that obscures the math or misleading statements.
+Perform a detailed evaluation based on the VLOps methodology (implicit intermediate results, conceptual references):
+1. Evaluate each step of the AST, showing your work. For each step, identify the operation type, its inputs (atomic and resolved conceptual references), and its AST-based result.
+2. For each step, verify Input Fidelity: Did the narrative correctly use ALL AST-defined inputs (atomic numbers mentioned, conceptual references for prior results used correctly)?
+3. For each step, verify Result Handling: For intermediate steps, was the numerical result correctly NOT stated and instead implied or associated with a conceptual name? For the final step, was the result not stated (or if stated, is it trivial)?
+4. For each step, assess Narrative Consistency: Is the narrative segment an accurate and clear representation of the AST operation, its inputs, and its (implied) result?
+5. Analyze the overall narrative for strengths, weaknesses, and inconsistencies.
+6. Provide detailed reasoning for any issues found.
 
 RESPOND ONLY WITH THE JSON OBJECT MATCHING THE TEMPLATE - NO OTHER TEXT.
 """
+    # Note: The detailed template is in VALIDATION_SYSTEM_PROMPT. This user prompt just provides the data.
     return user_prompt
 
 
@@ -537,12 +561,12 @@ def get_llm_response(sample: dict, sample_id: str) -> str | None:
             rate_limiter.wait_if_needed()  # Added rate limiter call
 
             response = None  # Initialize response to None
-            
+
             # Temporarily increase client logging level to reduce console output
             httpx_logger = logging.getLogger("httpx")
             original_level = httpx_logger.level
             httpx_logger.setLevel(logging.WARNING)  # Only show warnings and errors
-            
+
             try:
                 response = client.chat.completions.create(
                     model=MODEL_FOR_VALIDATION,
@@ -757,40 +781,44 @@ def parse_llm_validation_output(llm_response_text: str, sample_id: str) -> dict 
 def validate_sample(sample: dict) -> dict:
     sample_id = sample.get("id", "Unknown_ID")
 
-    required_fields = ["id", "ast", "ground_truth", "narrative_with_question"]
+    # Check for new canonical required fields that validator.py needs to operate
+    required_fields = ["id", "ast_str", "ground_truth_value", "full_text_for_eval"]
     missing_fields = [field for field in required_fields if field not in sample]
 
     if missing_fields:
         logger.error(
-            f"[{sample_id}] Sample is missing required fields: {', '.join(missing_fields)}. Skipping."
-        )
-        return {
-            "id": sample_id,
-            "status": "error", # Internal script status
-            "reason": f"Missing required fields: {', '.join(missing_fields)}",
-            "llm_response": None,
-            "parsed_validation": None,
-            "ground_truth_answer": sample.get("ground_truth"),
-        }
-
-    try:
-        if isinstance(sample["ground_truth"], (str, float)): # Allow float then cast
-            sample["ground_truth"] = int(sample["ground_truth"])
-    except (ValueError, TypeError):
-        logger.error(
-            f"[{sample_id}] Ground truth answer '{sample['ground_truth']}' is not a valid integer. Skipping."
+            f"[{sample_id}] Sample is missing required fields for validation: {', '.join(missing_fields)}. Skipping."
         )
         return {
             "id": sample_id,
             "status": "error",
-            "reason": "Invalid ground_truth_answer format in sample.",
+            "reason": f"Missing required fields for validation: {', '.join(missing_fields)}",
             "llm_response": None,
             "parsed_validation": None,
-            "ground_truth_answer": sample.get("ground_truth"),
+            "ground_truth_answer": sample.get(
+                "ground_truth_value"
+            ),  # Use the canonical name
+        }
+
+    # Ensure ground_truth_value is an integer
+    try:
+        if isinstance(sample["ground_truth_value"], (str, float)):
+            sample["ground_truth_value"] = int(sample["ground_truth_value"])
+    except (ValueError, TypeError):
+        logger.error(
+            f"[{sample_id}] Ground truth value '{sample['ground_truth_value']}' is not a valid integer. Skipping."
+        )
+        return {
+            "id": sample_id,
+            "status": "error",
+            "reason": "Invalid ground_truth_value format in sample.",
+            "llm_response": None,
+            "parsed_validation": None,
+            "ground_truth_answer": sample.get("ground_truth_value"),
         }
 
     logger.debug(f"[{sample_id}] Validating sample...")
-    llm_response_text = get_llm_response(sample, sample_id) # Assumes get_llm_response is defined
+    llm_response_text = get_llm_response(sample, sample_id)
 
     if llm_response_text is None:
         logger.error(f"[{sample_id}] Failed to get LLM response.")
@@ -800,10 +828,10 @@ def validate_sample(sample: dict) -> dict:
             "reason": "LLM call failed or returned no response.",
             "llm_response": None,
             "parsed_validation": None,
-            "ground_truth_answer": sample.get("ground_truth"),
+            "ground_truth_answer": sample.get("ground_truth_value"),
         }
 
-    parsed_validation = parse_llm_validation_output(llm_response_text, sample_id) # Assumes parse_llm_validation_output is defined
+    parsed_validation = parse_llm_validation_output(llm_response_text, sample_id)
 
     if parsed_validation is None:
         logger.warning(
@@ -815,51 +843,49 @@ def validate_sample(sample: dict) -> dict:
             "reason": "Could not parse validation results from LLM response.",
             "llm_response": llm_response_text,
             "parsed_validation": None,
-            "ground_truth_answer": sample.get("ground_truth"),
+            "ground_truth_answer": sample.get("ground_truth_value"),
         }
 
-    # Map LLM's overall_status to our internal script status categories
-    overall_status_from_llm = parsed_validation.get("overall_status", "UNDEFINED").upper()
-    final_script_status = "error" # Default internal status
+    overall_status_from_llm = parsed_validation.get(
+        "overall_status", "UNDEFINED"
+    ).upper()
+    final_script_status = "error"
 
     if overall_status_from_llm == "VALID":
         final_script_status = "correct"
     elif overall_status_from_llm == "VALID_BUT_TRIVIAL":
         final_script_status = "trivial"
-    elif overall_status_from_llm == "INVALID_NARRATIVE": # This now covers math errors if they make narrative inconsistent
+    elif overall_status_from_llm == "INVALID_NARRATIVE":
         final_script_status = "incorrect"
-    else: # Handles UNDEFINED or any other unexpected status from LLM
+    else:
         final_script_status = "error"
-        logger.warning(f"[{sample_id}] LLM returned overall_status: {overall_status_from_llm}, mapped to script error.")
+        logger.warning(
+            f"[{sample_id}] LLM returned overall_status: {overall_status_from_llm}, mapped to script error."
+        )
 
-    # The 'matches_ground_truth' from LLM response refers to whether its 'final_ast_value'
-    # (which should be the LLM's calculation of the AST) matches the sample's 'ground_truth'.
-    # This is a check on the LLM's AST evaluation capability, not directly on the narrative quality itself,
-    # but it's useful information.
-    llm_reported_matches_ground_truth = parsed_validation.get("matches_ground_truth", False)
+    llm_reported_matches_ground_truth = parsed_validation.get(
+        "matches_ground_truth", False
+    )
     if final_script_status == "correct" and not llm_reported_matches_ground_truth:
         logger.warning(
             f"[{sample_id}] LLM reported VALID, but 'matches_ground_truth' was false. "
-            f"LLM's final_ast_value: {parsed_validation.get('final_ast_value')} vs Sample GT: {sample.get('ground_truth')}."
+            f"LLM's final_ast_value: {parsed_validation.get('final_ast_value')} vs Sample GT: {sample.get('ground_truth_value')}."
         )
 
     reason_for_log = parsed_validation.get("summary", "No summary provided by LLM.")
     if final_script_status != "correct":
         reason_for_log = parsed_validation.get("detailed_reason", reason_for_log)
-        # Save detailed log for non-correct validations
-        save_detailed_validation_log(sample_id, sample, parsed_validation) # Assumes save_detailed_validation_log is defined
+        save_detailed_validation_log(sample_id, sample, parsed_validation)
     else:
         reason_for_log = "Sample validated as correct by LLM."
 
-
     logger.debug(
-        f"[{sample_id}] Final Status: {final_script_status.upper()}. LLM Status: {overall_status_from_llm}."
+        f"[{sample_id}] Final Script Status: {final_script_status.upper()}. LLM Overall Status: {overall_status_from_llm}."
     )
 
-    # Log if any step was marked as narrative inconsistent by the LLM - only log to debug instead of warning
     if parsed_validation:
         for step_eval in parsed_validation.get("ast_evaluation_steps", []):
-            if not step_eval.get("narrative_consistent", True): # Default to True if missing, but schema requires it
+            if not step_eval.get("narrative_consistent", True):
                 logger.debug(
                     f"[{sample_id}] Step {step_eval.get('step')} (Op: {step_eval.get('operation_type')}) "
                     f"flagged by LLM as narrative inconsistent: {step_eval.get('explanation', 'No details')}"
@@ -867,11 +893,13 @@ def validate_sample(sample: dict) -> dict:
 
     return {
         "id": sample_id,
-        "status": final_script_status, # Use the mapped internal script status
+        "status": final_script_status,
         "reason": reason_for_log,
-        "llm_response": llm_response_text, # The raw JSON string from LLM
-        "parsed_validation": parsed_validation, # The parsed dictionary from LLM
-        "ground_truth_answer": sample.get("ground_truth"), # Original ground truth from sample
+        "llm_response": llm_response_text,
+        "parsed_validation": parsed_validation,
+        "ground_truth_answer": sample.get(
+            "ground_truth_value"
+        ),  # Use the canonical name
     }
 
 
@@ -879,41 +907,37 @@ def validate_sample(sample: dict) -> dict:
 def save_detailed_validation_log(sample_id, sample, validation_result):
     """
     Save a detailed validation log for failed samples to assist with debugging.
+    Uses canonical field names from the sample as output by verbose-listops.py.
     """
     try:
-        # Create directories if they don't exist
         log_dir = os.path.join("logs", "failed_validations")
         os.makedirs(log_dir, exist_ok=True)
-
-        # Create a log file with detailed information
         log_file_path = os.path.join(log_dir, f"fail_validation_{sample_id}.json")
 
-        # Prepare the detailed log data
+        # Use the canonical field names from the sample
+        full_text_content = sample.get("full_text_for_eval", "")
+
         detailed_log = {
-            "sample": {
+            "sample_input_to_validator": {
                 "id": sample.get("id"),
-                "ast_prefix": sample.get("ast"),
-                "ground_truth_answer": sample.get("ground_truth"),
-                # Truncate narrative for log file size
-                "narrative_prompt_preview": (
-                    sample.get("narrative_with_question", "")[:500] + "..."
-                    if len(sample.get("narrative_with_question", "")) > 500
-                    else sample.get("narrative_with_question", "")
+                "ast_str": sample.get("ast_str"),
+                "ground_truth_value": sample.get("ground_truth_value"),
+                "full_text_for_eval_preview": (
+                    full_text_content[:500] + "..."
+                    if len(full_text_content) > 500
+                    else full_text_content
                 ),
             },
-            "validation_result": validation_result,
+            "llm_validation_result": validation_result,
         }
 
-        # Write the log file
         with open(log_file_path, "w", encoding="utf-8") as f:
             json.dump(detailed_log, f, indent=2)
-
         logger.info(f"[{sample_id}] Saved detailed validation log to {log_file_path}")
     except Exception as e:
         logger.error(f"[{sample_id}] Failed to save detailed validation log: {e}")
 
 
-# --- Load Dataset ---
 def load_dataset(file_path: str) -> list:
     dataset = []
     try:
@@ -928,6 +952,8 @@ def load_dataset(file_path: str) -> list:
         logger.info(f"Loaded {len(dataset)} samples from {file_path}")
     except FileNotFoundError:
         logger.error(f"Dataset file not found: {file_path}")
+        # Potentially raise the error or return empty list to be handled by caller
+        # For now, it returns empty list and caller checks.
     except Exception as e:
         logger.error(f"Error loading dataset from {file_path}: {e}")
     return dataset
@@ -1118,9 +1144,7 @@ def run_validation_process(dataset_file_path: str, output_results_path: str | No
     if (
         error_count > 0 or incorrect_count > 0 or trivial_count > 0
     ):  # Broaden condition for log note
-        print(
-            "\n⚠️ Check logs/failed_validations/ for details on specific failures."
-        )
+        print("\n⚠️ Check logs/failed_validations/ for details on specific failures.")
 
     # --- Log Token Usage Summary for Validator ---
     val_prompt_tokens, val_completion_tokens, val_api_calls = (
@@ -1149,9 +1173,7 @@ def run_validation_process(dataset_file_path: str, output_results_path: str | No
             with open(output_results_path, "w", encoding="utf-8") as f_out:
                 for res_item in results:
                     f_out.write(json.dumps(res_item) + "\n")
-            logger.info(
-                f"Full validation results saved to {output_results_path}"
-            )
+            logger.info(f"Full validation results saved to {output_results_path}")
             print(f"Results saved to {os.path.basename(output_results_path)}")
         except Exception as e:
             logger.error(
@@ -1182,7 +1204,9 @@ if __name__ == "__main__":
     if not os.path.exists(args.dataset_file_path):
         logger.error(f"Dataset file not found: '{args.dataset_file_path}'")
         print(f"Dataset file not found: '{args.dataset_file_path}'")
-        print("Usage: python validator.py <path_to_dataset.jsonl> [--output-results <path_for_results.jsonl>]")
+        print(
+            "Usage: python validator.py <path_to_dataset.jsonl> [--output-results <path_for_results.jsonl>]"
+        )
     elif not client:
         logger.error("Client not initialized. Check API key.")
     else:
@@ -1193,10 +1217,14 @@ if __name__ == "__main__":
             and OPENROUTER_API_KEY != "YOUR_OPENROUTER_API_KEY_HERE"
         ):
             try:
-                logger.debug("Performing initial OpenRouter limits check before starting validation...")
+                logger.debug(
+                    "Performing initial OpenRouter limits check before starting validation..."
+                )
                 rate_limiter.update_limits_from_api()
             except Exception as e_limits:  # Renamed to avoid conflict
                 logger.error(f"Initial OpenRouter limits check failed: {e_limits}")
         else:
-            logger.debug("Skipping initial OpenRouter limits check: API key missing or invalid.")
+            logger.debug(
+                "Skipping initial OpenRouter limits check: API key missing or invalid."
+            )
         run_validation_process(args.dataset_file_path, args.output_results)

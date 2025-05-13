@@ -2360,7 +2360,7 @@ def make_number_validator(
                         logger_obj.debug(
                             f"SM OPERATION: Adding combined total {combined_total} to allowed intermediate sums"
                         )
-        
+
         # NEW: Handle conceptual input values more comprehensively
         if conceptual_input_values is not None:
             for concept_val in conceptual_input_values:
@@ -2369,7 +2369,7 @@ def make_number_validator(
                 logger_obj.debug(
                     f"SM OPERATION: Adding conceptual input value {concept_val} to allowed prior results"
                 )
-                
+
                 # Allow sums of conceptual values with intermediate_sum (direct atom sum)
                 if intermediate_sum_allowed is not None:
                     concept_plus_intermediate = concept_val + intermediate_sum_allowed
@@ -2377,7 +2377,7 @@ def make_number_validator(
                     logger_obj.debug(
                         f"SM OPERATION: Adding concept+intermediate sum {concept_plus_intermediate} to allowed sums"
                     )
-                    
+
                 # Allow combinations with other conceptual values
                 for other_concept_val in conceptual_input_values:
                     if other_concept_val != concept_val:
@@ -2702,12 +2702,15 @@ def make_number_validator(
                     continue
 
                 # NEW: Check if it's a direct conceptual input value for SM
-                if conceptual_input_values is not None and extra_num in conceptual_input_values:
+                if (
+                    conceptual_input_values is not None
+                    and extra_num in conceptual_input_values
+                ):
                     logger_obj.debug(
                         f"SM OPERATION: Allowing conceptual input value {extra_num} as explicitly mentioned input"
                     )
                     continue
-                    
+
                 # Check if it's a prior result value for SM
                 if extra_num in sm_allowed_prior_results:
                     logger_obj.debug(
@@ -2716,12 +2719,19 @@ def make_number_validator(
                     continue
 
                 # Allow highly specific combinations that might have been missed in pre-calculation
-                if conceptual_input_values is not None and intermediate_sum_allowed is not None:
+                if (
+                    conceptual_input_values is not None
+                    and intermediate_sum_allowed is not None
+                ):
                     # Check if this is a sum of a conceptual input and part of the atomic inputs
                     # This covers cases where the narrative might mention partial calculations
                     for concept_val in conceptual_input_values:
                         # Check if extra_num could be a partial sum (concept + partial atom sum)
-                        if concept_val < extra_num < (concept_val + intermediate_sum_allowed + 50):
+                        if (
+                            concept_val
+                            < extra_num
+                            < (concept_val + intermediate_sum_allowed + 50)
+                        ):
                             remainder = extra_num - concept_val
                             logger_obj.debug(
                                 f"SM OPERATION: Allowing possible partial calculation {extra_num} as {concept_val}+{remainder}"
@@ -2735,7 +2745,7 @@ def make_number_validator(
                         f"SM OPERATION: Allowing large number {extra_num} assuming it's an intermediate calculation"
                     )
                     continue
-                    
+
                 # For detailed debugging when a number is not allowed
                 logger_obj.debug(
                     f"SM OPERATION: Disallowing number {extra_num} - doesn't match any allowed SM calculation pattern"
@@ -5300,12 +5310,14 @@ def generate_single_sample(sample_index: int, config_obj: Config) -> dict | None
                 # ... other relevant config_obj settings ...
                 "full_config_used": asdict(config_obj),  # Store the exact config
             },
-
             # Add validator-compatible field names
             "id": str(sample_index),  # Required by validator.py
             "ast": ast_to_prefix(node),  # Required by validator.py
             "ground_truth": narrative_gen_context.overall_ground_truth_answer,  # Required by validator.py
-            "narrative_with_question": narrative_body_from_context + "\n\n---\n\n**Question:** Considering the entire sequence of events described in the story, what is the final, precise quantity of " + world_data["object"] + " that the characters possess or have determined at the very end of their activities? Provide only the single integer representing this final amount.",  # Required by validator.py
+            "narrative_with_question": narrative_body_from_context
+            + "\n\n---\n\n**Question:** Considering the entire sequence of events described in the story, what is the final, precise quantity of "
+            + world_data["object"]
+            + " that the characters possess or have determined at the very end of their activities? Provide only the single integer representing this final amount.",  # Required by validator.py
             # ...
         }
         return sample
@@ -5485,7 +5497,14 @@ def main(
                 sample_data
             ) in results:  # Iterate through successfully generated results
                 try:
-                    f.write(json.dumps(sample_data, default=lambda o: list(o) if isinstance(o, set) else str(o), ensure_ascii=False) + "\n")
+                    f.write(
+                        json.dumps(
+                            sample_data,
+                            default=lambda o: list(o) if isinstance(o, set) else str(o),
+                            ensure_ascii=False,
+                        )
+                        + "\n"
+                    )
                 except TypeError as e:
 
                     logger.error(
@@ -5665,7 +5684,15 @@ def main(
                                     ):
                                         # Write the sample with the added fields if needed
                                         f_temp.write(
-                                            json.dumps(sample_in_dataset, default=lambda o: list(o) if isinstance(o, set) else str(o)) + "\n"
+                                            json.dumps(
+                                                sample_in_dataset,
+                                                default=lambda o: (
+                                                    list(o)
+                                                    if isinstance(o, set)
+                                                    else str(o)
+                                                ),
+                                            )
+                                            + "\n"
                                         )
                                         good_samples_written += 1
                                     else:

@@ -25,6 +25,7 @@
         "ptoks",
         "mxops",
         "mxbrch",
+        "minarity",
       // Add any other project-specific terms here
     ],
     "ignorePaths": []

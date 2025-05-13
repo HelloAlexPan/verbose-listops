@@ -1,0 +1,31 @@
+{
+    "version": "0.2",
+    "language": "en",
+    "words": [
+        "listops",
+        "dotenv",
+        "WORLDGEN",
+        "OPENROUTER",
+        "Liora",
+        "Seraphina",
+        "Kairos",
+        "Kaelen",
+        "Moonwhisper",
+        "Moonpetal",
+        "etherium",
+        "levelname",
+        "postorder",
+        "andword",
+        "centralised",
+        "Retryable",
+        "arities",
+        "parseable",
+        "fstring",
+        "btoks",
+        "ptoks",
+        "mxops",
+        "mxbrch",
+      // Add any other project-specific terms here
+    ],
+    "ignorePaths": []
+}

@@ -292,9 +292,6 @@ rate_limiter = RateLimiter(
 )
 
 # --- System prompt for validation ---
-# Template-based JSON approach to force proper formatting
-# In validator.py
-
 VALIDATION_SYSTEM_PROMPT = """
 You are an expert AI system meticulously validating samples from the Verbose ListOps benchmark. This benchmark tests narrative reasoning in LLMs by embedding hierarchical ListOps computations (MAX, MIN, MED, SUM, AVG, SM) within lengthy, coherent narratives.
 
@@ -303,14 +300,13 @@ The benchmark's key characteristics:
 2. The narrative unfolds in post-order (inside-out) evaluation of the ListOps AST.
 3. Models must extract computational signals while filtering out relevant but task-irrelevant narrative content.
 4. **Crucially, intermediate numerical results of operations are NOT explicitly stated in the narrative.** Instead, they are referenced conceptually by thematic names or phrases (e.g., "The Sunstone's Core," "the outcome of the first analysis"). The LLM being evaluated must perform the computation and track these values internally.
-5. The narrative MUST explicitly state the direct atomic numerical inputs for the current operation step (as words), **with a special exception for MEDIAN operations where an input is also the result (see below).**
+5. The narrative MUST explicitly state the direct atomic numerical inputs for the current operation step (as words). **For MEDIAN operations, this means ALL direct atomic inputs must be mentioned; there is NO LONGER an exception for inputs that match the median result.** The median result itself must still be implicit.
 
 CRITICAL TASK: For EACH `ast_evaluation_steps` entry, you must verify:
 1.  **Input Fidelity (`ast_inputs_verified` field):** Did the narrative segment for this operation correctly use ALL inputs specified by the AST for this node? This means:
-    *   All direct atomic numbers for this step MUST be mentioned in the narrative for this step.
-        *   **SPECIAL EXCEPTION FOR MEDIAN OPERATIONS:** If the `operation_type` is "MED", AND an atomic number from `inputs_from_ast` is IDENTICAL to the `result_from_ast` (the median value), then this specific number SHOULD NOT be mentioned in the narrative. In this specific case, for `ast_inputs_verified` to be true regarding this number, you verify its *absence* from the narrative itemization. All *other* atomic inputs for that MEDIAN step must still be present.
+    *   All direct atomic numbers for this step MUST be mentioned in the narrative for this step. **This rule now applies to MEDIAN operations as well: all direct atomic inputs to a MEDIAN operation must be stated in the narrative.**
     *   For inputs that are results from child operations: The narrative MUST reference these conceptually (e.g., using the thematic name introduced when that child operation was described). You should assume this conceptual reference correctly carries forward the `result_from_ast` of that child operation when evaluating the current step's inputs.
-    *   If the narrative describes an operation using a different set of inputs (e.g., ignores a conceptual reference, invents new numbers, or fails to mention required atomic inputs, considering the MEDIAN exception above), `ast_inputs_verified` MUST be `false`.
+    *   If the narrative describes an operation using a different set of inputs (e.g., ignores a conceptual reference, invents new numbers, or fails to mention required atomic inputs), `ast_inputs_verified` MUST be `false`.
 2.  **Result Handling (`intermediate_result_implicit` field):** For this operation step (unless it's the very final operation of the entire AST), did the narrative correctly AVOID stating the numerical `result_from_ast` and instead imply it or associate it with a conceptual name? This should be `true` for all intermediate steps. For the final AST operation, this field can be "N/A" if the result is not stated, or `false` if it is stated (leading to VALID_BUT_TRIVIAL).
 3.  **Narrative Consistency (`narrative_consistent` field):** Based on the above, is the narrative segment for this step an accurate and clear representation of the AST operation, its *correct* inputs (atomic and conceptual), and its *implied* result (for intermediate steps)? If `ast_inputs_verified` is `false` or `intermediate_result_implicit` is `false` (for intermediate steps where it should be true), then `narrative_consistent` for this step MUST also be `false`.
 
@@ -330,11 +326,11 @@ Use this exact template, replacing values in [SQUARE_BRACKETS] with your analysi
       "operation_type": "[MAX, MIN, SUM, AVG, MED, SM]",
       "inputs_from_ast": [LIST_OF_EXPECTED_NUMERICAL_INPUTS_FROM_AST_FOR_THIS_NODE],
       "result_from_ast": [INTEGER_RESULT_OF_THIS_OPERATION_ON_AST_INPUTS],
-      "ast_inputs_verified": [true or false],
-      "intermediate_result_implicit": [true or false or "N/A"],
-      "narrative_consistent": [true or false],
-      "itemization_complete": [true or false], // Still useful to know if all *other* atoms were itemized
-      "explanation": "[BRIEF_EXPLANATION, detailing any input discrepancies or narrative issues for this step, explicitly note if MEDIAN exception applied]"
+      "ast_inputs_verified": [true or false], // Did narrative use ALL AST inputs correctly (all atoms mentioned for MEDIAN too)?
+      "intermediate_result_implicit": [true or false or "N/A"], // Was numerical result NOT stated for intermediate steps?
+      "narrative_consistent": [true or false], // Is this step's narrative segment accurate and clear?
+      "itemization_complete": [true or false], // Were all direct atomic inputs itemized?
+      "explanation": "[BRIEF_EXPLANATION, detailing any input discrepancies or narrative issues for this step. For MEDIAN, confirm all atomic inputs were expected to be mentioned and were present/absent as per this rule.]"
     }
     // Additional steps...
   ],
@@ -350,13 +346,13 @@ Use this exact template, replacing values in [SQUARE_BRACKETS] with your analysi
 ListOps operators:
 - MAX: Maximum value of inputs
 - MIN: Minimum value of inputs
-- MED: Median value (if even count, the lower of the two middle values after sorting)
+- MED: Median value (if even count, the lower of the two middle values after sorting) - ALL direct atomic inputs must be mentioned. Result implicit.
 - SUM: Sum of inputs
 - AVG: Integer floor of the sum of inputs divided by the count of inputs
 - SM: Sum of inputs modulo 10 (result is sum % 10)
 
 Guidelines for `narrative_consistent` field in `ast_evaluation_steps`:
-- Mark `true` if the narrative segment for this step accurately and clearly conveys the operation, its AST-defined inputs (atoms mentioned according to rules including MEDIAN exception, conceptual references used for prior results), and correctly implies the result without stating it numerically (for intermediate steps).
+- Mark `true` if the narrative segment for this step accurately and clearly conveys the operation, its AST-defined inputs (all atoms mentioned, conceptual references used for prior results), and correctly implies the result without stating it numerically (for intermediate steps).
 - Mark `false` if `ast_inputs_verified` is `false`, or if `intermediate_result_implicit` is `false` for an intermediate step where it should be true, or for significant ambiguity or misleading information.
 - **FOR THE FINAL EVALUATION STEP ONLY:** The narrative is designed to lead up to the final answer but *NOT* explicitly state it. `intermediate_result_implicit` can be marked "N/A" or `true` for this final step if the result is not stated. If the narrative segment for this final step *does* explicitly state the numerical result of this final operation, then `narrative_consistent` for this final step MUST be marked `false`, and your `explanation` for this step must clearly state: "Final answer revealed in narrative." In this specific scenario (math correct, prior steps consistent, but final answer revealed), set `overall_status` to `VALID_BUT_TRIVIAL`.
 
@@ -364,8 +360,6 @@ DO NOT write any text outside of this JSON format.
 """
 
 # --- JSON Schema for validation output ---
-# In validator.py (typically near VALIDATION_SYSTEM_PROMPT)
-
 VALIDATION_OUTPUT_SCHEMA = {
     "type": "object",
     "properties": {

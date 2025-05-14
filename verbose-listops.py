@@ -290,6 +290,10 @@ BASE_BEAT_TEMPLATE = Template(
     "Output only the narrative text for this new scene, continuing from the snippet. Do not include titles, headings, or explanations."
 )
 
+# verbose-listops.py
+
+# ... (other imports and constants) ...
+
 FEW_SHOT_EXAMPLES_STRICT = [
     (
         (
@@ -303,39 +307,41 @@ FEW_SHOT_EXAMPLES_STRICT = [
         "Felix examined the three caches. 'This one has ninety-three relics, that one ninety, and the last thirty-nine,' he said. Liora checked the Cipher Wheel. 'We need the smallest: thirty-nine. It took twelve minutes.'",
         "BAD output failed: Included 'twelve'. Rule Analysis: 12 not in MUST INCLUDE {39, 90, 93}, not operand count (3), not allowed small num (0-10). Violates 'NO OTHER NUMBERS'.",
     ),
-    # Corrected MEDIAN Example 1 (Original inputs: {72, 84, 89, 91, 95}, Median: 89)
+    # REWRITTEN MEDIAN Example 1 (Original inputs: {72, 84, 89, 91, 95}, Median: 89)
+    # NEW RULE: ALL inputs (72, 84, 89, 91, 95) MUST be mentioned. Median 89 is IMPLICIT.
     (
         (
             "**ULTRA-STRICT NUMBER RULES (Apply ONLY to THIS Scene - MEDIAN Example):**\\\\n"
-            "*   **MUST INCLUDE:** ... mention ... numbers as written words: seventy-two, eighty-four, ninety-one, and ninety-five.\\\\n"
-            "*   **(Critical MEDIAN Exception Applied):** The number 'eighty-nine' (89) was an input for this step BUT it is also the MEDIAN result. Therefore, 'eighty-nine' (89) has been EXCLUDED from the list above and MUST NOT be mentioned in your narrative for this scene. Only state the other numbers listed above (seventy-two, eighty-four, ninety-one, ninety-five).\\\\n"
+            "*   **MUST INCLUDE:** ... mention ... numbers as written words: seventy-two, eighty-four, eighty-nine, ninety-one, and ninety-five.\\\\n"
+            # No special MEDIAN exception for input itemization anymore. ALL inputs must be mentioned.
             "*   **MEDIAN RESULT MUST BE IMPLICIT:** The median value ('eighty-nine') must NOT be explicitly stated as the result. It should be implied conceptually.\\\\n"
-            "*   You MAY use the number 'four' (the count of *mentioned* direct items) and the number 'one'.\\\\n"
+            "*   You MAY use the number 'five' (the count of direct items) and the number 'one'.\\\\n"
             "*   **ABSOLUTELY NO OTHER NUMBERS:** Do not introduce any other numerical values...\\\\n"
             "**Adhere strictly to these rules for this scene only.**"
         ),
-        # GOOD example: mentions all required numbers (72, 84, 91, 95) but OMITTED 89 (input that is also median). Median 89 is IMPLICIT.
-        "Seraphina arranged the crystal fragments on the altar: 'This one pulses with seventy-two vibrations, this with eighty-four, this with ninety-one, this with ninety-five.' She examined the fifth crystal, studying its unique pattern. 'This middle fragment - the balanced keystone - shall be our central focus. Its resonance sits precisely between the others.' Marcus nodded, 'The perfect equilibrium point. The central essence that will stabilize the ritual.'",
-        # BAD example: explicitly mentions "eighty-nine" as the median/result OR as an input.
-        "Seraphina arranged the crystal fragments on the altar: 'This one pulses with seventy-two vibrations, this with eighty-four, this with eighty-nine, this with ninety-one, and this with ninety-five.' She examined the fifth crystal. 'This one has eighty-nine vibrations - it's the median value, the perfect middle point.' Marcus nodded, 'Eighty-nine is indeed the central value we need.'",
-        "BAD output failed: Explicitly stated 'eighty-nine'. For MEDIAN operations, if an input number is also the median result, that number MUST NOT be mentioned at all. The median result itself must also always be IMPLICIT.",
+        # GOOD example: mentions ALL required numbers (72, 84, 89, 91, 95). Median 89 is IMPLICIT.
+        "Seraphina arranged the five crystal fragments on the altar: 'This one pulses with seventy-two vibrations, this with eighty-four, this with eighty-nine, this with ninety-one, and this with ninety-five.' She examined the arrangement, particularly the one glowing with eighty-nine vibrations. 'This central fragment,' she mused, 'its resonance sits precisely in the middle, the perfect equilibrium point that will stabilize the ritual.' Marcus nodded, understanding its significance without her needing to state 'median'.",
+        # BAD example: explicitly states "eighty-nine" AS THE MEDIAN RESULT.
+        "Seraphina arranged the crystal fragments: 'We have seventy-two, eighty-four, eighty-nine, ninety-one, and ninety-five. The median of these is eighty-nine.'",
+        "BAD output failed: Explicitly stated 'eighty-nine' as the median result. For MEDIAN operations, the result MUST be IMPLICIT.",
     ),
-    # Corrected MEDIAN Example 2 (Original inputs: {73, 85, 87, 88, 89, 91}, Median: 87)
+    # REWRITTEN MEDIAN Example 2 (Original inputs: {73, 85, 87, 88, 89, 91}, Median: 87)
+    # NEW RULE: ALL inputs (73, 85, 87, 88, 89, 91) MUST be mentioned. Median 87 is IMPLICIT.
     (
         (
             "**ULTRA-STRICT NUMBER RULES (Apply ONLY to THIS Scene - MEDIAN Example):**\\\\n"
-            "*   **MUST INCLUDE:** ... mention ... numbers as written words: seventy-three, eighty-five, eighty-eight, eighty-nine, and ninety-one.\\\\n"
-            "*   **(Critical MEDIAN Exception Applied):** The number 'eighty-seven' (87) was an input for this step BUT it is also the MEDIAN result. Therefore, 'eighty-seven' (87) has been EXCLUDED from the list above and MUST NOT be mentioned in your narrative for this scene. Only state the other numbers listed above (seventy-three, eighty-five, eighty-eight, eighty-nine, ninety-one).\\\\n"
+            "*   **MUST INCLUDE:** ... mention ... numbers as written words: seventy-three, eighty-five, eighty-seven, eighty-eight, eighty-nine, and ninety-one.\\\\n"
+            # No special MEDIAN exception for input itemization anymore. ALL inputs must be mentioned.
             "*   **MEDIAN RESULT MUST BE IMPLICIT:** The median value ('eighty-seven') must NOT be explicitly stated anywhere.\\\\n"
-            "*   You MAY use the number 'five' (the count of *mentioned* direct items) and the number 'one'.\\\\n"
+            "*   You MAY use the number 'six' (the count of direct items) and the number 'one'.\\\\n"
             "*   **ABSOLUTELY NO OTHER NUMBERS:** Do not introduce any other numerical values...\\\\n"
             "**Adhere strictly to these rules for this scene only.**"
         ),
-        # GOOD example: mentions all inputs EXCEPT the median (87), which is only implied
-        "Kairos studied the alignment of six energy signatures on the quantum display. 'The readings show seventy-three, eighty-five, eighty-eight, eighty-nine, and ninety-one, plus the void signal.' He pointed to the empty space between the values. 'The central point - this balance nexus - is our target. The middle value will stabilize the entire sequence.' Lyra nodded, understanding the critical equilibrium point without needing to name it.",
-        # BAD example: explicitly lists the median (87) among all values
-        "Kairos studied the alignment of six energy signatures on the quantum display. 'The readings show seventy-three, eighty-five, eighty-seven, eighty-eight, eighty-nine, and ninety-one.' He pointed to the third value. 'This central point - eighty-seven - is our target. The middle value will stabilize the entire sequence.'",
-        "BAD output failed: The median value 'eighty-seven' was explicitly listed. CRITICAL ERROR: For MEDIAN operations, if an input number is also the median result, that number MUST NOT be mentioned at all. The median result itself must also always be IMPLICIT.",
+        # GOOD example: mentions ALL inputs (73, 85, 87, 88, 89, 91). Median 87 is IMPLICIT.
+        "Kairos studied the alignment of six energy signatures on the quantum display. 'The readings show seventy-three, eighty-five, eighty-seven, eighty-eight, eighty-nine, and ninety-one.' He pointed to the value eighty-seven. 'This central point, the one reading eighty-seven, is our target. Its balance will stabilize the entire sequence.' Lyra nodded, understanding the critical equilibrium point without needing to name it as the median.",
+        # BAD example: explicitly states "eighty-seven" AS THE MEDIAN RESULT.
+        "Kairos studied the six signatures: seventy-three, eighty-five, eighty-seven, eighty-eight, eighty-nine, and ninety-one. 'The median here is eighty-seven,' he declared.",
+        "BAD output failed: The median value 'eighty-seven' was explicitly stated as the result. CRITICAL ERROR: For MEDIAN operations, the result itself must always be IMPLICIT.",
     ),
 ]
 
@@ -2275,13 +2281,13 @@ def make_number_validator(
     operand_count: int,
     correct_result_for_beat: int | None,
     strict_zero: bool = False,
-    enforce_result_presence: bool = True,  # Note: This will be effectively False due to logic in _generate_narrative_recursive
+    enforce_result_presence: bool = True, 
     operation_type: str | None = None,
     overall_ground_truth_answer: int | None = None,
     is_root_node_being_validated: bool = False,
     conceptual_input_values: (
         Set[int] | None
-    ) = None,  # Retained for potential future use, not actively used in v6 logic
+    ) = None,
     config_obj: Config = config,
     logger_obj: logging.Logger = logger,
 ) -> Callable[[str], bool]:
@@ -2306,13 +2312,14 @@ def make_number_validator(
                 f"Validator: Result {correct_result_for_beat} is ALSO a direct atomic input for Op {operation_type}."
             )
 
+    # NO MORE MEDIAN EXCEPTION FOR INPUTS: All allowed_atoms are always required.
     required_atoms_for_validation = set(allowed_atoms)
-    if operation_type == "MED" and is_result_also_an_input_atom:
-        required_atoms_for_validation.discard(correct_result_for_beat)
+    if operation_type == "MED":
         logger_obj.info(
-            f"MED OPERATION SPECIAL CASE: Median value {correct_result_for_beat} is an input. "
-            f"It is removed from required atoms and MUST NOT appear in text."
+            f"MED OPERATION VALIDATION (New Rule): All atomic inputs {list(allowed_atoms)} must be mentioned. "
+            f"The median result ({correct_result_for_beat}) must be implicit."
         )
+
 
     def validate(text: str) -> bool:
         found_numbers = extract_numbers_from_text(text)
@@ -2330,10 +2337,10 @@ def make_number_validator(
             "found_numbers": list(found_numbers),
             "allowed_atoms": list(
                 allowed_atoms
-            ),  # Original allowed_atoms for reporting
+            ),
             "required_atoms_for_check": list(
-                required_atoms_for_validation
-            ),  # The set actually used for checking
+                required_atoms_for_validation 
+            ),
             "operand_count": operand_count,
             "correct_result": correct_result_for_beat,
             "is_root_node": is_root_node_being_validated,
@@ -2358,25 +2365,14 @@ def make_number_validator(
                 return False
             return True
 
-        # Rule 1: IMPLICIT RESULT HANDLING (enforce_result_presence is always False in current setup)
+        # Rule 1: IMPLICIT RESULT HANDLING
+        # The result of ANY operation must be implicit and not stated numerically,
+        # UNLESS that result value also happens to be one of the direct atomic inputs for THIS beat.
         if (
             correct_result_for_beat is not None
             and correct_result_for_beat in found_numbers
         ):
-            if operation_type == "MED":
-                validation_report["status"] = "FAIL"
-                validation_report["reason"] = "MED_RESULT_STATED_EXPLICITLY_VIOLATION"
-                validation_report["details"].append(
-                    f"MEDIAN op: Result {correct_result_for_beat} MUST be implicit and MUST NOT appear, even if it was an input. Found in text."
-                )
-                _log_failed_validation(text, validation_report, logger_obj)
-                return False
-            elif is_result_also_an_input_atom:
-                logger_obj.debug(
-                    f"Python Validator: Result {correct_result_for_beat} (Op: {operation_type}) found, but it's also a required input. "
-                    f"Allowing presence; LLM must check narrative framing."
-                )
-            else:  # Result found, not MED, and not an input atom
+            if not is_result_also_an_input_atom: 
                 validation_report["status"] = "FAIL"
                 validation_report["reason"] = "IMPLICIT_RESULT_STATED_EXPLICITLY"
                 validation_report["details"].append(
@@ -2384,6 +2380,11 @@ def make_number_validator(
                 )
                 _log_failed_validation(text, validation_report, logger_obj)
                 return False
+            else: 
+                logger_obj.debug(
+                    f"Python Validator: Result {correct_result_for_beat} (Op: {operation_type}) found, and it's also a required input. "
+                    f"Allowing its presence as an input; LLM must check narrative framing (not frame it as outcome)."
+                )
 
         # Rule 2: All REQUIRED ATOMIC OPERANDS MUST be present
         missing_required_atoms = required_atoms_for_validation - found_numbers
@@ -2401,10 +2402,13 @@ def make_number_validator(
         truly_forbidden_and_found = set()
         potentially_forbidden_found = found_numbers & forbidden_atoms
         for num in potentially_forbidden_found:
-            if num in required_atoms_for_validation:
+            if num in required_atoms_for_validation: 
                 continue
-            if num == correct_result_for_beat:
-                continue  # Rule 1 handled its presence/absence based on context
+            if num == correct_result_for_beat and is_result_also_an_input_atom: 
+                continue
+            if num == correct_result_for_beat and not is_result_also_an_input_atom:
+                 continue 
+
             if num in config_obj.ALWAYS_ALLOWED_PHRASING_NUMBERS_SET:
                 continue
             if num == operand_count:
@@ -2412,7 +2416,7 @@ def make_number_validator(
             if num in IMPLICITLY_ALLOWED_SMALL_NUMBERS:
                 continue
             truly_forbidden_and_found.add(
-                (num, "from prior results/GT and not otherwise allowed")
+                (num, "from prior results/GT and not otherwise allowed for this beat")
             )
 
         if truly_forbidden_and_found:
@@ -2433,12 +2437,11 @@ def make_number_validator(
         # Rule 4: Check for OTHER EXTRANEOUS NUMBERS
         extraneous_candidates = set(found_numbers)
         extraneous_candidates -= required_atoms_for_validation
-        if correct_result_for_beat is not None:
-            extraneous_candidates.discard(correct_result_for_beat)
+        
         extraneous_candidates -= config_obj.ALWAYS_ALLOWED_PHRASING_NUMBERS_SET
         extraneous_candidates.discard(operand_count)
         extraneous_candidates -= IMPLICITLY_ALLOWED_SMALL_NUMBERS
-        extraneous_candidates -= forbidden_atoms
+        extraneous_candidates -= forbidden_atoms 
 
         if extraneous_candidates:
             validation_report["status"] = "FAIL"
@@ -2457,6 +2460,7 @@ def make_number_validator(
 
     return validate
 
+# ... (rest of the script) ...
 
 # Add a helper function to save failed validation attempts
 def _log_failed_validation(
@@ -3074,25 +3078,30 @@ Respond in structured JSON format ONLY."""
 
 
 # --- Iterative LLM Validation Loop ---
+# verbose-listops.py
+
+# ... (imports and other code including GenerationContext, OpNode, Atom, OP_LABELS) ...
+
 def _generate_narrative_recursive(
     node: Node,
-    context: "GenerationContext", # Type hint for GenerationContext
+    context: "GenerationContext", 
     is_root: bool,
 ):
     world = context.world
     config_obj = context.config
     encoder = context.encoder
     logger_obj = context.logger
+    p_inflect = context.p_inflect # Ensure p_inflect is accessed from context
     narrative_anchor_map = context.narrative_anchor_map
 
     node_id = id(node)
-    current_node_conceptual_name = "this_step_s_outcome" # Default
-    if isinstance(node, OpNode): # Ensure it's an OpNode before accessing op attribute
+    current_node_conceptual_name = "this_step_s_outcome" 
+    if isinstance(node, OpNode): 
         current_node_conceptual_name = narrative_anchor_map.get(
             node_id, f"the_unnamed_{node.op}_result_{node_id % 100}"
         )
 
-    op_for_log = getattr(node, "op", "AtomNode") # Safe way to get op
+    op_for_log = getattr(node, "op", "AtomNode") 
     logger_obj.debug(
         f"[Sample {context.sample_index + 1}] _generate_narrative_recursive: "
         f"Processing Node Type: {type(node).__name__}, Op: {op_for_log}, Conceptual Name: '{current_node_conceptual_name}', IsRoot: {is_root}, "
@@ -3101,14 +3110,13 @@ def _generate_narrative_recursive(
 
     if isinstance(node, Atom):
         logger_obj.debug(f"Node is Atom ({node.n}), value is {node.value}. Returning.")
-        return # Base case for recursion
+        return 
 
-    # Recursive calls for children
-    child_op_node_results_as_conceptual_inputs = {} # Stores {anchor_name: value} for OpNode children
-    child_conceptual_names_list = [] # Stores anchor_names of OpNode children
+    child_op_node_results_as_conceptual_inputs = {} 
+    child_conceptual_names_list = [] 
 
     for child_index, child in enumerate(node.children):
-        _generate_narrative_recursive(child, context, is_root=False) # Recursive call
+        _generate_narrative_recursive(child, context, is_root=False) 
         if isinstance(child, OpNode):
             child_anchor_str = narrative_anchor_map.get(id(child))
             if child_anchor_str:
@@ -3132,8 +3140,10 @@ def _generate_narrative_recursive(
 
     op_label = OP_LABELS.get(node.op, node.op)
     direct_atom_children = [c_atom for c_atom in node.children if isinstance(c_atom, Atom)]
-    current_op_arity = len(node.children)
-    direct_atom_values = {a.n for a in direct_atom_children}
+    # current_op_arity = len(node.children) # This is total arity (atoms + conceptual)
+    direct_atom_values = {a.n for a in direct_atom_children} # Set of unique direct atomic input values
+    all_direct_atomic_inputs_as_list = [a.n for a in direct_atom_children] # List of all direct atomic inputs (preserves multiplicity)
+
     correct_result = node.value
 
     if correct_result is None:
@@ -3155,11 +3165,12 @@ def _generate_narrative_recursive(
 
     if context.overall_ground_truth_answer is not None:
         if context.overall_ground_truth_answer != correct_result and \
-           context.overall_ground_truth_answer not in direct_atom_values:
+           context.overall_ground_truth_answer not in direct_atom_values: 
             forbidden_for_current_beat_py_validator.add(context.overall_ground_truth_answer)
-    forbidden_for_current_beat_py_validator -= direct_atom_values
-    if correct_result is not None:
-        forbidden_for_current_beat_py_validator.discard(correct_result)
+    
+    forbidden_for_current_beat_py_validator -= direct_atom_values 
+    # Result handling is via Rule 2, not by adding to forbidden list for generator.
+    
     logger_obj.debug(
         f"Forbidden numbers for Python validator (Op: {node.op}, Beat: {context.beat_counter['current']}): {sorted(list(forbidden_for_current_beat_py_validator))}"
     )
@@ -3175,53 +3186,56 @@ def _generate_narrative_recursive(
         if conceptual_inputs_context_list
         else "None (this is the first calculation or uses only new numbers)"
     )
-
-    atomic_inputs_context_list_detailed = []
-    if direct_atom_children:
-        for atom_node in direct_atom_children:
-            atomic_inputs_context_list_detailed.append(
-                f"'{num_to_words(atom_node.n)}' ({atom_node.n})"
-            )
-    atomic_inputs_context_str_detailed = ( # This string lists ALL direct atomic inputs
-        ", ".join(atomic_inputs_context_list_detailed)
-        if atomic_inputs_context_list_detailed
-        else "None"
-    )
-
-    # This string lists only atoms that SHOULD be mentioned (respecting MEDIAN exception)
+    
+    # --- REVISED LOGIC for must_mention_text_detailed and special_med_input_clarification ---
+    # NO MORE MEDIAN INPUT EXCEPTION: All direct atomic inputs must be mentioned for all ops.
+    
     must_mention_rule_parts_detailed = []
-    special_med_input_clarification = "" # For Rule 1 of ultra_strict_instruction
-    for atom_obj in direct_atom_children:
-        atom_word = num_to_words(atom_obj.n)
-        atom_digit = atom_obj.n
-        is_problematic_med_input = False
-        if node.op == "MED" and correct_result is not None and atom_digit == correct_result:
-            is_problematic_med_input = True
-        if is_problematic_med_input:
-            continue
-        must_mention_rule_parts_detailed.append(f"'{atom_word}' ({atom_digit})")
+    # For the prompt's "MUST INCLUDE" list, list unique values and indicate multiplicity if it exists.
+    unique_direct_atom_values_for_prompt = sorted(list(set(all_direct_atomic_inputs_as_list)))
+
+    for atom_val in unique_direct_atom_values_for_prompt:
+        count = all_direct_atomic_inputs_as_list.count(atom_val)
+        atom_word = num_to_words(atom_val)
+        if count > 1 and p_inflect: # Check if p_inflect is available
+            # e.g., 'five' (5) (two times if distinct items)
+            must_mention_rule_parts_detailed.append(f"'{atom_word}' ({atom_val}) (which appears {p_inflect.number_to_words(count)} times as direct inputs)")
+        else:
+            must_mention_rule_parts_detailed.append(f"'{atom_word}' ({atom_val})")
 
     must_mention_text_detailed = (
-        " and ".join(must_mention_rule_parts_detailed)
-        if must_mention_rule_parts_detailed
-        else "No new numbers to explicitly state"
+        (" and ".join(must_mention_rule_parts_detailed) if must_mention_rule_parts_detailed 
+         else "No new numbers to explicitly state (e.g., if all inputs are conceptual)")
     )
-    if node.op == "MED" and any(atom_obj.n == correct_result for atom_obj in direct_atom_children if correct_result is not None):
+    
+    special_med_input_clarification = "" 
+    if node.op == "MED": # General note for MEDIAN, not an input exception
         special_med_input_clarification = (
-            f" (Important MEDIAN Note: The value '{num_to_words(correct_result)}' ({correct_result}), "
-            f"though an input, is also the median result. It MUST NOT be mentioned at all. "
-            f"Only mention the *other* new numbers listed above, if any. See task description.)"
+            f" (Important MEDIAN Note: For this MEDIAN operation, ALL direct atomic input numbers listed above MUST be mentioned. "
+            f"The MEDIAN result itself ('{num_to_words(correct_result)}' ({correct_result})) MUST be implied and not stated, as per Rule 2.)"
         )
-        if not must_mention_rule_parts_detailed:
-             must_mention_text_detailed = f"No new numbers to explicitly state (due to special MEDIAN rules where input '{num_to_words(correct_result)}' ({correct_result}) is also the result and must not be mentioned)"
+        if not unique_direct_atom_values_for_prompt:
+             must_mention_text_detailed = "No new numbers to explicitly state for this MEDIAN step (e.g., if all inputs are conceptual)"
+
+    # This string lists ALL direct atomic inputs for the generator's context (can show multiplicity)
+    atomic_inputs_context_list_detailed_full = []
+    if direct_atom_children:
+        for atom_node in direct_atom_children: 
+            atomic_inputs_context_list_detailed_full.append(
+                f"'{num_to_words(atom_node.n)}' ({atom_node.n})"
+            )
+    atomic_inputs_context_str_detailed = ( 
+        ", ".join(atomic_inputs_context_list_detailed_full)
+        if atomic_inputs_context_list_detailed_full
+        else "None"
+    )
+    # --- END OF REVISED LOGIC for must_mention ---
 
     result_handling_rule_text = (
         f"The numerical result of THIS operation ({op_label}) -- which is '{num_to_words(correct_result)}' ({correct_result}) -- MUST NOT be explicitly stated in the text. "
         f"It must only be implied by events. This implied result will be known conceptually as '{current_node_conceptual_name}' for future steps."
     )
-    if node.op == "MED":
-        result_handling_rule_text += f" ⚠️ CRITICAL MED RULE: NEVER explicitly write the median value '{num_to_words(correct_result)}' ({correct_result}) anywhere. Imply '{current_node_conceptual_name}' conceptually."
-    elif correct_result is not None and correct_result in direct_atom_values:
+    if correct_result is not None and correct_result in direct_atom_values: 
         result_handling_rule_text += (
             f" (Special Note: The result value '{num_to_words(correct_result)}' ({correct_result}) is also one of your required atomic inputs. "
             f"While you MUST mention it as an input (Rule 1), ensure your narrative does NOT frame it as the *outcome* of this operation. "
@@ -3233,18 +3247,21 @@ def _generate_narrative_recursive(
     may_use_gen_parts_detailed = [
         f"small numbers like {phrasing_numbers_gen_str_detailed_for_rule3} for general narrative phrasing (e.g., 'two guards')"
     ]
+    
+    actual_arity_for_current_op = len(node.children) 
+
     arity_is_problematic_forbidden = (
-        current_op_arity in forbidden_for_current_beat_py_validator and
-        current_op_arity not in config_obj.ALWAYS_ALLOWED_PHRASING_NUMBERS_SET
+        actual_arity_for_current_op in forbidden_for_current_beat_py_validator and
+        actual_arity_for_current_op not in config_obj.ALWAYS_ALLOWED_PHRASING_NUMBERS_SET
     )
-    if current_op_arity > 0 :
+    if actual_arity_for_current_op > 0 :
         if not arity_is_problematic_forbidden:
             may_use_gen_parts_detailed.append(
-                f"the number '{num_to_words(current_op_arity)}' ({current_op_arity}) IF it's genuinely used to count the items/inputs involved in THIS specific action"
+                f"the number '{num_to_words(actual_arity_for_current_op)}' ({actual_arity_for_current_op}) IF it's genuinely used to count the items/inputs involved in THIS specific action"
             )
         else:
             may_use_gen_parts_detailed.append(
-                f"the number '{num_to_words(current_op_arity)}' ({current_op_arity}) ONLY if essential for counting and clearly distinct from its forbidden meaning (use with extreme caution or avoid)"
+                f"the number '{num_to_words(actual_arity_for_current_op)}' ({actual_arity_for_current_op}) ONLY if essential for counting and clearly distinct from its forbidden meaning (use with extreme caution or avoid)"
             )
     may_use_gen_clause_content_detailed = "; ".join(may_use_gen_parts_detailed)
 
@@ -3260,8 +3277,12 @@ def _generate_narrative_recursive(
         )
 
     temp_forbidden_detailed_list_for_rule4 = []
-    for n_forbidden in sorted(list(forbidden_for_current_beat_py_validator)):
+    forbidden_for_generator_prompt = set(forbidden_for_current_beat_py_validator) 
+    for n_forbidden in sorted(list(forbidden_for_generator_prompt)):
+        if n_forbidden == correct_result and not (correct_result in direct_atom_values):
+            continue
         temp_forbidden_detailed_list_for_rule4.append(f"'{num_to_words(n_forbidden)}' ({n_forbidden})")
+
     must_avoid_str_for_generator_prompt_detailed = (
         ", ".join(temp_forbidden_detailed_list_for_rule4)
         if temp_forbidden_detailed_list_for_rule4
@@ -3279,10 +3300,11 @@ def _generate_narrative_recursive(
             f"Think of them as legendary items or well-known past results. The actual number these names represent should remain a secret from the reader, hinted at only by their conceptual name.\n"
         )
 
+    # --- ULTRA_STRICT_INSTRUCTION REVISED (MEDIAN input exception removed) ---
     ultra_strict_instruction = (
         f"**Narrative Challenge & Your Writing Guide for This Scene:**\n"
         f"Your main goal is to weave a compelling scene. However, for this specific task, you must precisely control how numbers are mentioned, turning constraints into creative storytelling:\n\n"
-        f"1.  **Key Details to Feature (Numbers in Action):** As events unfold, ensure your characters encounter or interact with specific quantities. For this scene, the numbers **{must_mention_text_detailed}** (written as words, like 'nine treasures') must play a direct role in the action.{special_med_input_clarification}\n"
+        f"1.  **Key Details to Feature (Numbers in Action):** As events unfold, ensure your characters encounter or interact with specific quantities. For this scene, the numbers **{must_mention_text_detailed}** (written as words, like 'nine treasures') must play a direct role in the action. For ALL operations, including MEDIAN, this means ALL direct atomic input numbers listed must be mentioned.{special_med_input_clarification}\n" 
         f"2.  **The Unspoken Outcome:** This scene's events will lead to a new total or understanding. While you, the storyteller, know this outcome is numerically **'{num_to_words(correct_result)}' ({correct_result})**, your characters and the reader must *not* see this number written. Instead, the result should be subtly implied. From this point forward in the story, we'll refer to this outcome conceptually as **'{current_node_conceptual_name}'**. {result_handling_rule_text.replace(f'The numerical result of THIS operation ({op_label}) -- which is '+f"'{num_to_words(correct_result)}' ({correct_result})"+f' -- MUST NOT be explicitly stated in the text. It must only be implied by events. This implied result will be known conceptually as '+f"'{current_node_conceptual_name}'"+' for future steps.','')}\n"
         f"3.  **Permitted Narrative Flourishes (Optional Numbers):** You MAY use {may_use_gen_clause_content_detailed} for general color, if truly necessary for fluency.\n"
         f"{gt_counting_caution_for_gen.rstrip() + ('\\n' if gt_counting_caution_for_gen.strip() else '')}"
@@ -3311,10 +3333,14 @@ def _generate_narrative_recursive(
     op_specific_action_details = ""
     op_specific_outcome_implication_details = ""
 
+    # atomic_inputs_context_str_detailed lists all direct atomic inputs with multiplicity
+    # must_mention_text_detailed lists unique values and their counts for Rule 1.
+    # For action description, atomic_inputs_context_str_detailed is good for context.
+
     if node.op == "SUM":
         op_specific_action_details = (
             f"Imagine your characters are gathering or combining distinct collections of '{safe_primary_object_for_fstring}'. "
-            f"Some of these collections might be newly found or counted, corresponding to the numbers: {atomic_inputs_context_str_detailed if direct_atom_children else 'none mentioned for this step'}. "
+            f"Some of these collections might be newly found or counted, corresponding to the numbers: {atomic_inputs_context_str_detailed if direct_atom_children else 'none mentioned for this step'}. " # All these must be mentioned.
             f"Other collections might be the results of previous efforts, known only by evocative names like {conceptual_input_names_only_str_for_action}. "
             f"Your story should clearly show these being brought together into a single, larger accumulation."
         )
@@ -3325,7 +3351,7 @@ def _generate_narrative_recursive(
     elif node.op == "MIN":
         op_specific_action_details = (
             f"Picture your characters assessing several distinct quantities or instances of '{safe_primary_object_for_fstring}'. "
-            f"These might include newly encountered items (quantified by {atomic_inputs_context_str_detailed if direct_atom_children else 'none for this step'}) "
+            f"These might include newly encountered items (quantified by ALL the numbers: {atomic_inputs_context_str_detailed if direct_atom_children else 'none for this step'}) "
             f"and also the conceptual results of past endeavors (referred to as {conceptual_input_names_only_str_for_action}). "
             f"The narrative should focus on them identifying or selecting the *smallest* or *least significant* among all these."
         )
@@ -3336,7 +3362,7 @@ def _generate_narrative_recursive(
     elif node.op == "MAX":
         op_specific_action_details = (
             f"Envision your characters evaluating several different amounts or examples of '{safe_primary_object_for_fstring}'. "
-            f"These could be new discoveries (detailed by the numbers {atomic_inputs_context_str_detailed if direct_atom_children else 'none for this step'}) "
+            f"These could be new discoveries (detailed by ALL the numbers: {atomic_inputs_context_str_detailed if direct_atom_children else 'none for this step'}) "
             f"or the outcomes of prior activities (known conceptually as {conceptual_input_names_only_str_for_action}). "
             f"The story should center on them determining or isolating the *largest*, *most potent*, or *most significant* among these."
         )
@@ -3347,7 +3373,7 @@ def _generate_narrative_recursive(
     elif node.op == "AVG":
         op_specific_action_details = (
             f"The scene should depict characters considering a set of '{safe_primary_object_for_fstring}' "
-            f"(some new, described by numbers {atomic_inputs_context_str_detailed if direct_atom_children else 'none for this step'}, "
+            f"(some new, described by ALL numbers: {atomic_inputs_context_str_detailed if direct_atom_children else 'none for this step'}, "
             f"others being prior conceptual results like {conceptual_input_names_only_str_for_action}). "
             f"Their actions or observations should lead them to understand a 'typical', 'representative', or 'average' characteristic or measure across these items, "
             f"without performing explicit mathematical division in the narrative."
@@ -3356,36 +3382,20 @@ def _generate_narrative_recursive(
             f"This representative 'average' value (which is '{num_to_words(correct_result)}') will be conceptually known as '{current_node_conceptual_name}' and must be implied, not stated numerically."
         )
     elif node.op == "MED":
-        is_median_also_input = correct_result in direct_atom_values if correct_result is not None else False
-        
-        # Use must_mention_text_detailed for the numbers to be mentioned in the description
-        mentionable_new_numbers_str = must_mention_text_detailed
-        if "No new numbers to explicitly state" in must_mention_text_detailed:
-            if direct_atom_children: 
-                 mentionable_new_numbers_str = "other specific numbers (as per your Writing Guide's Rule 1, noting the MEDIAN exception)"
-            else: 
-                mentionable_new_numbers_str = "no new specific numbers for this step"
-
         op_specific_action_details = (
-            f"**This is a MEDIAN scene, requiring special care!** Your characters will encounter various '{safe_primary_object_for_fstring}' "
-            f"(some new, described by numbers like {mentionable_new_numbers_str}, " # CORRECTED LINE
+            f"**This is a MEDIAN scene (NEW RULE: ALL direct atomic inputs MUST be mentioned).** Your characters will encounter various '{safe_primary_object_for_fstring}' "
+            f"(some new, described by ALL the numbers: {atomic_inputs_context_str_detailed if direct_atom_children else 'none for this step'}, "
             f"others being prior conceptual results like {conceptual_input_names_only_str_for_action}). "
             f"The core of the scene is about them identifying a 'central element', 'balancing point', or 'middle value' from all these available items/numbers. "
-            f"Crucially, the actual median value ('{num_to_words(correct_result)}') MUST NEVER be written out."
+            f"Crucially, the actual median value ('{num_to_words(correct_result)}') MUST NEVER be written out as the result."
         )
-        if is_median_also_input:
-            op_specific_action_details += (
-                f" ⚠️ **VERY IMPORTANT MEDIAN TWIST:** The number '{num_to_words(correct_result)}' ({correct_result}) is not only the median outcome but also one of the numbers involved in this step. "
-                f"Because of this, you MUST NOT mention '{num_to_words(correct_result)}' ({correct_result}) AT ALL in this scene, not even when describing the initial numbers. "
-                f"You should describe the set of initial numbers by listing the *other* numbers (from your Writing Guide, Rule 1) and refer to this specific one indirectly (e.g., '...and one particular item whose nature was central...')."
-            )
         op_specific_outcome_implication_details = (
             f"The conceptual outcome, '{current_node_conceptual_name}' (which represents the median value '{num_to_words(correct_result)}'), must be implied through the narrative of finding this central point, not stated numerically."
         )
     elif node.op == "SM":
         op_specific_action_details = (
             f"**This is a SUM MODULO 10 scene.** The characters' actions should represent combining all involved quantities of '{safe_primary_object_for_fstring}' "
-            f"(the new numbers being: {atomic_inputs_context_str_detailed if direct_atom_children else 'none for this step'}; "
+            f"(the new numbers being: {atomic_inputs_context_str_detailed if direct_atom_children else 'none for this step'}; " # All these must be mentioned
             f"and any prior results referred to only by their conceptual names: {conceptual_input_names_only_str_for_action}). "
             f"After this conceptual combination (do not state any intermediate sum!), they should then discover or focus on a core essence, a symbolic digit, or a cyclical pattern related to this unstated total. This discovery is equivalent to finding the sum modulo 10."
         )
@@ -3398,14 +3408,13 @@ def _generate_narrative_recursive(
     
     action_description_parts.append(op_specific_action_details)
 
-    # Ensure conceptual/atomic inputs are mentioned if not covered by op-specific text
     if child_conceptual_names_list and not ("conceptual_input_names_only_str_for_action" in op_specific_action_details.lower()):
         action_description_parts.append(
             f"  - Remember to refer to prior results (like {conceptual_input_names_only_str_for_action}) using ONLY their conceptual names, NOT their underlying numbers."
         )
-    if direct_atom_children and not ("atomic_inputs_context_str_detailed" in op_specific_action_details.lower()) and not ("mentionable_new_numbers_str" in op_specific_action_details.lower()):
+    if direct_atom_children and not ("atomic_inputs_context_str_detailed" in op_specific_action_details.lower()):
          action_description_parts.append(
-            f"  - The new numbers directly involved in this step are: {atomic_inputs_context_str_detailed}."
+            f"  - The new numbers directly involved in this step are: {atomic_inputs_context_str_detailed} (ALL must be mentioned)."
         )
 
     if not op_specific_outcome_implication_details:
@@ -3421,11 +3430,12 @@ def _generate_narrative_recursive(
         f"so that '{current_node_conceptual_name}' becomes the way to think about this new state."
     )
 
-    if node.op != "MED" and correct_result is not None and correct_result in direct_atom_values:
+    # This note is still relevant if the result is also an input (applies to MEDIAN too now)
+    if correct_result is not None and correct_result in direct_atom_values: 
         action_description_parts.append(
             f"**Important Narrative Challenge:** The numerical value of this operation's outcome ('{num_to_words(correct_result)}') is ALSO one of the numbers you need to mention as an input. "
-            f"Your story must carefully distinguish its role. Mention '{num_to_words(correct_result)}' ({correct_result}) when describing the initial items/quantities. "
-            f"However, when describing the *result* of the operation, you must only imply it conceptually as '{current_node_conceptual_name}' and NOT restate '{num_to_words(correct_result)}' as the outcome."
+            f"Your story must carefully distinguish its role. Mention '{num_to_words(correct_result)}' ({correct_result}) when describing the initial items/quantities (as per Rule 1). "
+            f"However, when describing the *result* of the operation, you must only imply it conceptually as '{current_node_conceptual_name}' and NOT restate '{num_to_words(correct_result)}' as the outcome (as per Rule 2)."
         )
 
     action_description_parts.append(
@@ -3441,52 +3451,55 @@ def _generate_narrative_recursive(
         f"- Setting: {world.get('setting', 'N/A')}\n"
         f"- Central Items in the Story: {primary_object}\n"
         f"- Quantities from Previous Events (Conceptual Names & their values for your understanding - DO NOT use these values in the story): {conceptual_inputs_context_str}\n"
-        f"- New Numbers Introduced in this Scene (Values for your understanding - Use word form in story): {atomic_inputs_context_str_detailed}\n\n"
+        f"- New Numbers Introduced in this Scene (Values for your understanding - Use word form in story, ALL must be mentioned): {atomic_inputs_context_str_detailed}\n\n" 
         f"{action_description}\n\n"
-        f"{ultra_strict_instruction}\n\n"
+        f"{ultra_strict_instruction}\n\n" # ultra_strict_instruction now reflects the new MEDIAN rule
     ]
 
     if node.op == "MED" and config_obj.FEW_SHOT_EXAMPLES > 0:
         curated_median_examples_indices = []
         if len(FEW_SHOT_EXAMPLES_STRICT) > 1: curated_median_examples_indices.append(1)
         if len(FEW_SHOT_EXAMPLES_STRICT) > 2: curated_median_examples_indices.append(2)
+        
         indices_to_use = curated_median_examples_indices[:config_obj.FEW_SHOT_EXAMPLES]
+        # FEW_SHOT_EXAMPLES_STRICT has been updated with new MEDIAN examples
         examples_to_actually_use = [FEW_SHOT_EXAMPLES_STRICT[i] for i in indices_to_use if i < len(FEW_SHOT_EXAMPLES_STRICT)]
 
         if examples_to_actually_use:
-            few_shot_section = ["--- CRITICAL FEW-SHOT EXAMPLES FOR MEDIAN OPERATIONS ---"]
+            few_shot_section = ["--- CRITICAL FEW-SHOT EXAMPLES FOR MEDIAN OPERATIONS (NEW RULE: ALL INPUTS MENTIONED) ---"]
             few_shot_section.append(
-                "These examples illustrate how to handle the strict numerical rules when the operation is MEDIAN. Pay close attention to how input numbers are mentioned (or not mentioned if they are the median value) and how the result is implied.\n"
+                "These examples illustrate how to handle the strict numerical rules when the operation is MEDIAN. Pay close attention to how ALL direct atomic input numbers are mentioned and how the result is implied.\n"
             )
             for ex_idx, (example_rules_text, good_narrative, bad_narrative, bad_reasoning) in enumerate(examples_to_actually_use):
-                why_good_text = "This example correctly follows the MEDIAN rules by mentioning necessary inputs (excluding the median value itself if it was an input that was also the median) and implying the median result conceptually without stating its numerical value."
-                if "eighty-nine" in example_rules_text and "seventy-two" in example_rules_text:
-                    why_good_text = "This example succeeds. The example's rules state inputs include 'seventy-two, eighty-four, eighty-nine, ninety-one, and ninety-five' and the median is 'eighty-nine'. Because 'eighty-nine' is an input AND the median value, the good narrative correctly OMITS 'eighty-nine' from the mentioned numbers. It mentions the other inputs (72, 84, 91, 95). The median result ('eighty-nine') is only implied conceptually as 'the balanced keystone'. This demonstrates the critical MEDIAN rule: if an input is also the median, that input number is NOT stated."
-                elif "eighty-seven" in example_rules_text and "seventy-three" in example_rules_text:
-                    why_good_text = "This example also succeeds. The example's rules state inputs include 'seventy-three, eighty-five, eighty-seven, eighty-eight, eighty-nine, ninety-one' and the median is 'eighty-seven'. Because 'eighty-seven' is an input AND the median value, the good narrative correctly OMITS 'eighty-seven' from the mentioned numbers. It mentions the other inputs (73, 85, 88, 89, 91). The median result ('eighty-seven') is only implied conceptually. This again demonstrates the critical MEDIAN rule."
-                few_shot_section.append(f"**EXAMPLE {ex_idx + 1} RULES (from a hypothetical different problem):**\n{example_rules_text.replace('\\\\n', '\\n')}\n")
-                few_shot_section.append(f"**EXAMPLE {ex_idx + 1} GOOD NARRATIVE:**\n{good_narrative}\n")
-                few_shot_section.append(f"**WHY GOOD:**\n{why_good_text}\n")
-                few_shot_section.append(f"**EXAMPLE {ex_idx + 1} BAD NARRATIVE:**\n{bad_narrative}\n")
-                few_shot_section.append(f"**WHY BAD (Reason for failure):**\n{bad_reasoning}\n")
-            few_shot_section.append("**REMEMBER THE CRITICAL MEDIAN RULE FOR *YOUR* CURRENT TASK:**")
+                why_good_text = "This example correctly follows the NEW MEDIAN rules by mentioning ALL necessary atomic inputs and implying the median result conceptually without stating its numerical value."
+                if "eighty-nine" in example_rules_text and "seventy-two" in example_rules_text: 
+                    why_good_text = "This example succeeds under the NEW MEDIAN rule. The example's rules state inputs include 'seventy-two, eighty-four, eighty-nine, ninety-one, and ninety-five' and the median is 'eighty-nine'. The good narrative correctly MENTIONS ALL these inputs, including 'eighty-nine'. The median result ('eighty-nine') is only implied conceptually as 'the central fragment... its resonance sits precisely in the middle'. This demonstrates the NEW MEDIAN rule: all atomic inputs are stated."
+                elif "eighty-seven" in example_rules_text and "seventy-three" in example_rules_text: 
+                    why_good_text = "This example also succeeds under the NEW MEDIAN rule. The example's rules state inputs include 'seventy-three, eighty-five, eighty-seven, eighty-eight, eighty-nine, ninety-one' and the median is 'eighty-seven'. The good narrative correctly MENTIONS ALL these inputs, including 'eighty-seven'. The median result ('eighty-seven') is only implied conceptually. This again demonstrates the NEW MEDIAN rule."
+                
+                few_shot_section.append(f"**EXAMPLE {ex_idx + 1} RULES (from a hypothetical different problem - NEW MEDIAN RULE APPLIED):**\n{example_rules_text.replace('\\\\n', '\\n')}\n")
+                few_shot_section.append(f"**EXAMPLE {ex_idx + 1} GOOD NARRATIVE (NEW MEDIAN RULE):**\n{good_narrative}\n")
+                few_shot_section.append(f"**WHY GOOD (NEW MEDIAN RULE):**\n{why_good_text}\n")
+                few_shot_section.append(f"**EXAMPLE {ex_idx + 1} BAD NARRATIVE (NEW MEDIAN RULE):**\n{bad_narrative}\n")
+                few_shot_section.append(f"**WHY BAD (Reason for failure - NEW MEDIAN RULE):**\n{bad_reasoning}\n")
+            few_shot_section.append("**REMEMBER THE MEDIAN RULE FOR *YOUR* CURRENT TASK (NEW VERSION):**")
             few_shot_section.append(
-                "For MEDIAN operations, the median value itself must NEVER appear explicitly in the text. If an atomic input number for *your current task* happens to BE the median value, that specific input number must ALSO NOT be mentioned. Refer to your 'Narrative Challenge & Your Writing Guide' section in the main prompt for the specific numbers and rules for *your current scene*.\n"
+                "For MEDIAN operations, ALL direct atomic input numbers MUST be mentioned in the narrative. The median value itself must NEVER appear explicitly as the RESULT of the text. Refer to your 'Narrative Challenge & Your Writing Guide' section in the main prompt for the specific numbers and rules for *your current scene*.\n"
             )
             initial_user_message_parts.append("\n".join(few_shot_section))
             logger_obj.info(
-                f"Added {len(examples_to_actually_use)} MEDIAN-specific few-shot examples to the initial generator prompt for Op: {node.op}."
+                f"Added {len(examples_to_actually_use)} MEDIAN-specific few-shot examples (NEW RULE: ALL INPUTS MENTIONED) to the initial generator prompt for Op: {node.op}."
             )
 
     initial_user_message_parts.append(f'**Continue From (End of last scene):**\n"...{context_snippet}..."\n\n')
     initial_user_message_parts.append(f"**Your Response:**\nWrite ONLY the narrative text for this new scene, continuing smoothly. Do not add titles, notes, or anything outside the story itself.")
     initial_user_message_for_generator = "".join(initial_user_message_parts)
 
-    py_validator_enforce_result_presence = False
-    validate_beat_numbers = make_number_validator(
-        allowed_atoms=direct_atom_values,
+    py_validator_enforce_result_presence = False 
+    validate_beat_numbers = make_number_validator( # make_number_validator is now updated
+        allowed_atoms=direct_atom_values, 
         forbidden_atoms=forbidden_for_current_beat_py_validator,
-        operand_count=current_op_arity,
+        operand_count=actual_arity_for_current_op, 
         correct_result_for_beat=correct_result,
         enforce_result_presence=py_validator_enforce_result_presence,
         operation_type=node.op,
@@ -3503,11 +3516,12 @@ def _generate_narrative_recursive(
         "The story involves mathematical operations implied through narrative actions. Pay extremely careful attention to the detailed 'Narrative Challenge & Your Writing Guide for This Scene' provided in the user message. Produce ONLY clean narrative text."
     )
     operator_specific_system_focus = ""
-    if node.op == "MED":
+    if node.op == "MED": 
         operator_specific_system_focus = (
-            "\n\n**SPECIAL FOCUS FOR THIS SCENE (MEDIAN OPERATION):**\n"
-            "The current scene involves a MEDIAN calculation. This type of scene has unique and exceptionally strict rules about which numbers can and cannot be mentioned, especially if an input number is also the median result itself. "
-            "You MUST meticulously follow the 'Narrative Challenge & Your Writing Guide' section in the user message, particularly the parts detailing MEDIAN-specific constraints. Failure to adhere to these MEDIAN rules (e.g., mentioning a forbidden number or failing to imply the result correctly) will result in rejection of your scene."
+            "\n\n**SPECIAL FOCUS FOR THIS SCENE (MEDIAN OPERATION - NEW RULE):**\n"
+            "The current scene involves a MEDIAN calculation. Under the NEW RULE, ALL direct atomic inputs for this MEDIAN operation MUST be mentioned in the narrative. "
+            "The MEDIAN result itself MUST be implied and NEVER stated numerically. "
+            "You MUST meticulously follow the 'Narrative Challenge & Your Writing Guide' section in the user message. Failure to adhere to these MEDIAN rules will result in rejection of your scene."
         )
     system_prompt_for_generator = base_system_prompt_template.format(
         genre=world.get('genre', 'Fantasy')
@@ -3522,6 +3536,7 @@ def _generate_narrative_recursive(
         else "None"
     )
     llm_val_atomic_inputs_detailed_for_validator = atomic_inputs_context_str_detailed
+    
     llm_val_expected_beat_result_detailed_for_validator = "N/A"
     if correct_result is not None:
         llm_val_expected_beat_result_detailed_for_validator = (
@@ -3532,6 +3547,7 @@ def _generate_narrative_recursive(
         logger_obj.info(
             f"[Sample {context.sample_index+1}, Beat Op: {node.op}, Result Concept: '{current_node_conceptual_name}'] Outer Beat Gen Attempt: {attempt_outer}/{config_obj.MAX_BEAT_RETRIES}"
         )
+        
         llm_validated_beat_text = _generate_and_llm_validate_beat(
             original_user_message_for_generator=initial_user_message_for_generator,
             system_prompt_for_generator=system_prompt_for_generator,
@@ -3539,9 +3555,9 @@ def _generate_narrative_recursive(
             current_op_node=node,
             conceptual_inputs_str_for_llm_validator=llm_val_conceptual_input_names_only,
             atomic_inputs_words_str_for_llm_validator=llm_val_atomic_inputs_detailed_for_validator,
-            action_description_for_llm_validator=action_description,
+            action_description_for_llm_validator=action_description, 
             expected_beat_result_words_for_llm_validator=llm_val_expected_beat_result_detailed_for_validator,
-            ultra_strict_instruction_for_llm_validator_context=ultra_strict_instruction,
+            ultra_strict_instruction_for_llm_validator_context=ultra_strict_instruction, 
             current_max_beat_completion_tokens=current_max_beat_completion_tokens,
             sample_index=context.sample_index,
             context_config=config_obj,
@@ -3550,13 +3566,13 @@ def _generate_narrative_recursive(
             is_current_beat_root_node=is_root,
             overall_ground_truth_answer_val=context.overall_ground_truth_answer,
             primary_object_name=primary_object,
-            forbidden_prior_results_and_gt_for_llm_validator=forbidden_for_current_beat_py_validator,
+            forbidden_prior_results_and_gt_for_llm_validator=forbidden_for_current_beat_py_validator, 
             correct_result_val=correct_result,
-            direct_atom_values_val=direct_atom_values,
+            direct_atom_values_val=direct_atom_values, 
         )
 
         if llm_validated_beat_text:
-            if validate_beat_numbers(llm_validated_beat_text):
+            if validate_beat_numbers(llm_validated_beat_text): 
                 beat_text_final_validated = llm_validated_beat_text
                 logger_obj.info(
                     f"[Sample {context.sample_index+1}, Beat Op: {node.op}] Python validator PASSED LLM-validated beat."
@@ -3587,7 +3603,7 @@ def _generate_narrative_recursive(
     context.scenes.append(beat_text)
     context.tokens_used += btoks
     context.last_scene_text = beat_text
-    context.introduced_atoms.update(direct_atom_values)
+    context.introduced_atoms.update(direct_atom_values) 
     logger_obj.debug(
         f"Beat {context.beat_counter['current']} for Op {node.op} successful. Introduced atoms updated with current beat's direct atoms: {direct_atom_values}"
     )
@@ -3699,7 +3715,6 @@ def _generate_narrative_recursive(
     logger_obj.debug(
         f"Exiting _generate_narrative_recursive for Op {op_for_log} ('{current_node_conceptual_name}'). Total tokens used: {context.tokens_used}"
     )
-
 
 # --- Main Narrative Generation Function ---
 def generate_narrative(

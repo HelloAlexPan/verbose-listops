@@ -956,17 +956,24 @@ def load_dataset(file_path: str) -> list:
 # --- Main Processing Logic ---
 # In validator.py
 
+
 # --- Main Processing Logic ---
 def run_validation_process(dataset_file_path: str, output_results_path: str | None):
     if not client:
         logger.error("⚠️ Client not initialized. Check API key.")
-        print("ERROR: Validator client not initialized. Check API key in .env file.") # Console
+        print(
+            "ERROR: Validator client not initialized. Check API key in .env file."
+        )  # Console
         return
 
     dataset = load_dataset(dataset_file_path)
     if not dataset:
-        logger.warning(f"No samples loaded from dataset '{dataset_file_path}'. Exiting validator.")
-        print(f"WARNING: No samples loaded from dataset '{dataset_file_path}'. Exiting validator.") # Console
+        logger.warning(
+            f"No samples loaded from dataset '{dataset_file_path}'. Exiting validator."
+        )
+        print(
+            f"WARNING: No samples loaded from dataset '{dataset_file_path}'. Exiting validator."
+        )  # Console
         return
 
     results = []
@@ -977,24 +984,23 @@ def run_validation_process(dataset_file_path: str, output_results_path: str | No
     )
     print(
         f"🔍 Validating {total_samples} samples from '{os.path.basename(dataset_file_path)}' using {MODEL_FOR_VALIDATION.split('/')[-1]}"
-    ) # Console start message
+    )  # Console start message
 
     start_time = time.time()
     processed_count = 0
-    correct_count_progress = 0 # For live accuracy
-    error_count_progress = 0   # For live error count
-    trivial_count_progress = 0 # For live trivial count
+    correct_count_progress = 0  # For live accuracy
+    error_count_progress = 0  # For live error count
+    trivial_count_progress = 0  # For live trivial count
 
     # For time estimation
     sample_times = []
     # Determine a reasonable print interval for the progress bar
     # Adjust this multiplier as needed; smaller means more frequent updates.
-    progress_print_interval_seconds = 1 # Print progress at least every second or so
+    progress_print_interval_seconds = 1  # Print progress at least every second or so
 
     # Lock for updating shared progress variables safely from threads
     progress_lock = threading.Lock()
     last_print_time = time.time()
-
 
     with concurrent.futures.ThreadPoolExecutor(
         max_workers=MAX_WORKERS, thread_name_prefix="Validator"
@@ -1006,12 +1012,12 @@ def run_validation_process(dataset_file_path: str, output_results_path: str | No
 
         for future in concurrent.futures.as_completed(future_to_sample_id):
             sample_id_for_log = future_to_sample_id[future]
-            sample_processing_start_time = time.time() # Time for this specific sample
+            sample_processing_start_time = time.time()  # Time for this specific sample
 
             try:
                 result = future.result()
                 results.append(result)
-                
+
                 # Update counts under lock
                 with progress_lock:
                     processed_count += 1
@@ -1020,15 +1026,20 @@ def run_validation_process(dataset_file_path: str, output_results_path: str | No
                     elif result.get("status") == "error":
                         error_count_progress += 1
                     elif result.get("status") == "trivial":
-                        trivial_count_progress +=1
-                    
+                        trivial_count_progress += 1
+
                     # Track sample processing time for better estimates
                     sample_times.append(time.time() - sample_processing_start_time)
-                    if len(sample_times) > 20: # Keep a rolling window of recent sample times
+                    if (
+                        len(sample_times) > 20
+                    ):  # Keep a rolling window of recent sample times
                         sample_times.pop(0)
 
             except Exception as exc:
-                logger.error(f"[{sample_id_for_log}] Task for sample generated an exception: {exc}", exc_info=True)
+                logger.error(
+                    f"[{sample_id_for_log}] Task for sample generated an exception: {exc}",
+                    exc_info=True,
+                )
                 results.append(
                     {
                         "id": sample_id_for_log,
@@ -1042,42 +1053,62 @@ def run_validation_process(dataset_file_path: str, output_results_path: str | No
                 with progress_lock:
                     processed_count += 1
                     error_count_progress += 1
-            
+
             # --- More Active Console Progress Update ---
             current_time = time.time()
-            if (current_time - last_print_time >= progress_print_interval_seconds) or (processed_count == total_samples):
-                with progress_lock: # Ensure atomic read of progress variables
+            if (current_time - last_print_time >= progress_print_interval_seconds) or (
+                processed_count == total_samples
+            ):
+                with progress_lock:  # Ensure atomic read of progress variables
                     elapsed_total = current_time - start_time
-                    progress_pct_val = (processed_count / total_samples) * 100 if total_samples > 0 else 0
-                    
+                    progress_pct_val = (
+                        (processed_count / total_samples) * 100
+                        if total_samples > 0
+                        else 0
+                    )
+
                     est_remaining_time_str = "N/A"
-                    if sample_times and processed_count < total_samples :
+                    if sample_times and processed_count < total_samples:
                         avg_time_per_sample_val = sum(sample_times) / len(sample_times)
                         remaining_samples_val = total_samples - processed_count
                         # Estimate based on remaining samples and average time, considering parallel workers
-                        est_remaining_seconds_val = (remaining_samples_val * avg_time_per_sample_val) / MAX_WORKERS if MAX_WORKERS > 0 else float('inf')
-                        
+                        est_remaining_seconds_val = (
+                            (remaining_samples_val * avg_time_per_sample_val)
+                            / MAX_WORKERS
+                            if MAX_WORKERS > 0
+                            else float("inf")
+                        )
+
                         if est_remaining_seconds_val >= 3600:
-                            est_remaining_time_str = f"{est_remaining_seconds_val/3600:.1f}h"
+                            est_remaining_time_str = (
+                                f"{est_remaining_seconds_val/3600:.1f}h"
+                            )
                         elif est_remaining_seconds_val >= 60:
-                            est_remaining_time_str = f"{est_remaining_seconds_val/60:.1f}m"
+                            est_remaining_time_str = (
+                                f"{est_remaining_seconds_val/60:.1f}m"
+                            )
                         elif est_remaining_seconds_val > 0:
-                             est_remaining_time_str = f"{est_remaining_seconds_val:.0f}s"
+                            est_remaining_time_str = f"{est_remaining_seconds_val:.0f}s"
                         else:
                             est_remaining_time_str = "~0s"
 
-
                     # Inline progress update (overwrite previous line)
                     # Ensure enough spaces at the end to clear the previous line fully
-                    accuracy_so_far = (correct_count_progress / processed_count * 100) if processed_count > 0 else 0
+                    accuracy_so_far = (
+                        (correct_count_progress / processed_count * 100)
+                        if processed_count > 0
+                        else 0
+                    )
                     progress_bar_width = 30
-                    filled_len = int(progress_bar_width * processed_count // total_samples)
-                    bar = '█' * filled_len + '░' * (progress_bar_width - filled_len)
-                    
+                    filled_len = int(
+                        progress_bar_width * processed_count // total_samples
+                    )
+                    bar = "█" * filled_len + "░" * (progress_bar_width - filled_len)
+
                     # Pad with spaces to ensure previous line is overwritten
                     # Adjust padding based on the longest expected line length
-                    padding_spaces = " " * 20 
-                    
+                    padding_spaces = " " * 20
+
                     print(
                         f"\rValidator Progress: [{bar}] {progress_pct_val:.1f}% ({processed_count}/{total_samples}) | "
                         f"Correct: {correct_count_progress} ({accuracy_so_far:.1f}%) | "
@@ -1088,7 +1119,7 @@ def run_validation_process(dataset_file_path: str, output_results_path: str | No
                     last_print_time = current_time
 
     # Print newline after progress bar is complete
-    print("\n" + "=" * 40) # Ensure this is printed after the loop
+    print("\n" + "=" * 40)  # Ensure this is printed after the loop
 
     end_time = time.time()
     total_time = end_time - start_time
@@ -1103,7 +1134,7 @@ def run_validation_process(dataset_file_path: str, output_results_path: str | No
     else:
         time_display = f"{seconds:.1f}s"
 
-    print(f"✅ Validation completed in {time_display}\n") # Console
+    print(f"✅ Validation completed in {time_display}\n")  # Console
 
     # Count results by category (no changes needed here)
     correct_count = sum(1 for r in results if r["status"] == "correct")
@@ -1113,9 +1144,9 @@ def run_validation_process(dataset_file_path: str, output_results_path: str | No
 
     validation_categories = {
         "VALID": 0,
-        "INVALID_MATH": 0, # This category might not be directly set by your LLM if it combines math/narrative errors
+        "INVALID_MATH": 0,  # This category might not be directly set by your LLM if it combines math/narrative errors
         "INVALID_NARRATIVE": 0,
-        "INVALID_MATH_AND_NARRATIVE": 0, # Similarly
+        "INVALID_MATH_AND_NARRATIVE": 0,  # Similarly
         "VALID_BUT_TRIVIAL": 0,
         "UNDEFINED": 0,
     }
@@ -1127,36 +1158,39 @@ def run_validation_process(dataset_file_path: str, output_results_path: str | No
                 validation_categories[status] += 1
             else:
                 validation_categories["UNDEFINED"] += 1
-        elif r.get("status") == "error": # If parsing failed, count it as UNDEFINED for LLM categories
-             validation_categories["UNDEFINED"] += 1
-
+        elif (
+            r.get("status") == "error"
+        ):  # If parsing failed, count it as UNDEFINED for LLM categories
+            validation_categories["UNDEFINED"] += 1
 
     total_processed = len(results)
 
     if total_processed > 0:
         accuracy = (correct_count / total_processed) * 100 if total_processed > 0 else 0
         # Cleaner summary format with visual indicators
-        print("\n📊 VALIDATION RESULTS (validator.py)") # Console
-        print("=" * 40) # Console
-        print(f"Dataset: {os.path.basename(dataset_file_path)}") # Console
-        print(f"Model:   {MODEL_FOR_VALIDATION.split('/')[-1]}") # Console
-        print(f"✓ Correct:   {correct_count}/{total_processed} ({accuracy:.1f}%)") # Console
+        print("\n📊 VALIDATION RESULTS (validator.py)")  # Console
+        print("=" * 40)  # Console
+        print(f"Dataset: {os.path.basename(dataset_file_path)}")  # Console
+        print(f"Model:   {MODEL_FOR_VALIDATION.split('/')[-1]}")  # Console
         print(
-            f"✗ Incorrect: {incorrect_count}/{total_processed} ({(incorrect_count/total_processed)*100:.1f}%)" # Console
+            f"✓ Correct:   {correct_count}/{total_processed} ({accuracy:.1f}%)"
+        )  # Console
+        print(
+            f"✗ Incorrect: {incorrect_count}/{total_processed} ({(incorrect_count/total_processed)*100:.1f}%)"  # Console
         )
         print(
-            f"◆ Trivial:   {trivial_count}/{total_processed} ({(trivial_count/total_processed)*100:.1f}%)" # Console
+            f"◆ Trivial:   {trivial_count}/{total_processed} ({(trivial_count/total_processed)*100:.1f}%)"  # Console
         )
         print(
-            f"⚠ Errors:    {error_count}/{total_processed} ({(error_count/total_processed)*100:.1f}%)" # Console
+            f"⚠ Errors:    {error_count}/{total_processed} ({(error_count/total_processed)*100:.1f}%)"  # Console
         )
 
         # Show breakdown by LLM's validation categories if relevant
         # (No changes to this part of the summary logic)
-        if (
-            incorrect_count > 0 or error_count > 0 or trivial_count > 0
-        ):
-            print("\n🔍 LLM VALIDATION CATEGORY BREAKDOWN (from LLM validator's JSON output)") # Console
+        if incorrect_count > 0 or error_count > 0 or trivial_count > 0:
+            print(
+                "\n🔍 LLM VALIDATION CATEGORY BREAKDOWN (from LLM validator's JSON output)"
+            )  # Console
             for category, count in validation_categories.items():
                 if count > 0:
                     category_display = (
@@ -1172,15 +1206,15 @@ def run_validation_process(dataset_file_path: str, output_results_path: str | No
                         )
                     )
                     print(
-                        f"{symbol} {category_display}: {count} ({(count/total_processed)*100:.1f}%)" # Console
+                        f"{symbol} {category_display}: {count} ({(count/total_processed)*100:.1f}%)"  # Console
                     )
     else:
-        print("❌ No samples were processed successfully by validator.py.") # Console
+        print("❌ No samples were processed successfully by validator.py.")  # Console
 
-    if (
-        error_count > 0 or incorrect_count > 0 or trivial_count > 0
-    ):
-        print("\n⚠️ Check logs/failed_validations/ for details on specific failures.") # Console
+    if error_count > 0 or incorrect_count > 0 or trivial_count > 0:
+        print(
+            "\n⚠️ Check logs/failed_validations/ for details on specific failures."
+        )  # Console
 
     # --- Log Token Usage Summary for Validator ---
     val_prompt_tokens, val_completion_tokens, val_api_calls = (
@@ -1210,14 +1244,17 @@ def run_validation_process(dataset_file_path: str, output_results_path: str | No
                 for res_item in results:
                     f_out.write(json.dumps(res_item) + "\n")
             logger.info(f"Full validation results saved to {output_results_path}")
-            print(f"Results saved to {os.path.basename(output_results_path)}") # Console
+            print(
+                f"Results saved to {os.path.basename(output_results_path)}"
+            )  # Console
         except Exception as e:
             logger.error(
                 f"Failed to write validation results to {output_results_path}: {e}"
             )
             print(
-                f"ERROR: Failed to write validation results to {output_results_path}: {e}" # Console
+                f"ERROR: Failed to write validation results to {output_results_path}: {e}"  # Console
             )
+
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(

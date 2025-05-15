@@ -39,7 +39,7 @@ DEFAULT_DATASET_FILE_PATH = "datasets/DATASET_10000tok_8-mxops_3-arity_6-mxbrch_
 # This default is now handled by argparse
 
 # --- Rate Limiter Configuration (for validator.py) ---
-VALIDATION_MAX_REQUESTS_PER_SECOND = 900.0
+VALIDATION_MAX_REQUESTS_PER_SECOND = 100.0
 VALIDATION_MIN_REQUEST_INTERVAL = 0.001
 VALIDATION_BUCKET_CAPACITY = 100
 VALIDATION_LIMITS_CHECK_INTERVAL = 5  # seconds
@@ -299,38 +299,42 @@ The benchmark's key characteristics:
 1. It embeds a nested ListOps computation task within a distracting but semantically coherent narrative.
 2. The narrative unfolds in post-order (inside-out) evaluation of the ListOps AST.
 3. Models must extract computational signals while filtering out relevant but task-irrelevant narrative content.
-4. **Crucially, intermediate numerical results of operations are NOT explicitly stated in the narrative.** Instead, they are referenced conceptually by thematic names or phrases (e.g., "The Sunstone's Core," "the outcome of the first analysis"). The LLM being evaluated must perform the computation and track these values internally.
-5. The narrative MUST explicitly state the direct atomic numerical inputs for the current operation step (as words). **For MEDIAN operations, this means ALL direct atomic inputs must be mentioned; there is NO LONGER an exception for inputs that match the median result.** The median result itself must still be implicit.
+4. Intermediate numerical results of operations are NOT explicitly stated in the narrative. Instead, they are referenced conceptually by thematic names or phrases. The LLM being evaluated must perform the computation and track these values internally.
+5. The narrative MUST explicitly state the direct atomic numerical inputs for the current operation step (as words). For MEDIAN operations, ALL direct atomic inputs must be mentioned. The median result itself must still be implicit.
+
+**REVISED RULE INTERPRETATION FOR THIS VALIDATION (Regarding the number 'one' and Phrasing Numbers):**
+- **Handling the number 'one' as a required input:** If the number '1' is a required direct atomic input for the current operation step (Rule 1.A), its presence in the narrative can be fulfilled EITHER by the explicit word 'one' or 'single', OR by an indefinite article 'a' or 'an' immediately preceding a noun clearly representing the item being counted for the operation (e.g., 'a glyph-stone', 'an ancient relic'). You must judge if 'a/an [noun]' contextually serves as the numerical input '1'.
+- **General Phrasing Numbers:** Numbers 'one', 'two', and 'three' (and potentially the correct arity count for the current operation) MAY be used for general narrative phrasing or counting IF AND ONLY IF:
+    a) They are NOT required as direct atomic inputs for the current operation step (Rule 1.A) OR if their use as 'one' is being fulfilled by 'a/an [noun]' as described above, and this is a separate phrasing use.
+    b) They are NOT explicitly forbidden numbers for the current operation step (Rule 4).
+- Their use for phrasing should still be reasonably natural and not excessive. Other numbers not meeting these conditions are considered extraneous.
 
 CRITICAL TASK: For EACH `ast_evaluation_steps` entry, you must verify:
-1.  **Input Fidelity (`ast_inputs_verified` field):** Did the narrative segment for this operation correctly use ALL inputs specified by the AST for this node? This means:
-    *   All direct atomic numbers for this step MUST be mentioned in the narrative for this step. **This rule now applies to MEDIAN operations as well: all direct atomic inputs to a MEDIAN operation must be stated in the narrative.**
-    *   For inputs that are results from child operations: The narrative MUST reference these conceptually (e.g., using the thematic name introduced when that child operation was described). You should assume this conceptual reference correctly carries forward the `result_from_ast` of that child operation when evaluating the current step's inputs.
-    *   If the narrative describes an operation using a different set of inputs (e.g., ignores a conceptual reference, invents new numbers, or fails to mention required atomic inputs), `ast_inputs_verified` MUST be `false`.
-2.  **Result Handling (`intermediate_result_implicit` field):** For this operation step (unless it's the very final operation of the entire AST), did the narrative correctly AVOID stating the numerical `result_from_ast` and instead imply it or associate it with a conceptual name? This should be `true` for all intermediate steps. For the final AST operation, this field can be "N/A" if the result is not stated, or `false` if it is stated (leading to VALID_BUT_TRIVIAL).
-3.  **Narrative Consistency (`narrative_consistent` field):** Based on the above, is the narrative segment for this step an accurate and clear representation of the AST operation, its *correct* inputs (atomic and conceptual), and its *implied* result (for intermediate steps)? If `ast_inputs_verified` is `false` or `intermediate_result_implicit` is `false` (for intermediate steps where it should be true), then `narrative_consistent` for this step MUST also be `false`.
+1.  **Input Fidelity (`ast_inputs_verified` field):** Did the narrative segment for this operation correctly use ALL inputs specified by the AST for this node? (All direct atomic numbers mentioned, with 'one' potentially represented by 'a/an [noun]'; conceptual references for child ops used).
+2.  **Result Handling (`intermediate_result_implicit` field):** For this operation step (unless it's the final AST operation), did the narrative correctly AVOID stating the numerical `result_from_ast`?
+3.  **Narrative Consistency (`narrative_consistent` field):** Based on the above, and considering the REVISED RULE INTERPRETATION, is the narrative segment for this step an accurate and clear representation of the AST operation, its *correct* inputs, and its *implied* result?
 
-CRITICAL: Your ENTIRE response must be ONLY a valid JSON object with NO additional text.
-Use this exact template, replacing values in [SQUARE_BRACKETS] with your analysis:
+CRITICAL: Your ENTIRE response must be ONLY a valid JSON object.
+Use this exact template, replacing values in [SQUARE_BRACKETS]:
 
 {
   "id": "[SAMPLE_ID]",
   "overall_status": "[VALID or INVALID_NARRATIVE or VALID_BUT_TRIVIAL]",
   "final_ast_value": [INTEGER_RESULT],
   "matches_ground_truth": [true or false],
-  "narrative_consistent": [true or false],
+  "narrative_consistent": [true or false], // Overall narrative consistency
   "ast_evaluation_steps": [
     {
       "step": 1,
-      "operation_node_description": "[Brief description of the AST node, e.g., (SUM 10 20 (MIN 5 8))]",
+      "operation_node_description": "[Brief description of the AST node]",
       "operation_type": "[MAX, MIN, SUM, AVG, MED, SM]",
       "inputs_from_ast": [LIST_OF_EXPECTED_NUMERICAL_INPUTS_FROM_AST_FOR_THIS_NODE],
       "result_from_ast": [INTEGER_RESULT_OF_THIS_OPERATION_ON_AST_INPUTS],
-      "ast_inputs_verified": [true or false], // Did narrative use ALL AST inputs correctly (all atoms mentioned for MEDIAN too)?
-      "intermediate_result_implicit": [true or false or "N/A"], // Was numerical result NOT stated for intermediate steps?
-      "narrative_consistent": [true or false], // Is this step's narrative segment accurate and clear?
-      "itemization_complete": [true or false], // Were all direct atomic inputs itemized?
-      "explanation": "[BRIEF_EXPLANATION, detailing any input discrepancies or narrative issues for this step. For MEDIAN, confirm all atomic inputs were expected to be mentioned and were present/absent as per this rule.]"
+      "ast_inputs_verified": [true or false], // Consider 'a/an [noun]' as 'one' if applicable
+      "intermediate_result_implicit": [true or false or "N/A"],
+      "narrative_consistent": [true or false], // Consistency for this specific step
+      "itemization_complete": [true or false], // Consider 'a/an [noun]' as 'one' if applicable
+      "explanation": "[BRIEF_EXPLANATION, detailing any input discrepancies (especially how 'one' was handled if via 'a/an'), result handling, or narrative issues for this step. Note if phrasing numbers {1,2,3} or arity were used acceptably under the REVISED RULE INTERPRETATION, or if other extraneous numbers were present.]"
     }
     // Additional steps...
   ],
@@ -339,25 +343,26 @@ Use this exact template, replacing values in [SQUARE_BRACKETS] with your analysi
     "weaknesses": "[[WEAKNESS1], [WEAKNESS2], ...]",
     "inconsistencies": "[[INCONSISTENCY1], [INCONSISTENCY2], ...]"
   },
-  "detailed_reason": "[Detailed explanation of any issues found, especially if overall_status is not VALID]",
+  "detailed_reason": "[Detailed explanation of any issues found, especially if overall_status is not VALID, considering the REVISED RULE INTERPRETATION]",
   "summary": "[One-sentence summary of the validation outcome]"
 }
 
 ListOps operators:
 - MAX: Maximum value of inputs
 - MIN: Minimum value of inputs
-- MED: Median value (if even count, the lower of the two middle values after sorting) - ALL direct atomic inputs must be mentioned. Result implicit.
+- MED: Median value (if even count, lower middle) - ALL direct atomic inputs must be mentioned (interpret 'one' as per revised rule). Result implicit.
 - SUM: Sum of inputs
-- AVG: Integer floor of the sum of inputs divided by the count of inputs
-- SM: Sum of inputs modulo 10 (result is sum % 10)
+- AVG: Integer floor of (sum of inputs / count of inputs)
+- SM: Sum of inputs modulo 10
 
 Guidelines for `narrative_consistent` field in `ast_evaluation_steps`:
-- Mark `true` if the narrative segment for this step accurately and clearly conveys the operation, its AST-defined inputs (all atoms mentioned, conceptual references used for prior results), and correctly implies the result without stating it numerically (for intermediate steps).
-- Mark `false` if `ast_inputs_verified` is `false`, or if `intermediate_result_implicit` is `false` for an intermediate step where it should be true, or for significant ambiguity or misleading information.
-- **FOR THE FINAL EVALUATION STEP ONLY:** The narrative is designed to lead up to the final answer but *NOT* explicitly state it. `intermediate_result_implicit` can be marked "N/A" or `true` for this final step if the result is not stated. If the narrative segment for this final step *does* explicitly state the numerical result of this final operation, then `narrative_consistent` for this final step MUST be marked `false`, and your `explanation` for this step must clearly state: "Final answer revealed in narrative." In this specific scenario (math correct, prior steps consistent, but final answer revealed), set `overall_status` to `VALID_BUT_TRIVIAL`.
+- Mark `true` if the narrative segment for this step accurately conveys the operation, its AST-defined inputs (interpreting 'one' via 'a/an' if applicable), correctly implies the result (for intermediate steps), AND adheres to the REVISED RULE INTERPRETATION for phrasing/arity numbers.
+- Mark `false` if `ast_inputs_verified` is `false`, or if `intermediate_result_implicit` is `false` (for intermediate steps where it should be true), or if there are other extraneous numbers not covered by the revised Rule 3, or for significant ambiguity.
+- **FOR THE FINAL EVALUATION STEP ONLY:** `intermediate_result_implicit` can be "N/A" or `true` if the result is not stated. If the narrative *does* explicitly state the numerical result of this final operation, then `narrative_consistent` for this final step MUST be `false`, and your `explanation` must state: "Final answer revealed in narrative." Set `overall_status` to `VALID_BUT_TRIVIAL`.
 
 DO NOT write any text outside of this JSON format.
 """
+
 
 # --- JSON Schema for validation output ---
 VALIDATION_OUTPUT_SCHEMA = {

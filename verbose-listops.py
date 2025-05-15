@@ -2841,12 +2841,12 @@ def get_atoms_in_subtree(node: Node) -> Set[int]:
 def generate_narrative_anchor_with_llm(
     world_info: dict,
     op_node: OpNode,
-    all_previous_anchors: list[str],
+    all_previous_anchors: list[str], # This list contains already used anchor names
     sample_index: int | None = None,
 ) -> str | None:
     """
     Uses an LLM to generate a short, thematic noun phrase based on keywords.
-    Focuses on reliability with a very simple prompt structure.
+    Focuses on reliability with a very simple prompt structure and strict uniqueness.
     """
 
     op_label = OP_LABELS.get(op_node.op, op_node.op)
@@ -2867,46 +2867,42 @@ def generate_narrative_anchor_with_llm(
     )
     system_prompt = f"""You are a master {world_info.get('genre')} storyteller and creative naming expert. Your task is to generate a short, evocative, and thematic 'narrative anchor'.
 
-A narrative anchor is a creative, conceptual name that serves as a descriptive **label** or **stand-in** for the *result* (the outcome) of a specific event or calculation within the story. Its purpose is to allow the narrative to refer to this result conceptually in later parts of the story, *without* explicitly stating its numerical value. For example, if a calculation's outcome is 50, the anchor might be 'The Sunstone's Core.' The story would then mention 'The Sunstone's Core' (which implicitly represents the value 50) instead of the number itself, allowing the narrative to flow without revealing intermediate figures.
+A narrative anchor is a creative, conceptual name that serves as a descriptive **label** or **stand-in** for the *result* (the outcome) of a specific event or calculation within the story.
 
 Key Guidelines for the Narrative Anchor:
 1.  **Thematic:** The name MUST fit the provided Genre, Setting, and Primary Object.
 2.  **Concise:** Aim for 2 to {config.MAX_ANCHOR_WORDS} words. Often a noun phrase (e.g., 'The Sunstone's Core,' 'The Oracle's Key').
 3.  **No Numbers:** Absolutely no numerical values in the anchor itself.
-4.  **No Direct Math Terms:** Do NOT use words like 'Sum', 'Min', 'Max', 'Average', 'Median', 'Count' directly in the anchor name. The 'Concept/Operation Hint' provided will hint at the nature of the operation without using these explicit terms.
+4.  **No Direct Math Terms:** Do NOT use words like 'Sum', 'Min', 'Max', 'Average', 'Median', 'Count' directly in the anchor name.
 5.  **Represent Outcome:** The name should conceptually represent the *result* or *culmination* of the described action/operation.
 6.  **Focus on the Noun:** The anchor should feel like a "thing" or a "state" that has been achieved or discovered.
-
-Examples of good anchors based on different inputs:
-*   Genre: High Fantasy, Setting: Enchanted Forest, Object: Moonpetal Flowers, Concept/Operation Hint: Amalgamating all components into a unified total -> The Lunar Bloom's Essence
-*   Genre: Noir Detective, Setting: Rain-slicked City, Object: Stolen Jewels, Concept/Operation Hint: Isolating the smallest or most fundamental essence -> The Shadow Locket's Secret
-*   Genre: Steampunk, Object: Clockwork Gears, Concept: The central piece -> The Chronometer's Heart
-
-You will be given the Genre, Setting, Item (Primary Object), and Concept/Operation Hint. Provide ONLY the generated anchor as your response."""
+7.  **ABSOLUTE UNIQUENESS (CRITICAL):** The generated anchor name MUST be completely unique and NOT be present in the 'List of anchors ALREADY USED'. This is a strict requirement. If you cannot generate a truly unique and thematic name, it is better to respond with only the word "UNIQUE_FAILURE" than to provide a duplicate or non-thematic name.
+"""
 
     user_prompt = (
         f"Genre: {genre}\n"
         f"Setting: {setting}\n"
         f"Item: {primary_object}\n"
-        f"Concept/Operation Hint: {concept_keywords_for_prompt}\n"
+        f"Concept/Operation Hint: {concept_keywords_for_prompt}\n\n"
+        f"**List of anchors ALREADY USED in this story (DO NOT REPEAT ANY OF THESE. YOUR RESPONSE MUST BE A NEW, UNIQUE NAME OR 'UNIQUE_FAILURE'):**\n"
+        f"{', '.join(sorted(list(set(all_previous_anchors)))) if all_previous_anchors else 'None yet.'}\n\n"
+        f"Provide ONLY the new, unique anchor name as your response (2 to {config.MAX_ANCHOR_WORDS} words). If you cannot create a unique and thematic one, output only: UNIQUE_FAILURE"
     )
     prompt_log_header = f"--- Narrative Anchor Prompt (Op: {op_node.op}, Item: {primary_object}, Concept: {concept_keywords_for_prompt}) ---"
-    prompt_content_for_log = f"System: {system_prompt}\\nUser:\\n{user_prompt}"
+    prompt_content_for_log = f"System: {system_prompt}\nUser:\n{user_prompt}"
 
-    # --- Log the prompt using log_prompt ---
     log_prompt(
         header=f"Narrative Anchor Generation Prompt (Op: {op_node.op})",
         prompt=prompt_content_for_log,
         sample_index=sample_index,
     )
-
     logger.debug(
-        f"Attempting Narrative Anchor generation for {op_node.op} (Item: {primary_object}) with prompt:\\n{prompt_content_for_log}"
+        f"Attempting Narrative Anchor generation for {op_node.op} (Item: {primary_object}) with prompt:\n{prompt_content_for_log}"
     )
 
     try:
         request_payload = {
-            "model": MODEL,
+            "model": MODEL, # Uses global MODEL
             "messages": [
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_prompt},
@@ -2915,13 +2911,7 @@ You will be given the Genre, Setting, Item (Primary Object), and Concept/Operati
             "temperature": config.ANCHOR_GEN_TEMP,
             "reasoning": {"exclude": True},
         }
-
-        logger.debug(
-            f"Using request_payload for narrative anchor generation: {request_payload}"
-        )
-
         resp = _chat_completion_call(**request_payload)
-
         raw_candidate = None
         finish_reason = "N/A"
 
@@ -2948,15 +2938,15 @@ You will be given the Genre, Setting, Item (Primary Object), and Concept/Operati
             prompt=f"Raw LLM Output (Finish Reason: {finish_reason}):\n{raw_candidate if raw_candidate is not None else 'None'}",
             sample_index=sample_index,
         )
-        logger.debug(
-            f"Narrative Anchor Gen - API Call Details: Finish Reason='{finish_reason}', Raw Candidate='{str(raw_candidate)[:100]}...'"
-        )
 
         if raw_candidate is None:
             logger.warning(f"Narrative Anchor Gen: Received None content in response.")
             return None
 
         candidate = raw_candidate.strip()
+        if candidate == "UNIQUE_FAILURE":
+            logger.warning(f"Narrative Anchor Gen: LLM indicated UNIQUE_FAILURE for Op: {op_node.op}. Will use fallback.")
+            return None # This will trigger the fallback in the calling code
 
         # --- Strip surrounding quotes ---
         if candidate.startswith('"') and candidate.endswith('"'):
@@ -2964,8 +2954,8 @@ You will be given the Genre, Setting, Item (Primary Object), and Concept/Operati
         if candidate.startswith("'") and candidate.endswith("'"):
             candidate = candidate[1:-1].strip()
 
-        # --- Remove boilerplate prefixes ---
-        original_candidate_before_boilerplate_strip = candidate  # Store for comparison
+        # --- Remove boilerplate prefixes (keep your existing robust boilerplate removal) ---
+        original_candidate_before_boilerplate_strip = candidate
         candidate = re.sub(
             r"^(OUTPUT \(Phrase Only\):)\s*", "", candidate, flags=re.IGNORECASE
         ).strip()
@@ -2992,17 +2982,16 @@ You will be given the Genre, Setting, Item (Primary Object), and Concept/Operati
         # or if it became empty after stripping boilerplate (meaning it was *only* boilerplate)
         if not candidate or any(
             original_candidate_before_boilerplate_strip.lower().startswith(indicator)
-            for indicator in boilerplate_indicators_lower
+            for indicator in [
+                "output (phrase only):", "okay, here's a noun phrase:", "noun phrase:",
+                "phrase:", "label:", "descriptor:", "designation:", "certainly:", "here it is:"
+            ]
         ):
-            if not candidate:  # It became empty after stripping
-                logger.warning(
-                    f"Narrative Anchor Gen: Response was only boilerplate (raw: '{raw_candidate}', processed to empty string)"
-                )
-            else:  # It still starts with boilerplate, or original started with it and cleaning wasn't perfect
-                logger.warning(
-                    f"Narrative Anchor Gen: Boilerplate detected in response (raw: '{raw_candidate}', processed: '{candidate}'). Triggering retry."
-                )
-            return None  # Fail this attempt to trigger retry
+            if not candidate:
+                logger.warning(f"Narrative Anchor Gen: Response was only boilerplate (raw: '{raw_candidate}', processed to empty string)")
+            else:
+                logger.warning(f"Narrative Anchor Gen: Boilerplate detected (raw: '{raw_candidate}', processed: '{candidate}'). Triggering fallback.")
+            return None
 
         # --- Aggressively remove echoed input preamble ---
         # Construct the expected preamble pattern based on current genre, item, concept
@@ -3068,39 +3057,21 @@ You will be given the Genre, Setting, Item (Primary Object), and Concept/Operati
             return None
 
         num_words = len(candidate.split())
-        if (
-            not candidate or num_words == 0 or num_words > config.MAX_ANCHOR_WORDS
-        ):  # Use config.MAX_ANCHOR_WORDS instead of hardcoded 5
-            logger.warning(
-                f"Narrative Anchor Gen: Invalid (empty, too long/short, refused) response (raw: '{raw_candidate}', processed: '{candidate}', words: {num_words})"
-            )
+        if not candidate or num_words == 0 or num_words > config.MAX_ANCHOR_WORDS:
+            logger.warning(f"Narrative Anchor Gen: Invalid (empty, too long/short) response (raw: '{raw_candidate}', processed: '{candidate}', words: {num_words})")
+            return None
+        if candidate.lower().startswith(("i cannot", "i'm sorry", "i am unable", "as an ai")):
+            logger.warning(f"Narrative Anchor Gen: Explicit refusal detected (raw: '{raw_candidate}', processed: '{candidate}')")
+            return None
+        if candidate.lower() in [a.lower() for a in all_previous_anchors]:
+            logger.warning(f"Narrative Anchor Gen: LLM generated a DUPLICATE anchor '{candidate}' despite instructions. Op: {op_node.op}. Will use fallback.")
             return None
 
-        if candidate.lower().startswith(
-            (
-                "i cannot",
-                "i'm sorry",
-                "i am unable",
-                "as an ai",
-                "i do not have",
-                "unable to provide",
-            )
-        ):
-            logger.warning(
-                f"Narrative Anchor Gen: Explicit refusal detected (raw: '{raw_candidate}', processed: '{candidate}')"
-            )
-            return None
-
-        logger.info(
-            f"Narrative Anchor: '{candidate}' for Op: {op_node.op}, Item: {primary_object} (raw: '{raw_candidate}')"
-        )
+        logger.info(f"Narrative Anchor: '{candidate}' for Op: {op_node.op}, Item: {primary_object} (raw: '{raw_candidate}')")
         return candidate
     except Exception as e:
-        logger.error(
-            f"Narrative Anchor LLM API Error for Op: {op_node.op}, Item: {primary_object}: {e}. Prompt that failed:\n{prompt_content_for_log}"
-        )
+        logger.error(f"Narrative Anchor LLM API Error for Op: {op_node.op}, Item: {primary_object}: {e}. Prompt that failed:\n{prompt_content_for_log}")
         return None
-
 
 generate_narrative_anchor_with_llm = retry_api_call(generate_narrative_anchor_with_llm)
 
@@ -3617,97 +3588,114 @@ Your analysis must be meticulous, focusing on exact numerical frequencies and ad
 """
         # Construct required_counts_summary_str_for_validator_context (as you had it)
         temp_required_counts_summary_list_val = []
-        if direct_atom_counts_val: # direct_atom_counts_val is Counter
+        if direct_atom_counts_val: # direct_atom_counts_val is a Counter
             for num_val_iter, count_val_iter in sorted(direct_atom_counts_val.items()):
                 num_word_iter = num_to_words(num_val_iter) if callable(num_to_words) else str(num_val_iter)
                 count_word_val_iter = num_to_words(count_val_iter) if callable(num_to_words) else str(count_val_iter)
                 temp_required_counts_summary_list_val.append(f"- '{num_word_iter}' (value: {num_val_iter}): required exactly {count_word_val_iter} ({count_val_iter}) time(s)")
-        required_counts_summary_str_for_validator_context_val = "\n".join(temp_required_counts_summary_list_val) if temp_required_counts_summary_list_val else "(No specific atomic number frequencies were mandated for the generator for this beat according to its Rule 1 summary.)"
+        
+        required_counts_summary_str_for_validator_context_val = "\n".join(temp_required_counts_summary_list_val) if temp_required_counts_summary_list_val else "(No specific new atomic number frequencies were mandated for the generator for this beat according to its Rule 1.A summary.)"
 
         gt_word_val_for_validator_prompt_val = "N/A"
-        if overall_ground_truth_answer_val is not None:
+        if overall_ground_truth_answer_val is not None: # overall_ground_truth_answer_val is context.overall_ground_truth_answer
             gt_word_val_for_validator_prompt_val = f"'{num_to_words(overall_ground_truth_answer_val) if callable(num_to_words) else str(overall_ground_truth_answer_val)}' ({overall_ground_truth_answer_val})"
+
+        is_result_also_input_str_for_validator = "No."
+        if correct_result_val is not None and direct_atom_counts_val and direct_atom_counts_val.get(correct_result_val, 0) > 0:
+            is_result_also_input_str_for_validator = f"Yes, it is required {direct_atom_counts_val.get(correct_result_val, 0)} time(s) as an input."
 
         # --- Start of Validator User Prompt Construction ---
         validator_user_prompt_parts = [
-            f"You are an AI numerical compliance checker. Evaluate the 'Generated Beat Text' below with ABSOLUTE PRECISION regarding its numerical content and adherence to the 'ULTRA-STRICT NUMBER RULES (Generator's Writing Guide)' provided.\n\n",
+            f"You are an AI numerical compliance checker. Evaluate the 'Generated Beat Text' below with ABSOLUTE PRECISION regarding its numerical content, operational fidelity, and adherence to the 'ULTRA-STRICT NUMBER RULES (Generator's Writing Guide)' provided.\n\n",
+            
             f"**Context for Your Evaluation (Derived from Generator's Task):**\n",
             f"- Operation Type: {current_op_node.op} ({op_labels_map.get(current_op_node.op, current_op_node.op)})\n",
-            f"- Conceptual Names for Prior Results (if any were inputs to this step): {conceptual_inputs_str_for_llm_validator}\n",
-            f"- New Specific Numbers for This Step (Atomic Inputs, as given to Generator, including their values and REQUIRED EXACT frequencies): {atomic_inputs_words_str_for_llm_validator}\n",
-            f"{required_counts_summary_str_for_validator_context_val}\n",
-            f"- Numerical Result of THIS Operation (as known to Generator, was to be Implied): {expected_beat_result_words_for_llm_validator}\n",
+            f"- Conceptual Names for Prior Results (if any were inputs to this step): {conceptual_inputs_str_for_llm_validator}\n", # e.g., "'The Dragon's Hoard'"
+            f"- New Specific Numbers for This Step (Atomic Inputs, as given to Generator, including their values and REQUIRED EXACT frequencies for Rule 1.A of Generator's Guide): {atomic_inputs_words_str_for_llm_validator}\n", # e.g., "'twenty' (20), 'thirty' (30)"
+            f"  Detailed Atomic Input Frequencies (from Generator's Rule 1.A Summary):\n{required_counts_summary_str_for_validator_context_val}\n",
+            f"- Numerical Result of THIS Operation (as known to Generator, was to be Implied): {expected_beat_result_words_for_llm_validator}\n", # e.g., "'fifty' (50)"
             f"- Overall Final Answer of Entire Story (for context): {gt_word_val_for_validator_prompt_val}\n",
-            f"- Is this beat's numerical result ('{expected_beat_result_words_for_llm_validator}') also one of its direct atomic inputs (Rule 1.A)? {'Yes, it is required ' + str(direct_atom_counts_val.get(correct_result_val, 0)) + ' time(s) as an input.' if (correct_result_val is not None and direct_atom_counts_val and direct_atom_counts_val.get(correct_result_val, 0) > 0) else 'No.'}\n",
-            f"- Actual Arity (Operand Count) for this operation: {actual_arity_val}\n\n",
-            f"**ULTRA-STRICT NUMBER RULES (Generator's Writing Guide - THIS IS THE GROUND TRUTH FOR YOUR VALIDATION. INTERPRET IT LITERALLY AND EXACTLY.):**\n---\n{ultra_strict_instruction_for_llm_validator_context}\n---\n\n",
+            f"- Is this beat's numerical result ('{expected_beat_result_words_for_llm_validator}') also one of its direct atomic inputs (Rule 1.A of Generator's Guide)? {is_result_also_input_str_for_validator}\n",
+            f"- Actual Arity (Operand Count for this operation, including conceptual and atomic): {actual_arity_val}\n\n", # actual_arity_val is len(current_op_node.children)
+            
+            f"**ULTRA-STRICT NUMBER RULES (Generator's Writing Guide - THIS IS THE GROUND TRUTH FOR YOUR VALIDATION. INTERPRET IT LITERALLY AND EXACTLY.):**\n---\n{ultra_strict_instruction_for_llm_validator_context}\n---\n\n", # This is the full ruleset given to the generator
+            
             f"**VALIDATION ALGORITHM - FOLLOW EXACTLY, using the Generator's Writing Guide above as the source of truth for allowed/forbidden numbers and their usage for THIS beat:**\n\n",
+            
             f"**Phase 1: Number Identification & Initial Counting**\n"
             f"1.  Read the 'Generated Beat Text' carefully.\n"
             f"2.  Identify EVERY number mentioned, whether as a digit (e.g., \"7\") or a word (e.g., \"seven\").\n"
-            f"3.  For EACH distinct number found, count its total frequency of appearance in the text.\n"
-            f"    *Example: If \"one\" appears 3 times and \"five\" appears 1 time, your internal count is {{'one': 3, 'five': 1}}.*\n\n",
+            f"3.  For EACH distinct number found, count its total frequency of appearance in the text.\n\n",
+            
             f"**Phase 2: Rule-by-Rule Compliance Check**\n\n",
-            f"**RULE 1.A (Required Atomic Inputs & EXACT Frequencies):**\n"
-            f"   - Refer to Rule 1.A in the Generator's Writing Guide (specifically the 'SUMMARY OF REQUIRED NUMBER FREQUENCIES').\n"
-            f"   - For EACH number listed there as required:\n"
-            f"     a. Is it present in the text?\n"
-            f"     b. Does its frequency in the text EXACTLY match the required frequency? (e.g., if 'five' is required 2 times, it must appear exactly 2 times, no more, no less).\n"
-            f"   - If any required number is missing OR its frequency is incorrect, this is a VIOLATION.\n"
-            f"   - *Note on Rule 1.B (No Re-listing/Summaries):* If you detect a sentence that seems to summarize or re-list numbers already introduced as inputs (violating Rule 1.B from the Generator's Guide), this often leads to frequency violations for Rule 1.A. Flag this as a likely cause of frequency errors.\n\n",
-            f"**RULE 2 (Outcome Handling - Implicit vs. Explicit):**\n"
+
+            f"**RULE 0 (Input Fidelity - Conceptual & Atomic, and Operational Correctness):**\n"
+            f"   - **A. Conceptual Input Usage:** The Generator's Writing Guide specified conceptual inputs (prior results) for this step as: **{conceptual_inputs_str_for_llm_validator}**. Does the 'Generated Beat Text' clearly narrate these named concepts (and the values they represent) as being actively used/included as inputs in *this specific '{current_op_node.op}' operation*? If any required conceptual input is missing from the described operation, this is a VIOLATION.\n"
+            f"   - **B. Atomic Input Usage (Frequencies):** Refer to Rule 1.A in the Generator's Writing Guide (specifically the 'SUMMARY OF REQUIRED NUMBER FREQUENCIES'). Are all *new atomic numbers* listed there present with their EXACTLY specified frequencies? If any required atomic number is missing OR its frequency is incorrect, this is a VIOLATION.\n"
+            f"   - **C. Operational Fidelity:** Does the narrated action in the 'Generated Beat Text' accurately represent the mathematical operation **'{current_op_node.op}'** being performed on the *complete set* of inputs (both conceptual from 0.A and atomic from 0.B)? For example, if the operation is AVG, does the narrative describe an averaging process of all inputs, not just selection? If the narrated action does not match the mathematical operation, this is a VIOLATION.\n\n",
+
+            f"**RULE 1.A (Generator's Guide - Atomic Input Frequencies - Cross-check for Rule 0.B):**\n"
+            f"   - Confirm that all *new atomic numbers* required by the Generator's Rule 1.A (see 'SUMMARY OF REQUIRED NUMBER FREQUENCIES' in the guide) are present with their EXACT frequencies. Any deviation is a VIOLATION.\n\n",
+            
+            f"**RULE 1.B (Generator's Guide - No Re-listing/Summaries of Atomic Inputs):**\n"
+            f"   - Does the text avoid re-listing or summarizing atomic input numbers after their initial introduction for the operation? If re-listing occurs, this is a VIOLATION.\n\n",
+
+            f"**RULE 2 (Generator's Guide - Outcome Handling - Implicit vs. Explicit):**\n"
             f"   - Refer to Rule 2 in the Generator's Writing Guide.\n"
             f"   - Is the numerical result of THIS operation (value: {expected_beat_result_words_for_llm_validator}) explicitly stated in the text?\n"
             f"   - If it IS stated:\n"
-            f"     a. Is this allowed because the result is ALSO a Rule 1.A input (see context above)?\n"
+            f"     a. Is this allowed because the result is ALSO a Rule 1.A input (see context above: '{is_result_also_input_str_for_validator}')?\n"
             f"     b. If it's stated but NOT a Rule 1.A input, this is a VIOLATION.\n"
             f"     c. If it IS a Rule 1.A input, ensure its count is handled under Rule 1.A and it's not *additionally* stated as the result. The narrative should imply the result conceptually as '{current_node_conceptual_name}'.\n"
             f"   - If the operation is MEDIAN, the numerical result MUST NEVER be stated.\n\n",
-            # --- MODIFIED Rule 3 in VALIDATION ALGORITHM ---
-            f"**RULE 3 (Permitted Narrative Flourishes - Phrasing/Arity):**\n"
+            
+            f"**RULE 3 (Generator's Guide - Permitted Narrative Flourishes - Phrasing/Arity):**\n"
             f"   - Refer to Rule 3 in the Generator's Writing Guide. This rule is EXTREMELY restrictive.\n"
-            f"   - For any number found in the text that is NOT fulfilling a Rule 1.A requirement (i.e., it's an \"extra\" number after Rule 1.A counts are satisfied):\n"
+            f"   - For any number found in the text that is NOT fulfilling a Rule 0.B/1.A requirement (i.e., it's an \"extra\" number after Rule 0.B/1.A counts are satisfied):\n"
             f"     a. Is it explicitly permitted by Rule 3 of the Generator's Guide for this specific beat (e.g., one of the allowed phrasing numbers like 'one', 'two', 'three', or the correct arity {actual_arity_val if actual_arity_val > 0 else 'N/A'})?\n"
-            f"     b. **Crucially, is this number ALSO a Rule 1.A input for this beat (even if the found instance is an over-count of Rule 1.A)? If so, its use CANNOT be justified under Rule 3; it's an error related to Rule 1.A frequency.**\n"
+            f"     b. **Crucially, is this number ALSO a Rule 0.B/1.A input for this beat (even if the found instance is an over-count of Rule 0.B/1.A)? If so, its use CANNOT be justified under Rule 3; it's an error related to Rule 0.B/1.A frequency.**\n"
             f"     c. **Crucially, is this number FORBIDDEN by Rule 4 for this beat? If so, its use CANNOT be justified under Rule 3; it's a Rule 4 violation.**\n"
-            f"     d. If it passes (a) AND is NOT a Rule 1.A input (b is false) AND is NOT Rule 4 forbidden (c is false), is its use genuinely for SPARING, ESSENTIAL phrasing or correctly stating the arity? Or could the sentence be rephrased without it? (Your default assumption should be: it's extraneous unless proven essential by the narrative context).\n"
+            f"     d. If it passes (a) AND is NOT a Rule 0.B/1.A input (b is false) AND is NOT Rule 4 forbidden (c is false), is its use genuinely for SPARING, ESSENTIAL phrasing or correctly stating the arity? Or could the sentence be rephrased without it? (Your default assumption should be: it's extraneous unless proven essential by the narrative context).\n"
             f"   - Any number used under the guise of Rule 3 but violating these conditions (especially b, c, or being non-essential for d) is an EXTRANEOUS number and a VIOLATION.\n\n",
-            # --- End of MODIFIED Rule 3 ---
-            f"**RULE 4 (Absolutely Forbidden Numbers):**\n"
+            
+            f"**RULE 4 (Generator's Guide - Absolutely Forbidden Numbers):**\n"
             f"   - Refer to Rule 4 in the Generator's Writing Guide.\n"
             f"   - Are ANY numbers listed there as forbidden present in the text? If yes, this is a VIOLATION, regardless of intended use.\n\n",
-            f"**RULE 5 (No Other Numbers):**\n"
+            
+            f"**RULE 5 (Generator's Guide - No Other Numbers):**\n"
             f"   - Refer to Rule 5 in the Generator's Writing Guide.\n"
-            f"   - After accounting for numbers justified by Rule 1.A (with correct frequency) and valid Rule 3 uses (that are not Rule 4 forbidden), are there ANY other numbers remaining in your identified list from Phase 1?\n"
+            f"   - After accounting for numbers justified by Rule 0.B/1.A (with correct frequency) and valid Rule 3 uses (that are not Rule 4 forbidden), are there ANY other numbers remaining in your identified list from Phase 1?\n"
             f"   - If yes, these are EXTRANEOUS and a VIOLATION.\n\n",
-            f"**RULE 6 (Prior Result Handling - Conceptual Names):**\n"
+            
+            f"**RULE 6 (Generator's Guide - Prior Result Handling - Conceptual Names):**\n"
             f"   - Refer to Rule 6 in the Generator's Writing Guide (if present).\n"
-            f"   - If prior results are mentioned, are they referred to by their conceptual names (e.g., {conceptual_inputs_str_for_llm_validator}) and NOT their numerical values?\n\n",
+            f"   - If prior results are mentioned (as conceptual inputs per Rule 0.A), are they referred to by their conceptual names (e.g., {conceptual_inputs_str_for_llm_validator}) and NOT their numerical values?\n\n",
+            
             f"**Phase 3: Constructing the JSON Response**\n\n"
             f"Based on your findings from Phase 1 & 2:\n\n"
-            f"-   **`is_valid` (boolean):** True ONLY IF all rules (1.A with exact frequencies, 2, 3, 4, 5, 6) from the Generator's Writing Guide are perfectly met. False otherwise.\n\n"
+            f"-   **`is_valid` (boolean):** True ONLY IF all rules (0, 1.A, 1.B, 2, 3, 4, 5, 6) from the Generator's Writing Guide are perfectly met. False otherwise.\n\n"
             f"-   **`explanation_for_generator` (string):**\n"
-            f"    *   If invalid, provide a DETAILED, step-by-step explanation of ALL violations found. Reference specific rule numbers from the Generator's Writing Guide.\n"
-            f"    *   **CRITICAL: For each violation, be specific about the number(s) involved and the nature of the error.**\n"
+            f"    *   If invalid, provide a DETAILED, step-by-step explanation of ALL violations found. Reference specific rule numbers from the Generator's Writing Guide AND YOUR VALIDATION ALGORITHM (e.g., 'VIOLATION Rule 0.A (Conceptual Input Missing)').\n"
+            f"    *   **CRITICAL: For each violation, be specific about the number(s) or concept(s) involved and the nature of the error.**\n"
             f"    *   *Use these exact phrases for common errors when applicable:*\n"
-            f"        *   \"VIOLATION Rule 1.A (Missing): Required number '[number_word]' (value: [value]), expected [X] time(s), was completely missing.\"\n"
-            f"        *   \"VIOLATION Rule 1.A (Frequency): Number '[number_word]' (value: [value]) was required [X] time(s) but found [Y] time(s). This is an [over-count/under-count].\"\n"
-            f"        *   \"VIOLATION Rule 1.B (Re-listing): Detected a phrase that re-lists/summarizes input numbers, likely causing frequency errors for Rule 1.A. The phrase: '[quote the problematic phrase]'.\"\n"
-            f"        *   \"VIOLATION Rule 2 (Explicit Result): The operation's result '[result_word]' (value: [value]) was explicitly stated but should be implicit via '{current_node_conceptual_name}'. (If it was also a Rule 1.A input, clarify if the issue is an *additional* statement as the result).\"\n"
-            # --- MODIFIED `explanation_for_generator` for Rule 3 Violations ---
-            f"        *   \"VIOLATION Rule 3 (Phrasing/Arity Misuse): Number '[number_word]' (value: [value]) was used. This is invalid because: [State CLEARLY which condition it violated from the detailed Rule 3 check above: e.g., 'it was also a Rule 1.A input for this beat (its use is for Rule 1.A, not phrasing)', 'it is forbidden by Rule 4 for this beat', 'it is not the correct arity ({actual_arity_val if actual_arity_val > 0 else 'N/A'}) and not an allowed phrasing number', 'it is an allowed phrasing number but its use was not sparing/essential and a numberless alternative likely exists', 'it is the correct arity ({actual_arity_val if actual_arity_val > 0 else 'N/A'}) but that arity value is also a Rule 1.A input or Rule 4 forbidden for this beat']. Rule 3 in the Generator's Writing Guide states: [briefly quote relevant part of Rule 3].\"\n"
-            # --- End of MODIFIED `explanation_for_generator` for Rule 3 ---
-            f"        *   \"VIOLATION Rule 4 (Forbidden Number): Forbidden number '[number_word]' (value: [value]) was found. Rule 4 in the Generator's Guide lists it as forbidden.\"\n"
-            f"        *   \"VIOLATION Rule 5 (Other Extraneous Number): Extraneous number '[number_word]' (value: [value]) was found. It is not justified by Rule 1.A or a valid Rule 3 use, and not explicitly Rule 4 forbidden but still violates Rule 5.\"\n"
-            f"    *   If valid, state: \"All numerical and storytelling rules from the Generator's Writing Guide were met. Specifically: [briefly confirm key points like Rule 1.A frequencies, Rule 2 implicitness, Rule 3 appropriate use, Rule 4/5 absence of forbidden/extras].\"\n\n"
-            f"-   **`explanation_for_audit` (string, only if `is_valid` is true):** Concise summary of why it's valid, highlighting key compliance points (e.g., \"All Rule 1.A frequencies correct, result implicit, no forbidden/extraneous numbers.\").\n\n"
+            f"        *   \"VIOLATION Rule 0.A (Conceptual Input Missing): The conceptual input '[conceptual_name_here]' (representing value [value_here]), which was required for the '{current_op_node.op}' operation, was not described as being used/included in the current scene's action.\"\n"
+            f"        *   \"VIOLATION Rule 0.C (Operational Fidelity): The narrative described [action_narrated] but the AST operation is '{current_op_node.op}'. The narrated action does not correctly represent the mathematical operation on all inputs.\"\n"
+            f"        *   \"VIOLATION Rule 1.A (Generator's Guide - Missing Atomic): Required new atomic number '[number_word]' (value: [value]), expected [X] time(s), was completely missing.\"\n"
+            f"        *   \"VIOLATION Rule 1.A (Generator's Guide - Atomic Frequency): New atomic number '[number_word]' (value: [value]) was required [X] time(s) but found [Y] time(s). This is an [over-count/under-count].\"\n"
+            f"        *   \"VIOLATION Rule 1.B (Generator's Guide - Re-listing Atomic): Detected a phrase that re-lists/summarizes new atomic input numbers, likely causing frequency errors for Rule 1.A. The phrase: '[quote the problematic phrase]'.\"\n"
+            f"        *   \"VIOLATION Rule 2 (Generator's Guide - Explicit Result): The operation's result '[result_word]' (value: [value]) was explicitly stated but should be implicit via '{current_node_conceptual_name}'. (If it was also a Rule 1.A input, clarify if the issue is an *additional* statement as the result).\"\n"
+            f"        *   \"VIOLATION Rule 3 (Generator's Guide - Phrasing/Arity Misuse): Number '[number_word]' (value: [value]) was used. This is invalid because: [State CLEARLY which condition it violated from the detailed Rule 3 check above: e.g., 'it was also a Rule 1.A input for this beat (its use is for Rule 1.A, not phrasing)', 'it is forbidden by Rule 4 for this beat', 'it is not the correct arity ({actual_arity_val if actual_arity_val > 0 else 'N/A'}) and not an allowed phrasing number', 'it is an allowed phrasing number but its use was not sparing/essential and a numberless alternative likely exists', 'it is the correct arity ({actual_arity_val if actual_arity_val > 0 else 'N/A'}) but that arity value is also a Rule 1.A input or Rule 4 forbidden for this beat']. Rule 3 in the Generator's Writing Guide states: [briefly quote relevant part of Rule 3].\"\n"
+            f"        *   \"VIOLATION Rule 4 (Generator's Guide - Forbidden Number): Forbidden number '[number_word]' (value: [value]) was found. Rule 4 in the Generator's Guide lists it as forbidden.\"\n"
+            f"        *   \"VIOLATION Rule 5 (Generator's Guide - Other Extraneous Number): Extraneous number '[number_word]' (value: [value]) was found. It is not justified by Rule 1.A or a valid Rule 3 use, and not explicitly Rule 4 forbidden but still violates Rule 5.\"\n"
+            f"    *   If valid, state: \"All numerical, operational, and storytelling rules from the Generator's Writing Guide were met. Specifically: [briefly confirm key points like Rule 0.A conceptual input usage, Rule 0.C operational fidelity, Rule 1.A atomic frequencies, Rule 2 implicitness, Rule 3 appropriate use, Rule 4/5 absence of forbidden/extras].\"\n\n"
+            f"-   **`explanation_for_audit` (string, only if `is_valid` is true):** Concise summary of why it's valid, highlighting key compliance points (e.g., \"All conceptual and atomic inputs correctly used per Rule 0, operation '{current_op_node.op}' correctly depicted, Rule 1.A frequencies correct, result implicit, no forbidden/extraneous numbers.\").\n\n"
             f"-   **`overall_revision_summary_for_generator_prompt` (string):**\n"
-            f"    *   If invalid: \"Revise to fix violations of: [List violated Rule numbers, e.g., Rule 1.A (Frequency), Rule 3, Rule 5]. Focus on: [e.g., 'exact counts for required inputs', 'removing extraneous number [X]', 'ensuring result is implicit'].\"\n"
+            f"    *   If invalid: \"Revise to fix violations of: [List violated Rule numbers, e.g., Rule 0.A (Conceptual Input), Rule 0.C (Operational Fidelity), Rule 1.A (Atomic Frequency), Rule 3, Rule 5]. Focus on: [e.g., 'ensuring conceptual input [X] is part of the operation', 'correctly narrating the [Y] operation', 'exact counts for required atomic inputs', 'removing extraneous number [Z]', 'ensuring result is implicit'].\"\n"
             f"    *   If valid: \"No revision needed. Beat meets all criteria.\"\n\n"
             f"-   **`suggested_revisions` (array of strings, optional):**\n"
             f"    *   If invalid, provide 1-2 concrete, specific suggestions for how the generator could rephrase parts of the text to fix a key violation.\n"
-            f"    *   Example: \"Consider removing the phrase '[problematic phrase]' to fix the Rule 1.B re-listing issue.\"\n"
-            f"    *   Example: \"To fix the count for '[number_word]', ensure it appears [X] times as distinct narrative elements. Currently, it appears [Y] times. You could add/remove a sentence like: '[example sentence]'.\"\n\n"
+            f"    *   Example for Rule 0.A: \"To fix the missing conceptual input, ensure the narrative shows '[conceptual_name]' being considered alongside other inputs for the '{current_op_node.op}' operation. For instance: 'They took the [conceptual_name] and the [atomic_input_1]...'\"\n"
+            f"    *   Example for Rule 0.C: \"To fix operational fidelity for '{current_op_node.op}', ensure the action described is truly an averaging/summing/etc. of all inputs, not just selecting one. You could say: 'After considering all [N] sources, the common essence they identified was...'\"\n\n"
             f"**Generated Beat Text to Evaluate:**\n---\n{generated_text_cleaned}\n---\n"
         ]
         validator_user_prompt = "".join(validator_user_prompt_parts)
@@ -3833,8 +3821,36 @@ Your analysis must be meticulous, focusing on exact numerical frequencies and ad
     return None # Failed all iterations
 
 # --- Iterative LLM Validation Loop ---
+# Ensure these are defined globally or passed appropriately if not already
+# from your main script:
+# OP_LABELS = {"MAX": "largest value", ...}
+# num_to_words = p_inflect.number_to_words (or your lru_cached version)
+# MODEL = "google/gemini-2.5-flash-preview:thinking" (or your generator model)
+# VALIDATOR_RESPONSE_SCHEMA = {...} # Your defined schema
+# _chat_completion_call = ... # Your API call function
+# log_prompt = ... # Your logging function
+# parse_llm_json_with_fallback = ... # Your JSON parsing function
+# Config = ... # Your dataclass Config
+# GenerationContext = ... # Your dataclass GenerationContext
+# OpNode = ... # Your dataclass OpNode
+# Atom = ... # Your dataclass Atom
+# BeatGenerationError = ... # Your custom exception
+# make_number_validator = ... # Your validator factory
+# _generate_and_llm_validate_beat = ... # Your iterative beat generation function
+# generate_with_retry = ... # Your retry helper for generation
+# clean_snippet = ... # Your snippet cleaning function
+
+# It's good practice to import standard libraries at the top of the file
+import json
+import time
+import logging # Assuming logger_obj is passed in
+from collections import Counter # Assuming direct_atom_counts_val is a Counter
+import random # For padding logic
+import re # For boilerplate stripping if not already imported
+
+# --- Iterative LLM Validation Loop ---
 def _generate_narrative_recursive(
-    node: Node,
+    node: Node, # Actually OpNode or Atom
     context: "GenerationContext",
     is_root: bool,
 ):
@@ -3842,27 +3858,26 @@ def _generate_narrative_recursive(
     config_obj = context.config
     encoder = context.encoder
     logger_obj = context.logger
-    p_inflect = context.p_inflect
+    p_inflect = context.p_inflect # Make sure p_inflect is accessible
     narrative_anchor_map = context.narrative_anchor_map
 
     node_id = id(node)
-    current_node_conceptual_name = "this_step_s_outcome"
-    if isinstance(node, OpNode):
+    current_node_conceptual_name = "this_step_s_outcome" # Default
+    if isinstance(node, OpNode): # Check if it's an OpNode before accessing .op
         current_node_conceptual_name = narrative_anchor_map.get(
             node_id, f"the_unnamed_{node.op}_result_{node_id % 100}"
         )
 
-    op_for_log = getattr(node, "op", "AtomNode")
+    op_for_log = getattr(node, "op", "AtomNode") # Safe way to get op
     logger_obj.debug(
         f"[Sample {context.sample_index + 1}] _generate_narrative_recursive: "
         f"Processing Node Type: {type(node).__name__}, Op: {op_for_log}, Conceptual Name: '{current_node_conceptual_name}', IsRoot: {is_root}, "
         f"Beat: {context.beat_counter['current'] + 1 if isinstance(node, OpNode) else '-'}/{context.beat_counter['total']}"
     )
 
-    actual_arity_for_current_op = len(node.children)
+    actual_arity_for_current_op = len(node.children) if hasattr(node, "children") else 0
     logger_obj.debug(f"Op: {op_for_log}, Calculated actual_arity_for_current_op: {actual_arity_for_current_op}")
 
-    # --- Define primary_object_as_string and safe_primary_object_for_fstring EARLIER ---
     primary_object_as_string = "[DEFAULT_PRIMARY_OBJECT]"
     primary_object_value_from_world = None
     try:
@@ -3892,7 +3907,7 @@ def _generate_narrative_recursive(
             logger_obj.error(f"Internal Error: primary_object_as_string became non-string: {type(primary_object_as_string)}. Using fallback for safe_primary_object_for_fstring.")
         else:
             safe_primary_object_for_fstring = primary_object_as_string.replace("{", "{{").replace("}", "}}")
-    except AttributeError as e_replace:
+    except AttributeError as e_replace: # Should not happen if type check above is good
         logger_obj.error(
             f"[Sample {context.sample_index + 1}, Op: {op_for_log}] AttributeError during .replace() for safe_primary_object_for_fstring. "
             f"primary_object_as_string was type: {type(primary_object_as_string)}, value: '{str(primary_object_as_string)[:100]}'. Error: {e_replace}. "
@@ -3905,17 +3920,21 @@ def _generate_narrative_recursive(
             f"Falling back for safe_primary_object_for_fstring."
         )
     logger_obj.debug(f"OpNode {op_for_log}: primary_object_as_string = '{primary_object_as_string}', safe_primary_object_for_fstring = '{safe_primary_object_for_fstring}'")
-    # --- END OF MOVED BLOCK ---
 
     if isinstance(node, Atom):
         logger_obj.debug(f"Node is Atom ({node.n}), value is {node.value}. Returning.")
         return
 
+    # This must be an OpNode if we reached here
+    if not isinstance(node, OpNode):
+        logger_obj.error(f"Logic error: node is not Atom but also not OpNode. Type: {type(node)}. Aborting beat.")
+        raise BeatGenerationError(f"Node type {type(node)} is not OpNode or Atom.")
+
     child_op_node_results_as_conceptual_inputs = {}
     child_conceptual_names_list = []
 
     for child_index, child in enumerate(node.children):
-        _generate_narrative_recursive(child, context, is_root=False)
+        _generate_narrative_recursive(child, context, is_root=False) # Recursive call
         if isinstance(child, OpNode):
             child_anchor_str = narrative_anchor_map.get(id(child))
             if child_anchor_str:
@@ -3924,9 +3943,11 @@ def _generate_narrative_recursive(
                     child_op_node_results_as_conceptual_inputs[child_anchor_str] = child.value
                 else:
                     logger_obj.error(f"CRITICAL ERROR: Child OpNode {child.op} ('{child_anchor_str}') has no computed value after recursive call for parent {node.op}!")
+                    # This is a serious issue, might need to raise an error or handle gracefully
             else:
                 logger_obj.warning(f"OpNode child {child.op} of {node.op} has no conceptual name in map.")
-        if context.tokens_used >= config_obj.MAX_TOTAL_TOKENS - config_obj.MAX_TOKENS_BUFFER:
+        # Token limit check after each child
+        if context.tokens_used >= config_obj.MAX_TOTAL_TOKENS - config_obj.MAX_TOKENS_BUFFER: # Use config_obj from context
             logger_obj.warning(
                 f"TOKEN LIMIT reached after processing child {child_index+1} for node {node.op} ('{current_node_conceptual_name}'). Aborting beat generation for this node."
             )
@@ -3945,33 +3966,31 @@ def _generate_narrative_recursive(
 
     correct_result = node.value
     if correct_result is None:
-        logger_obj.error(f"CRITICAL: Node {node.op} has no pre-computed value (node.value is None). Aborting beat.")
-        raise BeatGenerationError(f"Node {node.op} has no pre-computed value.")
+        logger_obj.error(f"CRITICAL: Node {node.op} ('{current_node_conceptual_name}') has no pre-computed value (node.value is None). Aborting beat.")
+        raise BeatGenerationError(f"Node {node.op} ('{current_node_conceptual_name}') has no pre-computed value.")
 
-    # --- Construct forbidden_for_current_beat_py_validator (for Rule 4) ---
     forbidden_for_current_beat_py_validator = set(context.introduced_atoms)
     if context.overall_ast_root is not None:
-        for processed_node in postorder(context.overall_ast_root):
+        for processed_node in postorder(context.overall_ast_root): # Ensure postorder is defined
             if isinstance(processed_node, OpNode) and processed_node.value is not None:
-                if id(processed_node) == id(node): continue 
+                if id(processed_node) == id(node): continue
                 is_direct_child = any(id(child_node) == id(processed_node) for child_node in node.children if isinstance(child_node, OpNode))
-                if is_direct_child: continue 
+                if is_direct_child: continue
                 forbidden_for_current_beat_py_validator.add(processed_node.value)
     
-    if correct_result is not None: # CRITICAL FIX: Always add current beat's result to Rule 4
+    if correct_result is not None:
         forbidden_for_current_beat_py_validator.add(correct_result)
         logger_obj.debug(f"Op: {op_for_log}, Added current beat result {correct_result} to Rule 4 forbidden set.")
 
     if context.overall_ground_truth_answer is not None:
         if context.overall_ground_truth_answer != correct_result and \
-           context.overall_ground_truth_answer not in direct_atom_values_counts: 
+           context.overall_ground_truth_answer not in direct_atom_values_counts:
             forbidden_for_current_beat_py_validator.add(context.overall_ground_truth_answer)
 
-    forbidden_for_current_beat_py_validator -= set(direct_atom_values_counts.keys()) # Remove Rule 1.A inputs
+    forbidden_for_current_beat_py_validator -= set(direct_atom_values_counts.keys())
     logger_obj.debug(
-        f"Final forbidden numbers for Rule 4 (Op: {op_for_log}): {sorted(list(forbidden_for_current_beat_py_validator))}"
+        f"Final forbidden numbers for Rule 4 (Op: {op_for_log}, Name: '{current_node_conceptual_name}'): {sorted(list(forbidden_for_current_beat_py_validator))}"
     )
-    # --- End of forbidden_for_current_beat_py_validator construction ---
 
     conceptual_inputs_context_list = []
     if child_op_node_results_as_conceptual_inputs:
@@ -3995,7 +4014,7 @@ def _generate_narrative_recursive(
     if all_direct_atomic_inputs_as_list:
         counts_for_summary = Counter(all_direct_atomic_inputs_as_list)
         for num_val, count_val in sorted(counts_for_summary.items()):
-            num_word = num_to_words(num_val)
+            num_word = num_to_words(num_val) # Assumes num_to_words is defined
             count_word_val = num_to_words(count_val)
             required_counts_summary_list.append(f"- '{num_word}' ({num_val}): exactly {count_word_val} ({count_val}) time(s)")
 
@@ -4008,9 +4027,9 @@ def _generate_narrative_recursive(
 
     must_mention_prose_parts = []
     for atom_val_prose in unique_direct_atom_values_for_prompt:
-        count_prose = direct_atom_values_counts[atom_val_prose] 
+        count_prose = direct_atom_values_counts[atom_val_prose]
         atom_word_prose = num_to_words(atom_val_prose)
-        if count_prose > 1 and p_inflect:
+        if count_prose > 1 and p_inflect: # Check p_inflect for pluralization
             must_mention_prose_parts.append(f"'{atom_word_prose}' ({atom_val_prose}) (which appears {p_inflect.number_to_words(count_prose)} times as direct inputs)")
         else:
             must_mention_prose_parts.append(f"'{atom_word_prose}' ({atom_val_prose})")
@@ -4047,7 +4066,7 @@ def _generate_narrative_recursive(
     if correct_result is not None and correct_result in direct_atom_values_counts:
         num_word_result = num_to_words(correct_result)
         required_count_as_input = direct_atom_values_counts[correct_result]
-        op_action_word = "the " + op_label 
+        op_action_word = "the " + op_label
         if node.op == "MED": op_action_word = "the median item/group"
         elif node.op == "MAX": op_action_word = "the largest item/group"
         elif node.op == "MIN": op_action_word = "the smallest item/group"
@@ -4059,7 +4078,7 @@ def _generate_narrative_recursive(
             f"        1.  **Fulfill Rule 1.A (Input Requirement):** You MUST narrate {required_count_as_input} distinct instance(s) of '{num_word_result} {safe_primary_object_for_fstring}' (or a clear narrative equivalent) being present as direct inputs for this scene's operation. Each of these {required_count_as_input} mentions is for an *input*.\n"
             f"        2.  **Fulfill Rule 2 (Implicit Outcome Requirement):** After describing all inputs, your narrative must imply that an item/concept representing the value '{num_word_result}' is the outcome (i.e., {op_action_word}). HOWEVER, when describing this outcome or identifying '{current_node_conceptual_name}', you MUST NOT use the word '{num_word_result}' or the digit '{correct_result}' again *in the context of stating or identifying the result*. The outcome must be purely conceptual.\n"
             f"    *   **Think of it this way:** You introduce '{num_word_result} {safe_primary_object_for_fstring}' {required_count_as_input} times as *ingredients*. Then, the *final dish* (conceptually '{current_node_conceptual_name}') happens to have a characteristic that corresponds to the value '{num_word_result}', but you don't name that characteristic with the number word again.\n"
-            f"    *   **Illustrative Example (Adapt to YOUR operation - {node.op} - and numbers):\n**" 
+            f"    *   **Illustrative Example (Adapt to YOUR operation - {node.op} - and numbers):\n**"
             f"        Suppose for a different problem, the inputs included 'two items' (required twice for Rule 1.A) and 'five items', and the operation was to find the smallest (MIN), making 'two' the result.\n"
             f"        - Correct for Rule 1.A: '...they found two relics here. Later, they uncovered another two relics. They also found five relics elsewhere.' (Two mentions of 'two' as inputs, one of 'five').\n"
             f"        - Correct for Rule 2 (implying 'two' is the MIN result): '...of all the caches, the one containing the first pair of relics was clearly the least significant, and they designated it {current_node_conceptual_name}.' (Implies the 'two relics' group is the MIN without saying 'the minimum is two').\n"
@@ -4079,7 +4098,7 @@ def _generate_narrative_recursive(
         )
 
     temp_forbidden_detailed_list_for_rule4 = []
-    for n_forbidden in sorted(list(forbidden_for_current_beat_py_validator)): # Uses updated forbidden set
+    for n_forbidden in sorted(list(forbidden_for_current_beat_py_validator)):
         temp_forbidden_detailed_list_for_rule4.append(f"'{num_to_words(n_forbidden)}' ({n_forbidden})")
 
     must_avoid_str_for_generator_prompt_detailed = (
@@ -4094,107 +4113,58 @@ def _generate_narrative_recursive(
         prior_results_handling_rule_for_prompt = (
             f"6.  **Echoes of the Past (Referring to Prior Results):** If your characters refer to the outcome of a previous significant event "
             f"(which we've named, for example, {prior_results_names_str_for_rule6}), you MUST use these evocative names. "
-            f"Think of them as legendary items or well-known past results. The actual number these names represent should remain a secret from the reader, hinted at only by their conceptual name.\n"
+            f"Think of them as legendary items or well-known past results. The actual number these names represent should remain a secret from the reader, hinted at only by their conceptual name. This complements Rule 1.C, which states these conceptual inputs are *active* in the current operation.\n" # Added complement to 1.C
         )
 
+    # --- REVISED op_specific_action_details and action_description_for_prompt ---
     action_description_parts = [
         f"**Your Scene's Core Action & Narrative Goal (Follow this closely):**\n"
         f"This scene needs to narrate an event or discovery that mirrors the mathematical operation: **{op_label}**. "
-        f"The central items of interest are the '{safe_primary_object_for_fstring}'."
+        f"The central items of interest are the '{safe_primary_object_for_fstring}'.\n"
+        f"For this operation, the inputs to consider are:\n"
+        f"  1. **Conceptual Inputs (Results from previous steps, if any):** {conceptual_input_names_only_str_for_action}. These represent specific numerical quantities that MUST be part of this operation.\n"
+        f"  2. **New Atomic Number Inputs (introduced in this step):** {atomic_inputs_context_str_detailed_for_prompt if direct_atom_children else 'None for this step'}. These also MUST be part of this operation, mentioned with their exact frequencies as per Rule 1.A.\n"
+        f"Your narrative must clearly show ALL these inputs (both conceptual and new atomic) being involved in an action that reflects the '{op_label}' operation."
     ]
     op_specific_action_details = ""
-    op_specific_outcome_implication_details = ""
+    op_specific_outcome_implication_details = ( # Generic outcome part
+            f"The outcome of this action will be conceptually known as '{current_node_conceptual_name}'. "
+            f"Remember, its actual numerical size ('{num_to_words(correct_result)}') must not be stated."
+    )
 
+    # REFINED Operation-Specific Details:
     if node.op == "SUM":
         op_specific_action_details = (
-            f"Imagine your characters are gathering or combining distinct collections of '{safe_primary_object_for_fstring}'. "
-            f"Some of these collections might be newly found or counted, corresponding to the numbers (and their frequencies): {atomic_inputs_context_str_detailed_for_prompt if direct_atom_children else 'none mentioned for this step'}. "
-            f"Other collections might be the results of previous efforts, known only by evocative names like {conceptual_input_names_only_str_for_action}. "
-            f"Your story should clearly show these being brought together into a single, larger accumulation."
-        )
-        op_specific_outcome_implication_details = (
-            f"This combined accumulation will then be known conceptually as '{current_node_conceptual_name}'. "
-            f"Remember, its actual total numerical size ('{num_to_words(correct_result)}') must not be stated."
+            f"  - **Action:** The characters are combining or tallying all specified inputs. This means narrate events where the quantities represented by '{conceptual_input_names_only_str_for_action}' AND the new atomic quantities ({atomic_inputs_context_str_detailed_for_prompt if direct_atom_children else 'none'}) are brought together or accounted for to form a single, larger accumulation."
         )
     elif node.op == "MIN":
         op_specific_action_details = (
-            f"Picture your characters assessing several distinct quantities or instances of '{safe_primary_object_for_fstring}'. "
-            f"These might include newly encountered items (quantified by ALL the numbers with their frequencies: {atomic_inputs_context_str_detailed_for_prompt if direct_atom_children else 'none for this step'}) "
-            f"and also the conceptual results of past endeavors (referred to as {conceptual_input_names_only_str_for_action}). "
-            f"The narrative should focus on them identifying or selecting the *smallest* or *least significant* among all these."
-        )
-        op_specific_outcome_implication_details = (
-            f"This single, smallest quantity they identify will then be conceptually known as '{current_node_conceptual_name}'. "
-            f"Its precise numerical value ('{num_to_words(correct_result)}') must remain a secret to the reader."
+            f"  - **Action:** The characters are assessing ALL specified inputs to identify the smallest among them. This includes comparing the quantities represented by '{conceptual_input_names_only_str_for_action}' against each other AND against all new atomic quantities ({atomic_inputs_context_str_detailed_for_prompt if direct_atom_children else 'none'}). The narrative should focus on them selecting the one with the least value from this entire set."
         )
     elif node.op == "MAX":
         op_specific_action_details = (
-            f"Envision your characters evaluating several different amounts or examples of '{safe_primary_object_for_fstring}'. "
-            f"These could be new discoveries (detailed by ALL the numbers with their frequencies: {atomic_inputs_context_str_detailed_for_prompt if direct_atom_children else 'none for this step'}) "
-            f"or the outcomes of prior activities (known conceptually as {conceptual_input_names_only_str_for_action}). "
-            f"The story should center on them determining or isolating the *largest*, *most potent*, or *most significant* among these."
-        )
-        op_specific_outcome_implication_details = (
-            f"This preeminent quantity will thereafter be referred to conceptually as '{current_node_conceptual_name}'. "
-            f"Do not explicitly state its actual numerical value ('{num_to_words(correct_result)}')."
+            f"  - **Action:** The characters are evaluating ALL specified inputs to determine the largest among them. This includes comparing the quantities represented by '{conceptual_input_names_only_str_for_action}' against each other AND against all new atomic quantities ({atomic_inputs_context_str_detailed_for_prompt if direct_atom_children else 'none'}). The story should center on them isolating the one with the greatest value from this entire set."
         )
     elif node.op == "AVG":
         op_specific_action_details = (
-            f"The scene should depict characters considering a set of '{safe_primary_object_for_fstring}' "
-            f"(some new, described by ALL numbers with their frequencies: {atomic_inputs_context_str_detailed_for_prompt if direct_atom_children else 'none for this step'}, "
-            f"others being prior conceptual results like {conceptual_input_names_only_str_for_action}). "
-            f"Their actions or observations should lead them to understand a 'typical', 'representative', or 'average' characteristic or measure across these items, "
-            f"without performing explicit mathematical division in the narrative."
-        )
-        op_specific_outcome_implication_details = (
-            f"This representative 'average' value (which is '{num_to_words(correct_result)}') will be conceptually known as '{current_node_conceptual_name}' and must be implied, not stated numerically."
+            f"  - **Action:** The characters are considering ALL specified inputs – both the quantities represented by '{conceptual_input_names_only_str_for_action}' AND all new atomic quantities ({atomic_inputs_context_str_detailed_for_prompt if direct_atom_children else 'none'}). Their actions or observations should lead them to understand a 'typical', 'representative', or 'average' characteristic or measure across this entire collection of inputs. This is tricky: avoid explicit math. Perhaps they find a central tendency, or a balancing point, or a common measure that emerges from considering all these inputs together."
         )
     elif node.op == "MED":
         op_specific_action_details = (
-            f"**This is a MEDIAN scene (NEW RULE: ALL direct atomic inputs with their exact frequencies MUST be mentioned).** Your characters will encounter various '{safe_primary_object_for_fstring}' "
-            f"(some new, described by ALL the numbers with their frequencies: {atomic_inputs_context_str_detailed_for_prompt if direct_atom_children else 'none for this step'}, "
-            f"others being prior conceptual results like {conceptual_input_names_only_str_for_action}). "
-            f"The core of the scene is about them identifying a 'central element', 'balancing point', or 'middle value' from all these available items/numbers. "
-            f"Crucially, the actual median value ('{num_to_words(correct_result)}') MUST NEVER be written out as the result."
-        )
-        op_specific_outcome_implication_details = (
-            f"The conceptual outcome, '{current_node_conceptual_name}' (which represents the median value '{num_to_words(correct_result)}'), must be implied through the narrative of finding this central point, not stated numerically."
+            f"  - **Action (MEDIAN - ALL inputs itemized):** The characters are identifying a 'central element' or 'middle value' from an ordered set comprising ALL specified inputs. This includes the quantities represented by '{conceptual_input_names_only_str_for_action}' AND all new atomic quantities ({atomic_inputs_context_str_detailed_for_prompt if direct_atom_children else 'none'}). ALL new atomic inputs must be mentioned with their exact frequencies. The median value itself ('{num_to_words(correct_result)}') MUST NOT be stated as the result."
         )
     elif node.op == "SM":
         op_specific_action_details = (
-            f"**This is a SUM MODULO 10 scene.** The characters' actions should represent conceptually combining all involved quantities of '{safe_primary_object_for_fstring}' "
-            f"(the new numbers being (with their frequencies): {atomic_inputs_context_str_detailed_for_prompt if direct_atom_children else 'none for this step'}; "
-            f"and any prior results referred to only by their conceptual names: {conceptual_input_names_only_str_for_action}). "
-            f"**CRITICAL: DO NOT state or hint at any intermediate sum of these quantities.** "
-            f"After this conceptual combination, they should then discover or focus on a core essence, a symbolic digit (from 0-9), or a cyclical pattern that emerges from the (unstated) total. This discovery is equivalent to finding the sum modulo 10.\n\n"
-            f"    **Narrative Example for SUM MODULO 10 (Illustrative - adapt to your specific numbers and context):**\n"
-            f"    Imagine the inputs conceptually add up to an unstated total of 27. The sum modulo 10 is 7. Your narrative should NOT mention 'twenty-seven'. Instead, it might be:\n"
-            f"    'They gathered the various caches of '{safe_primary_object_for_fstring}' – the single one from the alcove, the two from the chest, another two from the pedestal, and the three from the satchel, along with the contents of 'The Elder Hoard'. As all these were brought together, a strange resonance filled the air. The combined collection didn't just glow brighter; a new, distinct pattern emerged. A series of seven faint chimes echoed from the pile, repeating in a steady cycle. Or perhaps, a device they used to scan the combined pile displayed a single, unwavering symbol representing the digit 'seven', indicating its core cyclical nature.'\n"
-            f"    The key is to describe an observation or event that directly reveals the modulo result (0-9) without ever stating the full sum."
+            f"  - **Action (SUM MODULO 10):** The characters' actions should conceptually represent combining ALL specified inputs – both the quantities represented by '{conceptual_input_names_only_str_for_action}' AND all new atomic quantities ({atomic_inputs_context_str_detailed_for_prompt if direct_atom_children else 'none'}). **CRITICAL: DO NOT state any intermediate sum.** After this conceptual combination of ALL inputs, they discover a core essence or symbolic digit (0-9) that emerges. This discovery is equivalent to finding the sum modulo 10 of all inputs."
         )
-        op_specific_outcome_implication_details = (
-            f"This final symbolic essence, cyclical pattern, or revealed digit will be conceptually known as '{current_node_conceptual_name}' (representing the value '{num_to_words(correct_result)}'), and this outcome must be implied, not stated numerically."
-        )
-
-    if not op_specific_action_details:
-        op_specific_action_details = f"  - The characters perform an action related to '{op_label}' using new numbers (with frequencies: {atomic_inputs_context_str_detailed_for_prompt if direct_atom_children else 'none'}) and prior results ({conceptual_input_names_only_str_for_action})."
+    
+    if not op_specific_action_details: # Fallback if somehow missed
+        op_specific_action_details = f"  - The characters perform an action related to '{op_label}' using ALL inputs: conceptual ones ({conceptual_input_names_only_str_for_action}) and new atomic ones ({atomic_inputs_context_str_detailed_for_prompt if direct_atom_children else 'none'})."
+    
     action_description_parts.append(op_specific_action_details)
-
-    if child_conceptual_names_list and not ("conceptual_input_names_only_str_for_action" in op_specific_action_details.lower()):
-        action_description_parts.append(
-            f"  - Remember to refer to prior results (like {conceptual_input_names_only_str_for_action}) using ONLY their conceptual names, NOT their underlying numbers."
-        )
-    if direct_atom_children and not ("atomic_inputs_context_str_detailed_for_prompt" in op_specific_action_details.lower()):
-         action_description_parts.append(
-            f"  - The new numbers directly involved in this step (with their frequencies) are: {atomic_inputs_context_str_detailed_for_prompt} (ALL must be mentioned with correct counts)."
-        )
-
-    if not op_specific_outcome_implication_details:
-        op_specific_outcome_implication_details = (
-            f"The outcome of this action should lead to a new understanding or quantity, which will be conceptually known as '{current_node_conceptual_name}'. "
-            f"This concept ('{current_node_conceptual_name}') corresponds to the numerical value {correct_result} ('{num_to_words(correct_result)}')."
-        )
     action_description_parts.append(f"\n{op_specific_outcome_implication_details}")
+    
+    # Add the "Crucial Storytelling Constraint" and "Important Narrative Challenge" if applicable
     action_description_parts.append(
         f"\n**Crucial Storytelling Constraint:** Your narrative MUST NOT explicitly state the number '{num_to_words(correct_result)}' ({correct_result}) AS THE RESULT of this operation. "
         f"Instead, the story should imply this outcome through the characters' actions, discoveries, or the state of the '{safe_primary_object_for_fstring}', "
@@ -4211,28 +4181,38 @@ def _generate_narrative_recursive(
     )
     action_description_for_prompt = "\n".join(action_description_parts)
 
+
     # --- Define Rule 1 components for ultra_strict_instruction ---
-    rule1_header = "**1. Key Details to Feature (Numbers in Action & Their EXACT Frequencies):**\n"
-    rule1_summary_section = (
-        f"    **A. SUMMARY OF REQUIRED NUMBER FREQUENCIES FOR THIS SCENE (CRITICAL & MANDATORY: MENTION EACH NUMBER EXACTLY THE SPECIFIED TIMES. NO MORE, NO LESS. EACH MENTION MUST BE A DISTINCT NARRATIVE ELEMENT REPRESENTING AN INPUT TO THIS OPERATION.):**\n"
-        f"{required_counts_summary_str_for_prompt if required_counts_summary_str_for_prompt else '    (No specific new atomic numbers and their frequencies are mandated for this step. Focus on other rules.)'}\n\n"
+    # This is where your provided snippet starts
+    rule1_header = "**1. Key Details to Feature (Inputs in Action & Their EXACT Frequencies):**\n"
+    rule1_summary_section = ( # This is for ATOMIC inputs
+        f"    **A. SUMMARY OF REQUIRED *NEW ATOMIC NUMBER* FREQUENCIES FOR THIS SCENE (CRITICAL & MANDATORY: MENTION EACH NEW ATOMIC NUMBER EXACTLY THE SPECIFIED TIMES. NO MORE, NO LESS. EACH MENTION MUST BE A DISTINCT NARRATIVE ELEMENT REPRESENTING AN INPUT TO THIS OPERATION.):**\n"
+        f"{required_counts_summary_str_for_prompt if required_counts_summary_str_for_prompt else '    (No specific new atomic numbers and their frequencies are mandated for this step. Focus on conceptual inputs if any, and other rules.)'}\n\n"
     )
-    rule1_explanation_section = (
-        f"    **B. Detailed Explanation & Examples for Rule 1 (Adherence is Paramount):**\n"
+    rule1_explanation_section = ( # This explains Rule 1.A
+        f"    **B. Detailed Explanation & Examples for Rule 1.A (Adherence is Paramount for Atomic Inputs):**\n"
         f"    Your narrative MUST introduce quantities of the central item ('{safe_primary_object_for_fstring}') corresponding to EACH number listed in the Summary (1.A) above. Each number MUST be mentioned EXACTLY the number of times specified. \n"
         f"    *   **How to Count Mentions (Crucial for Correctness):** Each mention must correspond to a distinct group, instance, or observation of items being introduced as a direct input for THIS scene's operation. If a number (e.g., 'seven') is required multiple times by Rule 1.A (e.g., 'seven' is required two times), you MUST narrate **two separate and distinct narrative events of discovering or observing 'seven {safe_primary_object_for_fstring}'**. For example: 'First, they located seven {safe_primary_object_for_fstring} in a hidden compartment. Later, after further searching, a second, separate cache revealed another seven {safe_primary_object_for_fstring}.' Do not try to group these into a single statement like 'they found two groups of seven {safe_primary_object_for_fstring}s' as this might be miscounted.\n"
         f"        - If 'one' is required twice by Rule 1.A: You might narrate, 'She found a single {safe_primary_object_for_fstring} in an alcove. Later, exploring a different passage, another lone {safe_primary_object_for_fstring} was discovered.' This counts as two distinct mentions of 'one' fulfilling Rule 1.A.\n"
         f"        - Contrast: Saying 'She found two single {safe_primary_object_for_fstring}s' would likely count as one mention of 'two' (if 'two' was required by Rule 1.A) and might NOT correctly fulfill two required mentions of 'one' for Rule 1.A. Be explicit and distinct for each required instance.\n"
         f"    *   **ABSOLUTELY AVOID NUMERICAL SUMMARIES OR RE-LISTING (CRITICAL ERROR SOURCE):** After narrating the discovery or presence of items corresponding to the required numbers in Rule 1.A, **DO NOT ADD ANY SENTENCE OR PHRASE THAT RE-LISTS, RECAPS, OR SUMMARIZES THESE NUMBERS.** For example, if you've described finding 'one item' and then 'five items', DO NOT follow with 'So, they had found one and five items.' The initial narrative descriptions ARE the mentions. Any re-listing will cause a validation failure due to over-counting or misinterpretation. This is a very common mistake; be vigilant.\n"
         f"    *   **Example of Correct Frequency:** If the Summary (1.A) states \"'- 'five' ({config_obj.INVALID_RESULT_PLACEHOLDER+5}): exactly two (2) time(s)\", your narrative must contain the word 'five' exactly twice, each time referring to a distinct set of five {safe_primary_object_for_fstring}s relevant to this scene's operation. Do not mention 'five' a third time, even in a summary.\n"
-        f"    The following list details the specific numbers and their word forms that are the direct atomic inputs for this scene's operation: {must_mention_text_detailed_prose_for_prompt}. Ensure your narrative reflects these inputs according to the frequency summary in 1.A.{special_med_input_clarification_for_prompt}\n\n"
+        f"    The following list details the specific *new atomic numbers* and their word forms that are direct inputs for this scene's operation: {must_mention_text_detailed_prose_for_prompt}. Ensure your narrative reflects these inputs according to the frequency summary in 1.A.{special_med_input_clarification_for_prompt}\n\n"
     )
     
+    # NEW RULE 1.C
+    rule1c_conceptual_inputs_section = (
+        f"    **C. CRITICAL - Using Conceptual Inputs (Previous Results) in THIS Operation:**\n"
+        f"    If this operation uses results from previous steps (identified by conceptual names like **{conceptual_input_names_only_str_for_action}**), your narrative MUST clearly depict these named concepts as being part of the set of items/values that are being directly operated upon in *this current scene's action*. They are not just background context; they are **active numerical inputs** to *this specific '{op_label}' operation*, alongside any new atomic numbers from Rule 1.A.\n"
+        f"    For example, if the operation is MIN and the inputs are 'The Dragon's Hoard' (a conceptual name for a previous result, say 50) and new atomic numbers 'twenty' and 'thirty', your narrative must describe comparing 'The Dragon's Hoard' with 'twenty' and 'thirty' to find the minimum among all three.\n\n"
+    )
+
     # --- Rule 3 Refinement (Permitted Flourishes) ---
+    # (This logic is from your original script, ensure it's correct and complete here)
     clarification_for_rule3_phrasing = "" 
     eligible_for_pure_phrasing = config_obj.ALWAYS_ALLOWED_PHRASING_NUMBERS_SET - \
     set(direct_atom_values_counts.keys()) - \
-    forbidden_for_current_beat_py_validator # Uses updated forbidden set
+    forbidden_for_current_beat_py_validator
 
     can_use_any_always_allowed_for_phrasing = bool(eligible_for_pure_phrasing)
 
@@ -4247,34 +4227,34 @@ def _generate_narrative_recursive(
         )
 
     may_use_gen_parts_for_rule3_main = []
-    # can_use_arity_for_rule3 is determined by checking if actual_arity_for_current_op is > 0,
-    # not in ALWAYS_ALLOWED_PHRASING_NUMBERS_SET, not a Rule 1.A input, and not Rule 4 forbidden.
+    can_use_arity_for_rule3 = True # Default to true, conditions below might set to false
 
-    if actual_arity_for_current_op > 0: # Only consider arity if it's positive
+    if actual_arity_for_current_op > 0:
         is_arity_rule1a_input = direct_atom_values_counts.get(actual_arity_for_current_op, 0) > 0
         is_arity_rule4_forbidden = actual_arity_for_current_op in forbidden_for_current_beat_py_validator
         
         if not is_arity_rule1a_input and not is_arity_rule4_forbidden:
-            # Check if arity is part of the general phrasing set; if so, it's covered by clarification_for_rule3_phrasing
-            # Only add specific arity instruction if it's NOT in ALWAYS_ALLOWED_PHRASING_NUMBERS_SET
-            # or if you want to give it special emphasis regardless.
-            # For this version, let's assume if it's in ALWAYS_ALLOWED_PHRASING_NUMBERS_SET, the general phrasing rule applies.
-            # If it's NOT in ALWAYS_ALLOWED_PHRASING_NUMBERS_SET, then it's a distinct arity case.
+            # Only allow arity if it's NOT one of the always allowed phrasing numbers (to avoid double-permissioning)
+            # unless it's the *only* way to state arity.
+            # This logic might need refinement based on how strictly you want to control arity vs. phrasing.
+            # For now, if it's an always_allowed_phrasing_number, its use is governed by that rule.
             if actual_arity_for_current_op not in config_obj.ALWAYS_ALLOWED_PHRASING_NUMBERS_SET:
-                 may_use_gen_parts_for_rule3_main.append(
+                may_use_gen_parts_for_rule3_main.append(
                     f"the number '{num_to_words(actual_arity_for_current_op)}' ({actual_arity_for_current_op}) ONLY IF it is genuinely and clearly used to state the count of direct items/groups involved in THIS specific action (e.g., 'the {num_to_words(actual_arity_for_current_op)} groups were examined'), AND this arity number itself is NOT a Rule 1.A input for this beat, AND it is NOT forbidden by Rule 4 for this beat. If the arity number fails these conditions, you CANNOT state the arity numerically."
                 )
-            # Update can_use_arity_for_rule3 based on these conditions
+            # can_use_arity_for_rule3 is true if it's not rule1a, not rule4, and not an always_allowed_phrasing_number (handled by other part of rule3)
             can_use_arity_for_rule3 = not is_arity_rule1a_input and not is_arity_rule4_forbidden and (actual_arity_for_current_op not in config_obj.ALWAYS_ALLOWED_PHRASING_NUMBERS_SET)
-
         elif is_arity_rule1a_input:
             logger_obj.debug(f"Rule 3 construction (Generator): Arity value {actual_arity_for_current_op} is also a Rule 1.A input. Not allowing for Rule 3 arity count statement.")
+            can_use_arity_for_rule3 = False
         elif is_arity_rule4_forbidden:
             logger_obj.debug(f"Rule 3 construction (Generator): Arity value {actual_arity_for_current_op} is Rule 4 forbidden. Not allowing for Rule 3 arity count statement.")
-
+            can_use_arity_for_rule3 = False
+        else: # Arity is an always_allowed_phrasing_number, its use is covered by that part of Rule 3
+            can_use_arity_for_rule3 = False # Don't add a separate arity instruction if it's already covered by phrasing rules
 
     may_use_gen_clause_for_rule3_main_str = ""
-    if may_use_gen_parts_for_rule3_main: # This will now only contain the specific arity instruction if applicable
+    if may_use_gen_parts_for_rule3_main:
         may_use_gen_clause_for_rule3_main_str = "You MAY consider using " + "; ".join(may_use_gen_parts_for_rule3_main)
 
     rule3_text_for_prompt_parts = [
@@ -4283,44 +4263,40 @@ def _generate_narrative_recursive(
         f"    All uses under Rule 3 must be EXTREMELY sparing (ideally avoided) and verifiably essential for fluency.\n"
     ]
     
-    # Add the specific arity instruction if it was generated
     if may_use_gen_clause_for_rule3_main_str:
         rule3_text_for_prompt_parts.append(f"    {may_use_gen_clause_for_rule3_main_str}\n")
     
-    # Add the clarification for 'one', 'two', 'three' etc.
     rule3_text_for_prompt_parts.append(clarification_for_rule3_phrasing)
 
-    # Determine if any Rule 3 use is possible at all
-    any_rule_3_possible = bool(eligible_for_pure_phrasing) or can_use_arity_for_rule3 # can_use_arity_for_rule3 was updated
+    any_rule_3_possible = bool(eligible_for_pure_phrasing) or can_use_arity_for_rule3
 
     if not any_rule_3_possible:
         rule3_text_for_prompt_parts.append(
              f"        *   **EFFECTIVELY, NO numbers are permitted for general counting or phrasing in this scene beyond those explicitly required by Rule 1.A.**\n"
         )
     
-    # Add GT caution
-    if gt_counting_caution_for_gen_prompt.strip(): # Ensure it's not empty before adding
-        rule3_text_for_prompt_parts.append(f"{gt_counting_caution_for_gen_prompt.rstrip()}\\n\n") # Ensure newline if added
+    if gt_counting_caution_for_gen_prompt.strip():
+        rule3_text_for_prompt_parts.append(f"{gt_counting_caution_for_gen_prompt.rstrip()}\\n\n")
     else:
-        rule3_text_for_prompt_parts.append("\n") # Add a newline for spacing if GT caution is empty
+        rule3_text_for_prompt_parts.append("\n")
 
     rule3_text_for_prompt = "".join(rule3_text_for_prompt_parts)
-
+    
     # --- Assemble ultra_strict_instruction ---
     ultra_strict_instruction = (
-        f"**Narrative Challenge & Your Writing Guide for This Scene (CRITICAL: Adhere Flawlessly. Failure to meet these numerical rules, especially exact frequencies in Rule 1.A, will result in rejection.):**\n"
-        f"Your main goal is to weave a compelling scene. However, for this specific task, you must precisely control how numbers are mentioned, turning constraints into creative storytelling:\n\n"
-        f"{rule1_header}{rule1_summary_section}{rule1_explanation_section}" # rule1_header etc. defined earlier
-        f"**2.  The Unspoken Outcome (ABSOLUTE RULE - NO EXCEPTIONS):** {result_handling_rule_text_for_prompt}\n\n" # defined earlier
-        f"{rule3_text_for_prompt}" # This is the newly constructed Rule 3 block
+        f"**Narrative Challenge & Your Writing Guide for This Scene (CRITICAL: Adhere Flawlessly. Failure to meet these numerical and operational rules will result in rejection.):**\n"
+        f"Your main goal is to weave a compelling scene. However, for this specific task, you must precisely control how numbers and concepts are used:\n\n"
+        f"{rule1_header}{rule1_summary_section}{rule1_explanation_section}{rule1c_conceptual_inputs_section}" # ADDED rule1c
+        f"**2.  The Unspoken Outcome (ABSOLUTE RULE - NO EXCEPTIONS):** {result_handling_rule_text_for_prompt}\n\n"
+        f"{rule3_text_for_prompt}"
         f"**4.  Whispers Best Left Unheard (ABSOLUTELY Forbidden Numbers for THIS SCENE - NO EXCEPTIONS):\n**"
-        f"    Strictly AVOID MENTIONING these specific numbers in ANY FORM (word or digit): {must_avoid_str_for_generator_prompt_detailed}. This rule is ABSOLUTE and OVERRIDES any potential permission from Rule 3. If a number is on this forbidden list, it CANNOT appear in the text for ANY reason, including phrasing or arity counts.\n\n" # must_avoid_str defined earlier
+        f"    Strictly AVOID MENTIONING these specific numbers: {must_avoid_str_for_generator_prompt_detailed}. This rule is ABSOLUTE and OVERRIDES any potential permission from Rule 3. If a number is on this forbidden list, it CANNOT appear in the text for ANY reason, including phrasing or arity counts.\n\n"
         f"**5.  The Rule of No Other Numbers (CRITICAL & ABSOLUTE - NO EXCEPTIONS):\n**"
-        f"    {no_other_numbers_rule_text_for_prompt} Any number not explicitly justified by Rule 1.A (with exact frequency) or a valid, non-conflicting, essential Rule 3 use (and not overridden by Rule 4) is an error.\n\n" # no_other_numbers_rule_text defined earlier
-        f"{prior_results_handling_rule_for_prompt}" # defined earlier
-        f"Focus on clear storytelling that naturally implies the calculations based on these strict numerical constraints. The most common errors are failing to meet exact frequencies for Rule 1.A, re-stating numbers (numerical summaries), or using numbers not explicitly permitted by these rules. Pay special attention to the interaction between Rule 1.A, Rule 3, and Rule 4 for numbers like 'one', 'two', 'three', and the arity. Double-check your work against ALL rules, especially 1.A and the strict conditions for Rule 3, before finalizing your scene."
+        f"    {no_other_numbers_rule_text_for_prompt} Any number not explicitly justified by Rule 1.A (with exact frequency), Rule 1.C (conceptual inputs), or a valid, non-conflicting, essential Rule 3 use (and not overridden by Rule 4) is an error.\n\n" # Clarified Rule 5
+        f"{prior_results_handling_rule_for_prompt}" # This is Rule 6
+        f"**Operational Fidelity (CRITICAL):** The narrated action MUST accurately reflect the mathematical operation '{op_label}' being performed on ALL specified inputs (conceptual inputs from Rule 1.C and new atomic inputs from Rule 1.A).\n" # Added explicit operational fidelity rule
+        f"Focus on clear storytelling that naturally implies the calculations based on these strict numerical and operational constraints. Double-check your work against ALL rules, especially 1.A (atomic frequencies), 1.C (conceptual input usage), and Operational Fidelity, before finalizing your scene."
     )
-
 
     context_snippet = clean_snippet(context.last_scene_text, max_len=config_obj.BEAT_CONTEXT)
     initial_user_message_parts = [
@@ -4329,13 +4305,16 @@ def _generate_narrative_recursive(
         f"- Genre: {world.get('genre', 'N/A')}\n"
         f"- Setting: {world.get('setting', 'N/A')}\n"
         f"- Central Items in the Story: {primary_object_as_string}\n"
-        f"- Quantities from Previous Events (Conceptual Names & their values for your understanding - DO NOT use these values in the story): {conceptual_inputs_context_str}\n"
-        f"- New Numbers Introduced in this Scene (Values & their required frequencies for your understanding - Use word form in story, ALL must be mentioned with exact frequencies): {atomic_inputs_context_str_detailed_for_prompt}\n\n"
-        f"{action_description_for_prompt}\n\n"
+        f"- Quantities from Previous Events (Conceptual Names & their values for your understanding - DO NOT use these values in the story, but DO use the names as inputs if Rule 1.C applies): {conceptual_inputs_context_str}\n"
+        f"- New Numbers Introduced in this Scene (Values & their required frequencies for your understanding - Use word form in story, ALL must be mentioned with exact frequencies as per Rule 1.A): {atomic_inputs_context_str_detailed_for_prompt}\n\n"
+        f"{action_description_for_prompt}\n\n" # This now contains the refined action descriptions
         f"{ultra_strict_instruction}\n\n"
     ]
 
     if node.op == "MED" and config_obj.FEW_SHOT_EXAMPLES > 0:
+        # ... (Your existing MEDIAN few-shot example logic - ensure it aligns with the new input rules)
+        # For brevity, I'll assume this part is correctly handled by your existing code.
+        # Key is that the examples should also show ALL inputs (conceptual + atomic) being used for MEDIAN.
         curated_median_examples_indices = []
         if len(FEW_SHOT_EXAMPLES_STRICT) > 1: curated_median_examples_indices.append(1)
         if len(FEW_SHOT_EXAMPLES_STRICT) > 2: curated_median_examples_indices.append(2)
@@ -4357,52 +4336,54 @@ def _generate_narrative_recursive(
                 few_shot_section.append(f"**WHY BAD (Reason for failure - NEW MEDIAN RULE):**\n{bad_reasoning}\n")
             few_shot_section.append("**REMEMBER THE MEDIAN RULE FOR *YOUR* CURRENT TASK (NEW VERSION):**")
             few_shot_section.append(
-                "For MEDIAN operations, ALL direct atomic input numbers (with their exact frequencies as per Rule 1.A summary) MUST be mentioned in the narrative. The median value itself must NEVER appear explicitly as the RESULT of the text. Refer to your 'Narrative Challenge & Your Writing Guide' section in the main prompt for the specific numbers and rules for *your current scene*.\n"
+                "For MEDIAN operations, ALL direct atomic input numbers (with their exact frequencies as per Rule 1.A summary) AND ALL conceptual inputs (Rule 1.C) MUST be part of the set from which the median is determined. The median value itself must NEVER appear explicitly as the RESULT of the text. Refer to your 'Narrative Challenge & Your Writing Guide' section in the main prompt for the specific numbers and rules for *your current scene*.\n" # Emphasized conceptual inputs for MEDIAN too
             )
             initial_user_message_parts.append("\n".join(few_shot_section))
             logger_obj.info(
                 f"Added {len(examples_to_actually_use)} MEDIAN-specific few-shot examples (NEW RULE: ALL INPUTS & FREQUENCIES MENTIONED) to the initial generator prompt for Op: {node.op}."
             )
 
-        # Ensure actual_arity_for_current_op is defined before this block, e.g.:
-    # actual_arity_for_current_op = len(node.children)
 
+    # --- REVISED Mandatory Pre-Writing Checklist ---
     initial_user_message_parts.append(
         "\n\n**MANDATORY PRE-WRITING CHECKLIST & MENTAL WALKTHROUGH (DO THIS BEFORE GENERATING TEXT - YOUR SUCCESS DEPENDS ON IT):**\n"
         "Before you write a single word of the narrative, meticulously review your plan against these critical points. This is not optional.\n\n"
         
-        "**1. Rule 1.A - Exact Frequencies - DETAILED PLAN:**\n"
-        "    *   **Identify ALL Required Numbers & Frequencies:** Look at the 'SUMMARY OF REQUIRED NUMBER FREQUENCIES FOR THIS SCENE' (Rule 1.A in your Writing Guide above). List each number and its exact required count.\n"
-        "    *   **Plan Each Distinct Mention:** For EACH number and EACH required instance of it (e.g., if 'seven' is needed 2 times, plan 2 separate narrative events for 'seven {safe_primary_object_for_fstring}'), mentally outline a *specific, distinct narrative event, discovery, or observation* where this number will be mentioned as a direct input to THIS operation. **Each of these planned mentions must be a unique piece of storytelling, not just a verbal repetition or a grouped statement.**\n"
-        f"        *   Example: If 'one' is required 2 times by Rule 1.A for '{safe_primary_object_for_fstring}':\n"
-        f"            *   Plan for Mention 1 of 'one': e.g., 'A single {safe_primary_object_for_fstring} was found under the arch.' (This is one distinct narrative element for a Rule 1.A input).\n"
-        f"            *   Plan for Mention 2 of 'one': e.g., 'Later, another lone {safe_primary_object_for_fstring} was spotted near the fountain.' (This is a second, separate distinct narrative element for a Rule 1.A input).\n"
-        "    *   **Confirm Full Coverage:** Have you planned a distinct narrative mention for *every single required instance* from Rule 1.A?\n\n"
+        "**1. Rule 1.A - *New Atomic* Input Frequencies - DETAILED PLAN:**\n"
+        "    *   **Identify ALL Required *New Atomic* Numbers & Frequencies:** Look at the 'SUMMARY OF REQUIRED NUMBER FREQUENCIES FOR THIS SCENE' (Rule 1.A in your Writing Guide above). List each *new atomic* number and its exact required count.\n"
+        "    *   **Plan Each Distinct Mention (for Atomics):** For EACH *new atomic* number and EACH required instance of it, mentally outline a *specific, distinct narrative event, discovery, or observation* where this number will be mentioned as a direct input to THIS operation. **Each of these planned mentions must be a unique piece of storytelling.**\n"
+        "    *   **Confirm Full Atomic Coverage:** Have you planned a distinct narrative mention for *every single required instance* of *new atomic numbers* from Rule 1.A?\n\n"
+
+        "**1.C (CRITICAL CHECK) - Conceptual Inputs as Operands:**\n"
+        f"    *   **Identify Conceptual Inputs:** Are there conceptual inputs (prior results like **{conceptual_input_names_only_str_for_action}**) for THIS operation, as stated in Rule 1.C of your Writing Guide?\n"
+        f"    *   **Plan Their Active Role:** If yes, how will my narrative explicitly show these named concepts (and the values they represent) being *directly included and acted upon* in THIS scene's '{op_label}' operation, alongside any new atomic numbers? They are not just background mentions; they are active inputs.\n\n"
         
-        "**2. Rule 1.B - NO Numerical Summaries/Re-listing:**\n"
-        "    *   Am I absolutely certain that my narrative will NOT contain any sentences or phrases that re-list, summarize, or total up the numbers I've just introduced as inputs? (e.g., AVOID: 'So, she had found one, then another one, and also five items...'). This is a critical error.\n\n"
+        "**1.B - NO Numerical Summaries/Re-listing (for Atomics):**\n"
+        "    *   Am I absolutely certain that my narrative will NOT contain any sentences or phrases that re-list, summarize, or total up the *new atomic numbers* I've just introduced as inputs? (e.g., AVOID: 'So, she had found one, then another one, and also five items...'). This is a critical error.\n\n"
         
-        "**3. Rule 2 - Implicit Outcome:**\n"
+        "**2. Rule 2 - Implicit Outcome:**\n"
         "    *   Is the numerical result of THIS scene's operation (e.g., the sum, the minimum, the median value itself) kept entirely IMPLICIT and NOT stated numerically in the narrative?\n\n"
         
-        "**4. Rule 3 & 4 - Permitted vs. Forbidden Numbers - CRITICAL JUSTIFICATION CHECK:**\n"
-        "    *   **Review Rule 3 and Rule 4 in your Writing Guide CAREFULLY.** These rules, especially regarding 'one', 'two', 'three', and the arity count, are complex and strict.\n"
+        "**3. & 4. Rule 3 & 4 - Permitted vs. Forbidden Numbers - CRITICAL JUSTIFICATION CHECK:**\n"
+        "    *   **Review Rule 3 and Rule 4 in your Writing Guide CAREFULLY.**\n"
         "    *   **For EACH number I am considering using under Rule 3 (e.g., 'one', 'two', 'three', or the arity count " + (f"'{num_to_words(actual_arity_for_current_op)}' ({actual_arity_for_current_op})" if actual_arity_for_current_op > 0 else "'N/A (no arity)'") + "):\n"
-        "        a) **Is this number a Rule 1.A input for THIS beat?** (If YES, I CANNOT use it for Rule 3. Its use is exclusively for fulfilling the Rule 1.A count).\n"
+        "        a) **Is this number a Rule 1.A *new atomic* input for THIS beat?** (If YES, I CANNOT use it for Rule 3. Its use is exclusively for fulfilling the Rule 1.A count).\n"
         "        b) **Is this number listed as FORBIDDEN in Rule 4 for THIS beat?** (If YES, I CANNOT use it for Rule 3 or any other purpose. Rule 4 is absolute).\n"
         "        c) **If NO to (a) AND NO to (b), is its use ABSOLUTELY ESSENTIAL for narrative clarity/flow, with NO reasonable numberless alternative?** (My default MUST be to find a numberless alternative. 'Sparing use' means almost never. If considering the arity, it must be the exact arity for THIS operation and meet all other conditions).\n"
         "    *   **I will only proceed with a Rule 3 number if I can strongly justify 'YES' to (c) AFTER confirming 'NO' to (a) and 'NO' to (b).**\n\n"
 
         "**5. Rule 5 - No Other Numbers:**\n"
-        "    *   Have I ensured NO other numbers, counts, or extraneous figures will appear beyond what's strictly allowed by Rule 1.A (with exact frequencies) and any *justified* Rule 3 uses (that are not forbidden by Rule 4)?\n\n"
+        "    *   Have I ensured NO other numbers, counts, or extraneous figures will appear beyond what's strictly allowed by Rule 1.A (with exact frequencies for atomics), Rule 1.C (conceptual inputs), and any *justified* Rule 3 uses (that are not forbidden by Rule 4)?\n\n"
         
-        "**6. Narrative Coherence & Engagement:**\n"
-        "    *   While adhering to all numerical rules, will my scene still be narratively coherent, engaging, and flow smoothly from the previous scene?\n\n"
+        "**Operational Fidelity Check (CRITICAL):**\n" # Renamed from 7 to be more prominent
+        f"    *   Does my planned narrative action accurately represent the mathematical operation '{op_label}' being performed on the *complete set* of inputs (both conceptual from Rule 1.C and new atomic from Rule 1.A)? (e.g., if AVG, am I truly describing an averaging process of all inputs, not just selecting one?)\n\n"
+
+        "**Narrative Coherence & Engagement:**\n"
+        "    *   While adhering to all numerical and operational rules, will my scene still be narratively coherent, engaging, and flow smoothly from the previous scene?\n\n"
         
-        "**Only after you have mentally confirmed 'YES' to all applicable checklist items (1-6), especially the CRITICAL JUSTIFICATION CHECK for any Rule 3 numbers, should you proceed to write the narrative. Your primary goal is flawless adherence to these numerical rules within a coherent story.**"
+        "**Only after you have mentally confirmed 'YES' to all applicable checklist items, especially the CRITICAL CHECKS for Conceptual Inputs (1.C) and Operational Fidelity, should you proceed to write the narrative. Your primary goal is flawless adherence to these rules within a coherent story.**"
     )
 
-    # --- Add the context snippet to the initial user message ---
     initial_user_message_parts.append(f'\n\n**Continue From (End of last scene):**\n"...{context_snippet}..."\n\n')
     initial_user_message_parts.append(f"**Your Response:**\nWrite ONLY the narrative text for this new scene, continuing smoothly. Do not add titles, notes, or anything outside the story itself.")
     initial_user_message_for_generator = "".join(initial_user_message_parts)
@@ -4426,17 +4407,19 @@ def _generate_narrative_recursive(
         "You are a master {genre} storyteller with an exceptional eye for detail, tasked with crafting a single, compelling narrative scene. This scene is part of a larger story where mathematical operations are subtly embedded within the plot.\n\n"
         "**Your paramount responsibilities for this scene are:**\n"
         "1.  **Narrative Coherence:** Write an engaging scene that smoothly continues the story from the provided snippet.\n"
-        "2.  **ULTRA-STRICT NUMERICAL PRECISION:** This is non-negotiable and your primary constraint. You MUST meticulously follow ALL rules in the 'Narrative Challenge & Your Writing Guide for This Scene' section of the user prompt. Pay fanatical attention to:\n"
-        "    *   **Rule 1 (Exact Frequencies):** Mentioning EACH required number EXACTLY the specified number of times. No more, no less. Each mention must be a clear, direct reference to a quantity of items involved in this scene's core action. AVOID any summarizing statements that re-list numbers already introduced as inputs.\n"
+        "2.  **ULTRA-STRICT NUMERICAL AND OPERATIONAL PRECISION:** This is non-negotiable and your primary constraint. You MUST meticulously follow ALL rules in the 'Narrative Challenge & Your Writing Guide for This Scene' section of the user prompt. Pay fanatical attention to:\n"
+        "    *   **Rule 1.A (Exact Atomic Frequencies):** Mentioning EACH required *new atomic* number EXACTLY the specified number of times. No more, no less. Each mention must be a clear, direct reference to a quantity of items involved in this scene's core action. AVOID any summarizing statements that re-list numbers.\n"
+        "    *   **Rule 1.C (Conceptual Inputs):** Ensuring that any results from previous operations (conceptual inputs) are clearly depicted as being *active numerical inputs* to THIS scene's operation.\n"
+        "    *   **Operational Fidelity:** The narrated action MUST accurately reflect the mathematical operation being performed on ALL specified inputs (conceptual and atomic).\n"
         "    *   **Rule 2 (Implicit Outcome):** The numerical result of THIS scene's operation MUST NOT be stated explicitly.\n"
-        "    *   **Rule 4 & 5 (Forbidden & No Other Numbers):** Absolutely NO other numbers (words or digits) beyond those explicitly permitted by Rule 1 and Rule 3. Any number not explicitly listed as 'required' or 'permitted for phrasing' is forbidden.\n\n"
-        "**Output ONLY the clean narrative text for the scene.** Do not include titles, notes, analysis, or any meta-commentary. Your adherence to the numerical rules is as critical as your storytelling."
+        "    *   **Rule 4 & 5 (Forbidden & No Other Numbers):** Absolutely NO other numbers (words or digits) beyond those explicitly permitted by Rule 1 and Rule 3.\n\n"
+        "**Output ONLY the clean narrative text for the scene.** Do not include titles, notes, analysis, or any meta-commentary. Your adherence to the numerical and operational rules is as critical as your storytelling."
     )
     operator_specific_system_focus = ""
     if node.op == "MED":
         operator_specific_system_focus = (
             "\n\n**SPECIAL FOCUS FOR THIS SCENE (MEDIAN OPERATION - NEW RULE):**\n"
-            "The current scene involves a MEDIAN calculation. Under the NEW RULE, ALL direct atomic inputs for this MEDIAN operation (with their exact specified frequencies as per Rule 1.A) MUST be mentioned in the narrative. "
+            "The current scene involves a MEDIAN calculation. Under the NEW RULE, ALL direct atomic inputs (Rule 1.A) AND ALL conceptual inputs (Rule 1.C) for this MEDIAN operation MUST be part of the set from which the median is determined, and atomic inputs must be mentioned with their exact specified frequencies. "
             "The MEDIAN result itself MUST be implied and NEVER stated numerically. "
             "You MUST meticulously follow the 'Narrative Challenge & Your Writing Guide' section in the user message. Failure to adhere to these MEDIAN rules will result in rejection of your scene."
         )
@@ -4472,9 +4455,9 @@ def _generate_narrative_recursive(
             current_op_node=node,
             conceptual_inputs_str_for_llm_validator=llm_val_conceptual_input_names_only,
             atomic_inputs_words_str_for_llm_validator=llm_val_atomic_inputs_detailed_for_validator,
-            action_description_for_llm_validator=action_description_for_prompt,
+            action_description_for_llm_validator=action_description_for_prompt, # This is the detailed one
             expected_beat_result_words_for_llm_validator=llm_val_expected_beat_result_detailed_for_validator,
-            ultra_strict_instruction_for_llm_validator_context=ultra_strict_instruction,
+            ultra_strict_instruction_for_llm_validator_context=ultra_strict_instruction, # This is the full rules
             current_max_beat_completion_tokens=current_max_beat_completion_tokens,
             sample_index=context.sample_index,
             context_config=config_obj, 
@@ -4538,7 +4521,7 @@ def _generate_narrative_recursive(
     )
 
     # --- Padding Logic ---
-    if not is_root:
+    if not is_root: # Only add padding if not the final root node
         if context.padding_stats["padding_per_slot"] > 0 and context.max_pad_paragraphs > 0:
             num_paragraphs_for_this_slot = random.randint(1, context.max_pad_paragraphs)
             max_tokens_for_this_padding_segment = context.padding_stats["padding_per_slot"]
@@ -4561,18 +4544,22 @@ def _generate_narrative_recursive(
                 "Output ONLY the narrative text."
             )
 
+            # For padding, forbidden atoms should include all introduced atoms, current beat's result, and overall GT
             forbidden_for_padding_slot = set(context.introduced_atoms)
-            if correct_result is not None:
+            if correct_result is not None: # current beat's result
                 forbidden_for_padding_slot.add(correct_result)
             if context.overall_ground_truth_answer is not None:
                 forbidden_for_padding_slot.add(context.overall_ground_truth_answer)
+            # Also forbid any direct atom inputs of the current beat from appearing in padding immediately after
+            forbidden_for_padding_slot.update(direct_atom_values_counts.keys())
+
 
             validate_padding = make_number_validator(
-                allowed_atoms_list=[],
-                forbidden_atoms=forbidden_for_padding_slot,
+                allowed_atoms_list=[], # No specific atoms are "allowed" for padding beyond the general phrasing
+                forbidden_atoms=forbidden_for_padding_slot, # Use the comprehensive set
                 operand_count=0,
                 correct_result_for_beat=None,
-                strict_zero=True,
+                strict_zero=True, # Enforce that only {1,2,3} for phrasing are allowed
                 enforce_result_presence=False,
                 operation_type="PADDING",
                 overall_ground_truth_answer=context.overall_ground_truth_answer,
@@ -4591,48 +4578,50 @@ def _generate_narrative_recursive(
                     break
 
                 remaining_token_budget_for_pad_para = max_tokens_for_this_padding_segment - current_padding_tokens_for_slot
-                actual_max_tokens_for_this_para = min(remaining_token_budget_for_pad_para, config_obj.PADDING_MAX_TOKENS)
-                if actual_max_tokens_for_this_para <= 10: 
+                actual_max_tokens_for_this_para = min(remaining_token_budget_for_pad_para, config_obj.PADDING_MAX_TOKENS) # Use config from context
+                if actual_max_tokens_for_this_para <= 10: # Arbitrary small threshold
                     logger_obj.info(f"Remaining token budget for padding paragraph ({actual_max_tokens_for_this_para}) too small. Skipping further padding.")
                     break
 
                 num_paras_str_for_prompt = "a single" if num_paragraphs_for_this_slot == 1 else "one"
-                if i > 0 : num_paras_str_for_prompt = "another"
+                if i > 0 : num_paras_str_for_prompt = "another" # For subsequent paragraphs in the same slot
 
                 padding_user_prompt = padding_user_prompt_template.format(
-                    snippet=clean_snippet(context.last_scene_text, max_len=config_obj.PADDING_CONTEXT), 
+                    snippet=clean_snippet(context.last_scene_text, max_len=config_obj.PADDING_CONTEXT), # Use config from context
                     num_paras_str=num_paras_str_for_prompt
                 )
 
                 padding_text = generate_with_retry(
                     system_prompt=padding_system_prompt,
                     user_prompt=padding_user_prompt,
-                    max_completion_tokens=actual_max_tokens_for_this_para,
+                    max_completion_tokens=actual_max_tokens_for_this_para, # This is the per-paragraph budget
                     validate_fn=validate_padding,
-                    retries=config_obj.MAX_PAD_RETRIES, 
+                    retries=config_obj.MAX_PAD_RETRIES, # Use config from context
                     sample_index=context.sample_index,
-                    temperature=config_obj.CREATIVE_NARRATIVE_TEMP, 
+                    temperature=config_obj.CREATIVE_NARRATIVE_TEMP, # Use config from context
                     reasoning_settings={"exclude": True}
                 )
 
                 if padding_text:
                     ptoks = len(context.encoder.encode(padding_text))
+                    # Check against overall token limit AND per-slot padding budget
                     if context.tokens_used + ptoks + config_obj.MAX_TOKENS_BUFFER <= config_obj.MAX_TOTAL_TOKENS and \
                        current_padding_tokens_for_slot + ptoks <= max_tokens_for_this_padding_segment : 
 
-                        context.scenes.append(f"\n[Padding Segment]\n{padding_text}\n[/Padding Segment]\n")
+                        context.scenes.append(f"\n[Padding Segment]\n{padding_text}\n[/Padding Segment]\n") # Mark padding clearly
                         context.tokens_used += ptoks
-                        context.last_scene_text = padding_text
+                        context.last_scene_text = padding_text # Update last_scene_text to the padding
                         context.padding_stats["total_padding_tokens"] += ptoks
                         context.padding_stats["padding_segments_added"] += 1
                         current_padding_tokens_for_slot += ptoks
                         padding_segments_added_this_slot +=1
                         logger_obj.info(f"Added padding segment ({ptoks} tokens). Total padding this slot: {current_padding_tokens_for_slot}/{max_tokens_for_this_padding_segment}. Overall padding tokens: {context.padding_stats['total_padding_tokens']}.")
                     else:
-                        logger_obj.warning(f"Generated padding segment ({ptoks} tokens) would exceed slot budget or total token limit. Discarding.")
-                        break
+                        logger_obj.warning(f"Generated padding segment ({ptoks} tokens) would exceed slot budget ({current_padding_tokens_for_slot + ptoks}/{max_tokens_for_this_padding_segment}) or total token limit ({context.tokens_used + ptoks}/{config_obj.MAX_TOTAL_TOKENS}). Discarding.")
+                        break # Stop trying to add padding in this slot
                 else:
                     logger_obj.warning(f"Failed to generate valid padding segment for slot after beat {context.beat_counter['current']}. Attempt {i+1}/{num_paragraphs_for_this_slot}.")
+                    # Optionally, break here if one failure means stop trying for this slot
 
             if padding_segments_added_this_slot > 0:
                  logger_obj.info(f"Finished adding {padding_segments_added_this_slot} padding segments for this slot.")
@@ -4640,15 +4629,13 @@ def _generate_narrative_recursive(
                  logger_obj.info(f"No padding segments added for this slot after beat {context.beat_counter['current']}.")
         elif context.padding_stats["padding_per_slot"] == 0:
             logger_obj.debug(f"Padding per slot is 0. Skipping padding after beat {context.beat_counter['current']}.")
-        elif context.max_pad_paragraphs == 0:
+        elif context.max_pad_paragraphs == 0: # max_pad_paragraphs is from context.config
             logger_obj.debug(f"Max_pad_paragraphs is 0. Skipping padding after beat {context.beat_counter['current']}.")
 
 
     logger_obj.debug(
         f"Exiting _generate_narrative_recursive for Op {op_for_log} ('{current_node_conceptual_name}'). Total tokens used: {context.tokens_used}"
     )
-
-
 
 # --- Main Narrative Generation Function ---
 def generate_narrative(

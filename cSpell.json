@@ -29,7 +29,8 @@
         "narratively",
         "Jedidiah",
         "Undercounted",
-      // Add any other project-specific terms here
+        "Distractor",
+        "permissioning"
     ],
     "ignorePaths": []
 }

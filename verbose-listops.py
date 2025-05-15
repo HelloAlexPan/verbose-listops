@@ -3184,7 +3184,7 @@ def generate_introduction_scene(
 def _generate_and_llm_validate_beat(
     original_user_message_for_generator: str,
     system_prompt_for_generator: str,
-    world_info: dict,
+    world_info: dict, 
     current_op_node: OpNode,
     conceptual_inputs_str_for_llm_validator: str,
     atomic_inputs_words_str_for_llm_validator: str,
@@ -3195,24 +3195,23 @@ def _generate_and_llm_validate_beat(
     sample_index: int,
     context_config: Config,
     logger_obj: logging.Logger,
-    encoder_obj: any,
-    # ADD these new parameters:
-    context: "GenerationContext",
+    encoder_obj: any, 
+    context: "GenerationContext", 
     current_node_conceptual_name: str,
     beat_number_in_sample: int,
-    # End of new parameters
-    is_current_beat_root_node: bool = False,
-    overall_ground_truth_answer_val: int | None = None,
-    primary_object_name: str = "items",
-    forbidden_prior_results_and_gt_for_llm_validator: Set[int] = None,
-    correct_result_val: int | None = None,
-    direct_atom_values_val: Set[int] = None,
-    direct_atom_counts_val: Counter | None = None,
+    actual_arity_val: int, # <<< NEW PARAMETER
+    is_current_beat_root_node: bool = False, 
+    overall_ground_truth_answer_val: int | None = None, 
+    primary_object_name: str = "items", 
+    forbidden_prior_results_and_gt_for_llm_validator: Set[int] = None, 
+    correct_result_val: int | None = None, 
+    direct_atom_values_val: Set[int] = None, 
+    direct_atom_counts_val: Counter | None = None, 
 ) -> str | None:
 
     if forbidden_prior_results_and_gt_for_llm_validator is None:
         forbidden_prior_results_and_gt_for_llm_validator = set()
-    if direct_atom_values_val is None: # Though not strictly primary now, ensure it's a set if used
+    if direct_atom_values_val is None:
         direct_atom_values_val = set()
     if direct_atom_counts_val is None:
         direct_atom_counts_val = Counter()
@@ -3222,11 +3221,11 @@ def _generate_and_llm_validate_beat(
         f"LLMValidateBeat: Op={current_op_node.op}, Arity={current_op_arity}, CorrectResult={correct_result_val}, DirectAtomInputCounts={dict(direct_atom_counts_val)}"
     )
 
-    history_of_attempts = [] # For local revision prompt generation
-    history_of_critiques = [] # For local revision prompt generation
+    history_of_attempts = []
+    history_of_critiques = []
     current_generator_user_prompt_for_iteration = original_user_message_for_generator
     
-    current_beat_conversation_turns = [] # <<< Initialize list for this beat's conversation log
+    current_beat_conversation_turns = []
 
     internal_validator_llm_model = context_config.LLM_VALIDATOR_MODEL
     logger_obj.info(f"[Sample {sample_index+1}, Beat Op: {current_op_node.op}, BeatNum: {beat_number_in_sample}] Using internal LLM validator: {internal_validator_llm_model}")
@@ -3236,11 +3235,10 @@ def _generate_and_llm_validate_beat(
             f"[Sample {sample_index+1}, Beat Op: {current_op_node.op}, BeatNum: {beat_number_in_sample}] LLM Validation Loop Iteration: {iteration}/{context_config.MAX_LLM_VALIDATION_ITERATIONS}"
         )
 
-        # Initialize turn_data at the start of each iteration
         turn_data = {
             "iteration": iteration,
             "generator_system_prompt": system_prompt_for_generator,
-            "generator_user_prompt": None, # Will be set below
+            "generator_user_prompt": None, 
             "generator_output": "PENDING_GENERATION",
             "validator_system_prompt": "PENDING_VALIDATION_SETUP",
             "validator_user_prompt": "PENDING_VALIDATION_SETUP",
@@ -3248,7 +3246,7 @@ def _generate_and_llm_validate_beat(
         }
 
         generator_temp = context_config.BEAT_GEN_TEMP
-        if iteration > 1: # This block constructs the revision prompt
+        if iteration > 1: 
             generator_temp = context_config.BEAT_REVISION_TEMP
 
             history_prompt_addition_parts = [
@@ -3274,12 +3272,18 @@ def _generate_and_llm_validate_beat(
 
             history_prompt_addition_parts.append(f"**Validator Feedback for Your Previous Attempt:**\n  - Overall Revision Goal: {summary_for_generator_prompt}")
 
-            # --- Detailed Issue Breakdown & Actionable Instructions ---
-            history_prompt_addition_parts.append("  - **Specific Issues to Correct (CRITICAL - Address ALL of these):**")
+            history_prompt_addition_parts.append("  - **Specific Issues to Correct (CRITICAL - Address ALL of these METICULOUSLY):**")
             issues_found_for_generator_feedback = False
 
-            # Parse Rule 1.A violations (Missing/Incorrect Counts)
-            # Regexes to find detailed mismatches or missing numbers from validator's explanation
+            if "re-list" in explanation_from_validator.lower() or \
+               "summary sentence" in explanation_from_validator.lower() or \
+               "summarizing the numbers" in explanation_from_validator.lower():
+                history_prompt_addition_parts.append(
+                    f"    - **Numerical Re-listing/Summary (Violation of Rule 1.B):** The validator indicated your previous attempt included a sentence or phrase that re-listed or summarized numbers already introduced as inputs. This is a critical error causing over-counting.\n"
+                    f"      **Action for Revision:** REMOVE any such summary statements. The initial narrative descriptions of finding/observing quantities ARE the only mentions allowed for Rule 1.A.\n"
+                )
+                issues_found_for_generator_feedback = True
+
             mismatch_pattern = r"VIOLATION Rule A: Number '(\d+)' \(word form '([\w-]+)'\) was required (\d+) time(?:s)?.*?found (\d+) time(?:s)?"
             missing_pattern = r"VIOLATION Rule A: Required number '(\d+)' \(word form '([\w-]+)'\), expected (\d+) time(?:s)?, was completely missing"
 
@@ -3288,81 +3292,102 @@ def _generate_and_llm_validate_beat(
 
             if rule_a_mismatches:
                 for num_val_str, word_form, req_count_str, found_count_str in rule_a_mismatches:
-                    history_prompt_addition_parts.append(
-                        f"    - **Incorrect Count (Rule 1.A):** The number '{word_form}' (value: {num_val_str}) was required {req_count_str} time(s) but was found {found_count_str} time(s). "
-                        f"**Action for Revision:** Adjust your narrative to ensure '{word_form}' appears *exactly* {req_count_str} time(s). Each mention must be a distinct narrative element representing an input to this operation."
+                    action_item = ( # Ensure primary_object_name is available here or passed too if needed for this string
+                        f"    - **Incorrect Count (Rule 1.A):** The number '{word_form}' (value: {num_val_str}) was required {req_count_str} time(s) as a direct input for the operation, but was found {found_count_str} time(s).\n"
+                        f"      **Action for Revision:** Adjust your narrative to ensure '{word_form}' appears *exactly* {req_count_str} time(s). Each mention MUST be a distinct narrative element describing a direct input (e.g., '{word_form} {primary_object_name}'). Do not count uses for general phrasing towards this Rule 1.A requirement.\n"
                     )
-                    if word_form.lower() == 'one' and int(req_count_str) > 1:
+                    history_prompt_addition_parts.append(action_item)
+                    # Use the passed parameter actual_arity_val
+                    if word_form.lower() in ['one', 'two', 'three', str(actual_arity_val)]: # Check arity too
                          history_prompt_addition_parts.append(
-                            f"      *Specific Reminder for multiple '{word_form}'s:* Describe separate, distinct instances (e.g., 'a single {primary_object_name} here... then another lone {primary_object_name} there'). Do NOT group them (e.g., AVOID 'two single {primary_object_name}s').*"
+                            f"      *CRITICAL for '{word_form}': This number was required {req_count_str} time(s) as a DIRECT INPUT (Rule 1.A). You found/used it {found_count_str} time(s). "
+                            f"Ensure ALL {req_count_str} mentions are distinct narrative elements describing inputs (e.g., '{word_form} {primary_object_name}'). "
+                            f"If '{word_form}' is also the arity (operand count, which is {actual_arity_val} for this beat), its use for Rule 1.A is separate and must still be met. " # Clarified arity value
+                            f"'{word_form}' CANNOT be used for general phrasing if it's also needed for Rule 1.A, or if it's forbidden by Rule 4. Review the original rules for '{word_form}' very carefully, especially the distinction between Rule 1.A input and Rule 3 arity/phrasing.*"
                          )
                     issues_found_for_generator_feedback = True
+    
             if rule_a_missing:
                 for num_val_str, word_form, req_count_str in rule_a_missing:
-                    history_prompt_addition_parts.append(
-                        f"    - **Missing Required Number (Rule 1.A):** The number '{word_form}' (value: {num_val_str}) was required {req_count_str} time(s) but was MISSING entirely. "
-                        f"**Action for Revision:** You MUST add {req_count_str} distinct narrative mention(s) of '{word_form}' as inputs to this operation."
+                    action_item = (
+                        f"    - **Missing Required Number (Rule 1.A):** The number '{word_form}' (value: {num_val_str}) was required {req_count_str} time(s) as a direct input for the operation but was MISSING or undercounted.\n"
+                        f"      **Action for Revision:** You MUST add {req_count_str} distinct narrative mention(s) of '{word_form}' describing inputs (e.g., '{word_form} {primary_object_name}').\n"
                     )
-                    if word_form.lower() == 'one' and int(req_count_str) > 1:
+                    history_prompt_addition_parts.append(action_item)
+                    if word_form.lower() in ['one', 'two', 'three']:
                          history_prompt_addition_parts.append(
-                            f"      *Specific Reminder for multiple '{word_form}'s:* Describe separate, distinct instances (e.g., 'a single {primary_object_name} here... then another lone {primary_object_name} there').*"
+                            f"      *CRITICAL for '{word_form}': This number was required {req_count_str} time(s) as a DIRECT INPUT for the operation (Rule 1.A) but was MISSING or undercounted. "
+                            f"You MUST add {req_count_str} distinct narrative mentions of '{word_form}' describing inputs (e.g., 'one {primary_object_name}'). "
+                            f"'{word_form}' CANNOT be used for general phrasing if it's also needed for Rule 1.A, or if it's forbidden by Rule 4. Review the original rules for '{word_form}' very carefully.*\n"
                          )
                     issues_found_for_generator_feedback = True
             
-            # Check for STRICT_ZERO_VIOLATION (relevant if intro scene somehow gets into this loop, or if padding logic was adapted)
-            # This is less likely for main beats but good to have a general pattern.
-            # Example: "Strict zero mode: Found numbers with counts {734: 2} not in {1, 2, 3}."
             strict_zero_pattern = r"Strict zero mode: Found numbers with counts \{.*?(\d+): \d+.*?\} not in \{([\d, ]+)\}"
             strict_zero_match = re.search(strict_zero_pattern, explanation_from_validator, re.IGNORECASE)
             if "STRICT_ZERO_VIOLATION" in explanation_from_validator.upper() and strict_zero_match:
-                violating_num = strict_zero_match.group(1) # A sample violating number
+                violating_num = strict_zero_match.group(1) 
                 allowed_set_str = strict_zero_match.group(2)
                 history_prompt_addition_parts.append(
                     f"    - **Strict Zero Violation (Likely Intro/Padding Rule):** Your scene included numbers like '{num_to_words(int(violating_num))}' ({violating_num}) which are not allowed. Only numbers in {{{allowed_set_str}}} are permitted for general phrasing in this context. "
-                    f"**Action for Revision:** REMOVE all numbers not in {{{allowed_set_str}}}. If character names contain digits (e.g., 'Unit 734'), refer to them by role or ensure the name is not parsed as a quantity."
+                    f"**Action for Revision:** REMOVE all numbers not in {{{allowed_set_str}}}. If character names contain digits (e.g., 'Unit 734'), refer to them by role or ensure the name is not parsed as a quantity.\n"
                 )
                 issues_found_for_generator_feedback = True
 
-
-            # Parse Rule B violations (Explicit Result)
             rule_b_pattern = r"VIOLATION Rule B: Intermediate numerical result \['?(\d+)'?\] was explicitly stated"
             rule_b_match = re.search(rule_b_pattern, explanation_from_validator, re.IGNORECASE)
             if rule_b_match:
                 stated_result_val = rule_b_match.group(1)
-                history_prompt_addition_parts.append(
-                    f"    - **Explicit Outcome Stated (Rule 2):** The numerical result of this operation (which is '{num_to_words(int(stated_result_val))}' ({stated_result_val}), conceptually '{current_node_conceptual_name}') was incorrectly stated directly in the narrative. "
-                    f"**Action for Revision:** This result MUST be implied conceptually. REMOVE any explicit statement of '{num_to_words(int(stated_result_val))}' or '{stated_result_val}' as the outcome. The narrative should lead to '{current_node_conceptual_name}' without saying the number."
+                action_item = (
+                    f"    - **Explicit Outcome Stated (Rule 2):** The numerical result of this operation ('{num_to_words(int(stated_result_val))}') was incorrectly stated directly. This result MUST be implied conceptually via '{current_node_conceptual_name}'.\n"
+                    f"      **Action for Revision:** REMOVE any explicit statement of '{num_to_words(int(stated_result_val))}' or '{stated_result_val}' as the outcome. If this value ('{num_to_words(int(stated_result_val))}') was ALSO a Rule 1.A input, ensure its mentions are *only* for that input purpose and not framed as the result.\n"
                 )
+                history_prompt_addition_parts.append(action_item)
                 issues_found_for_generator_feedback = True
 
-            # Parse Rule D/4 violations (Forbidden Numbers)
-            rule_d_pattern = r"forbidden number '([\w-]+)'" # Captures word form
+            rule_d_pattern = r"forbidden number '([\w-]+)'" 
             forbidden_numbers_found_words = re.findall(rule_d_pattern, explanation_from_validator, re.IGNORECASE)
-            # Also check for direct number mentions if validator uses them
             rule_d_pattern_direct_num = r"forbidden.*?number.*?(\d+)"
             forbidden_numbers_found_digits = re.findall(rule_d_pattern_direct_num, explanation_from_validator, re.IGNORECASE)
             
-            all_forbidden_mentioned_str = set()
+            all_forbidden_mentioned_str = set() 
             for w in forbidden_numbers_found_words: all_forbidden_mentioned_str.add(f"'{w}'")
             for d in forbidden_numbers_found_digits: all_forbidden_mentioned_str.add(f"'{num_to_words(int(d))}' ({d})")
 
-            if all_forbidden_mentioned_str:
+            if all_forbidden_mentioned_str: 
                 formatted_forbidden = ", ".join(sorted(list(all_forbidden_mentioned_str)))
-                history_prompt_addition_parts.append(
+                action_item = (
                     f"    - **Forbidden Number(s) Used (Rule 4):** Your narrative included forbidden number(s) like: {formatted_forbidden}. "
-                    f"**Action for Revision:** These numbers MUST be removed. They are not allowed in this scene under any circumstances. Consult Rule 4 in your original Writing Guide (re-pasted below)."
+                    f"**Action for Revision:** These numbers MUST be removed. They are not allowed in this scene under any circumstances, *not even for general phrasing if they are on the Rule 4 list*. Consult Rule 4 in your original Writing Guide (re-pasted below).\n"
                 )
+                history_prompt_addition_parts.append(action_item)
+                if any(f"'{num_to_words(n)}'" in formatted_forbidden.lower() for n in [1, 2, 3]): 
+                    history_prompt_addition_parts.append(
+                        f"      *CRITICAL for 'one'/'two'/'three' being forbidden: As these were on the forbidden list (Rule 4), they CANNOT be used for ANY purpose in this scene, including general phrasing (Rule 3). Rule 4 is absolute.*\n"
+                    )
                 issues_found_for_generator_feedback = True
             
+            if not issues_found_for_generator_feedback: # Only check for general extraneous if specific rule violations weren't already parsed
+                if "extraneous number" in explanation_from_validator.lower() or \
+                   ("count" in explanation_from_validator.lower() and "Rule 1.A" not in explanation_from_validator and "Rule A" not in explanation_from_validator): # If count issue not tied to Rule 1A
+                    # Try to find the specific extraneous number if mentioned
+                    extraneous_match = re.search(r"extraneous number.*?['\"]([\w\s-]+)['\"]", explanation_from_validator, re.IGNORECASE)
+                    num_detail = f" (e.g., {extraneous_match.group(1)})" if extraneous_match else ""
+                    
+                    history_prompt_addition_parts.append(
+                        f"    - **Extraneous Number(s) Used (Likely Rule 3 Misuse or Rule 5 Violation):** The validator indicated your previous text might have included numbers{num_detail} that were not required by Rule 1.A, not the arity count, and not essential, extremely sparing phrasing allowed by Rule 3 (or were forbidden by Rule 4).\n"
+                        f"      **Action for Revision:** REMOVE any such extraneous numbers. Scrutinize every number used. If it's not fulfilling an exact Rule 1.A frequency, or isn't the arity count (and arity is allowed), it's likely an error unless it's one of the very few strictly allowed phrasing numbers used with extreme rarity and necessity (see original Rule 3).\n"
+                    )
+                    issues_found_for_generator_feedback = True # Set this flag as we've identified an issue
+
             # Fallback for other errors or if parsing fails but it's an error
             if not issues_found_for_generator_feedback and not last_critique_json.get("is_valid", True):
                  history_prompt_addition_parts.append(
                     f"    - **General Adherence Issue:** The validator indicated issues with overall rule compliance. The primary feedback was: \"{summary_for_generator_prompt}\". The detailed explanation provided was: \"{explanation_from_validator}\". "
-                    f"**Action for Revision:** Please carefully re-read this feedback and ALL rules in your original Writing Guide (re-pasted below), then revise to ensure full compliance. Pay special attention to any numbers mentioned in the validator's explanation."
+                    f"**Action for Revision:** Please carefully re-read this feedback and ALL rules in your original Writing Guide (re-pasted below), then revise to ensure full compliance. Pay special attention to any numbers mentioned in the validator's explanation.\n"
                  )
-            elif not issues_found_for_generator_feedback and last_critique_json.get("is_valid", True): # Should not happen if invalid
+            elif not issues_found_for_generator_feedback and last_critique_json.get("is_valid", True): 
                  history_prompt_addition_parts.append(
-                    f"    - (No specific rule violations were automatically parsed from the validator's explanation, but the overall summary was: \"{summary_for_generator_prompt}\". Please review the full explanation if provided: \"{explanation_from_validator}\")"
+                    f"    - (No specific rule violations were automatically parsed from the validator's explanation, but the overall summary was: \"{summary_for_generator_prompt}\". Please review the full explanation if provided: \"{explanation_from_validator}\")\n"
                  )
 
             if suggested_revisions_list:
@@ -3372,7 +3397,6 @@ def _generate_and_llm_validate_beat(
             
             history_prompt_addition_parts.append(f"\n  - *Full explanation from validator for your context (if you need more detail): \"{explanation_from_validator}\"*\n")
 
-            # --- MANDATORY PRE-REVISION CHECKLIST ---
             history_prompt_addition_parts.append(
                 "**MANDATORY PRE-REVISION CHECKLIST (Confirm your plan before rewriting):**\n"
                 "1.  **Error Understanding:** Have you read and understood EACH specific issue and action item listed above from the validator?\n"
@@ -3390,13 +3414,13 @@ def _generate_and_llm_validate_beat(
                 f"3. **Meticulously fix ALL identified issues.** This is not optional. Ensure exact frequencies for required numbers and that mentions are explicit numerical words.\n"
                 f"4. Ensure the narrative logic remains sound and compelling.\n"
                 f"5. Output ONLY the revised narrative text for this scene.\n\n"
-                f"**Key Original Rules (Reminder - see full initial prompt for all details, especially the ULTRA-STRICT NUMBER RULES section which contains the specific numbers for *your* current scene):\n**" # This is ultra_strict_instruction_for_llm_validator_context
-                f"```text\n{ultra_strict_instruction_for_llm_validator_context[:3000]}...\n```\n" # Increased snippet length
+                f"**Key Original Rules (Reminder - see full initial prompt for all details, especially the ULTRA-STRICT NUMBER RULES section which contains the specific numbers for *your* current scene):\n**" 
+                f"```text\n{ultra_strict_instruction_for_llm_validator_context[:3000]}...\n```\n" 
             )
             current_generator_user_prompt_for_iteration = (
                 f"{original_user_message_for_generator}\n\n{''.join(history_prompt_addition_parts)}"
             )
-        else: # For iteration 1
+        else: # iteration == 1
             current_generator_user_prompt_for_iteration = original_user_message_for_generator
         
         turn_data["generator_user_prompt"] = current_generator_user_prompt_for_iteration
@@ -3417,7 +3441,7 @@ def _generate_and_llm_validate_beat(
                         "content": current_generator_user_prompt_for_iteration,
                     },
                 ],
-                max_completion_tokens=current_max_beat_completion_tokens,
+                max_completion_tokens=current_max_beat_completion_tokens, # This should be config_obj.BEAT_MAX_TOKENS
                 temperature=generator_temp,
                 reasoning={"exclude": True},
             )
@@ -3442,8 +3466,6 @@ def _generate_and_llm_validate_beat(
                 logger_obj.warning(
                     f"Generator refusal or empty in iter {iteration} for Op {current_op_node.op}, BeatNum {beat_number_in_sample}. Raw: '{raw_gen_text}'"
                 )
-                # This case will flow to validator, which should fail it.
-                # We still want to log this turn.
                 critique_for_empty_gen = {
                         "is_valid": False,
                         "explanation_for_generator": "The generation was empty or an API refusal. This counts as a failed attempt.",
@@ -3453,9 +3475,9 @@ def _generate_and_llm_validate_beat(
                     }
                 turn_data["validator_critique_json"] = critique_for_empty_gen
                 history_of_critiques.append(critique_for_empty_gen)
-                current_beat_conversation_turns.append(turn_data) # Log this failed turn
+                current_beat_conversation_turns.append(turn_data) 
                 if iteration < context_config.MAX_LLM_VALIDATION_ITERATIONS: time.sleep(context_config.RETRY_INITIAL_DELAY)
-                continue # To next iteration
+                continue 
 
         except Exception as e_gen:
             logger_obj.error(
@@ -3474,12 +3496,12 @@ def _generate_and_llm_validate_beat(
                 }
             turn_data["validator_critique_json"] = critique_for_gen_error
             history_of_critiques.append(critique_for_gen_error)
-            current_beat_conversation_turns.append(turn_data) # Log this failed turn
+            current_beat_conversation_turns.append(turn_data) 
 
             if iteration < context_config.MAX_LLM_VALIDATION_ITERATIONS:
                 time.sleep(context_config.RETRY_INITIAL_DELAY)
                 continue
-            else: # Failed all iterations due to generation error
+            else: 
                 context.beat_revision_logs.append({
                     "sample_index": sample_index,
                     "beat_op": current_op_node.op,
@@ -3491,7 +3513,6 @@ def _generate_and_llm_validate_beat(
                 })
                 return None
 
-        # --- Internal LLM Validator Call ---
         validator_system_prompt = """You are an AI numerical compliance checker.
 Your ONLY task is to evaluate a story 'beat' against strict numerical rules.
 You MUST output your response as a valid JSON object and NOTHING ELSE, adhering to the provided schema.
@@ -3587,7 +3608,7 @@ Based on the algorithm above:
                     {"role": "system", "content": validator_system_prompt},
                     {"role": "user", "content": validator_user_prompt},
                 ],
-                "max_completion_tokens": context_config.BEAT_MAX_TOKENS, 
+                "max_completion_tokens": context_config.BEAT_MAX_TOKENS, # Should be config_obj.BEAT_MAX_TOKENS or similar
                 "temperature": context_config.LLM_VALIDATOR_TEMP,
                 "reasoning": {"exclude": True},
                 "json_schema": VALIDATOR_RESPONSE_SCHEMA,
@@ -3672,7 +3693,6 @@ Based on the algorithm above:
                 })
                 return None
 
-    # If loop finishes (all iterations failed because validator kept failing)
     logger_obj.error(
         f"Beat for Op {current_op_node.op}, BeatNum {beat_number_in_sample} failed LLM validation after {context_config.MAX_LLM_VALIDATION_ITERATIONS} iterations (Internal Validator: {internal_validator_llm_model})."
     )
@@ -3680,7 +3700,7 @@ Based on the algorithm above:
         last_fail_critique = history_of_critiques[-1]
         logger_obj.error(f"Last critique for Op {current_op_node.op}, BeatNum {beat_number_in_sample} (failed all iterations with {internal_validator_llm_model}): {json.dumps(last_fail_critique, indent=2)}")
     
-    if current_beat_conversation_turns: # Should always have turns if loop ran
+    if current_beat_conversation_turns: 
         context.beat_revision_logs.append({
             "sample_index": sample_index,
             "beat_op": current_op_node.op,
@@ -3700,7 +3720,7 @@ def _generate_narrative_recursive(
     is_root: bool,
 ):
     world = context.world
-    config_obj = context.config # This is context.config, which was passed from global config
+    config_obj = context.config
     encoder = context.encoder
     logger_obj = context.logger
     p_inflect = context.p_inflect
@@ -3719,6 +3739,51 @@ def _generate_narrative_recursive(
         f"Processing Node Type: {type(node).__name__}, Op: {op_for_log}, Conceptual Name: '{current_node_conceptual_name}', IsRoot: {is_root}, "
         f"Beat: {context.beat_counter['current'] + 1 if isinstance(node, OpNode) else '-'}/{context.beat_counter['total']}"
     )
+
+    # --- Define primary_object_as_string and safe_primary_object_for_fstring EARLIER ---
+    primary_object_as_string = "[DEFAULT_PRIMARY_OBJECT]"
+    primary_object_value_from_world = None
+    try:
+        primary_object_value_from_world = world.get("object")
+        if primary_object_value_from_world is None:
+            logger_obj.warning(
+                f"[Sample {context.sample_index + 1}, Op: {op_for_log}] world.get('object') returned None. Using fallback '{primary_object_as_string}'. World keys: {list(world.keys())}"
+            )
+            primary_object_as_string = "[OBJECT_WAS_NONE]"
+        elif isinstance(primary_object_value_from_world, str):
+            primary_object_as_string = primary_object_value_from_world
+        else:
+            logger_obj.warning(
+                f"[Sample {context.sample_index + 1}, Op: {op_for_log}] world['object'] was not a string (type: {type(primary_object_value_from_world)}). Attempting str(). Value: '{str(primary_object_value_from_world)[:100]}'"
+            )
+            primary_object_as_string = str(primary_object_value_from_world)
+    except Exception as e_obj_conv:
+        logger_obj.error(
+            f"[Sample {context.sample_index + 1}, Op: {op_for_log}] Critical error getting/converting world['object']: {e_obj_conv}. "
+            f"Original type: {type(primary_object_value_from_world)}. "
+            f"Using fallback '{primary_object_as_string}'."
+        )
+
+    safe_primary_object_for_fstring = "[ERROR_ESCAPING_OBJECT_NAME_DEFAULT]"
+    try:
+        if not isinstance(primary_object_as_string, str):
+            logger_obj.error(f"Internal Error: primary_object_as_string became non-string: {type(primary_object_as_string)}. Using fallback for safe_primary_object_for_fstring.")
+        else:
+            safe_primary_object_for_fstring = primary_object_as_string.replace("{", "{{").replace("}", "}}")
+    except AttributeError as e_replace:
+        logger_obj.error(
+            f"[Sample {context.sample_index + 1}, Op: {op_for_log}] AttributeError during .replace() for safe_primary_object_for_fstring. "
+            f"primary_object_as_string was type: {type(primary_object_as_string)}, value: '{str(primary_object_as_string)[:100]}'. Error: {e_replace}. "
+            f"Falling back for safe_primary_object_for_fstring."
+        )
+    except Exception as e_generic_replace:
+        logger_obj.error(
+            f"[Sample {context.sample_index + 1}, Op: {op_for_log}] Generic error during .replace() for safe_primary_object_for_fstring. "
+            f"primary_object_as_string was type: {type(primary_object_as_string)}, value: '{str(primary_object_as_string)[:100]}'. Error: {e_generic_replace}. "
+            f"Falling back for safe_primary_object_for_fstring."
+        )
+    logger_obj.debug(f"OpNode {op_for_log}: primary_object_as_string = '{primary_object_as_string}', safe_primary_object_for_fstring = '{safe_primary_object_for_fstring}'")
+    # --- END OF MOVED BLOCK ---
 
     if isinstance(node, Atom):
         logger_obj.debug(f"Node is Atom ({node.n}), value is {node.value}. Returning.")
@@ -3774,7 +3839,7 @@ def _generate_narrative_recursive(
 
     if context.overall_ground_truth_answer is not None:
         if context.overall_ground_truth_answer != correct_result and \
-           context.overall_ground_truth_answer not in direct_atom_values_counts:
+           context.overall_ground_truth_answer not in direct_atom_values_counts: 
             forbidden_for_current_beat_py_validator.add(context.overall_ground_truth_answer)
 
     forbidden_for_current_beat_py_validator -= set(direct_atom_values_counts.keys())
@@ -3817,7 +3882,7 @@ def _generate_narrative_recursive(
 
     must_mention_prose_parts = []
     for atom_val_prose in unique_direct_atom_values_for_prompt:
-        count_prose = all_direct_atomic_inputs_as_list.count(atom_val_prose)
+        count_prose = direct_atom_values_counts[atom_val_prose] 
         atom_word_prose = num_to_words(atom_val_prose)
         if count_prose > 1 and p_inflect:
             must_mention_prose_parts.append(f"'{atom_word_prose}' ({atom_val_prose}) (which appears {p_inflect.number_to_words(count_prose)} times as direct inputs)")
@@ -3854,33 +3919,22 @@ def _generate_narrative_recursive(
         f"It must only be implied by events. This implied result will be known conceptually as '{current_node_conceptual_name}' for future steps."
     )
     if correct_result is not None and correct_result in direct_atom_values_counts:
+        num_word_result = num_to_words(correct_result)
+        required_count_as_input = direct_atom_values_counts[correct_result]
+        
         result_handling_rule_text_for_prompt += (
-            f" (Special Note: The result value '{num_to_words(correct_result)}' ({correct_result}) is also one of your required atomic inputs. "
-            f"While you MUST mention it as an input (Rule 1, with correct frequency), ensure your narrative does NOT frame it as the *outcome* of this operation. "
-            f"The outcome '{current_node_conceptual_name}' must still be implied conceptually.)"
+            f"\n    **VERY IMPORTANT & TRICKY SCENARIO FOR THIS BEAT (Result is also an Input):**\n"
+            f"    The numerical result of this operation ('{num_word_result}') is ALSO one of your required atomic inputs from Rule 1.A. Specifically, '{num_word_result}' is required {required_count_as_input} time(s) as a direct input to this operation.\n"
+            f"    **Your Task - Execute Both Parts Flawlessly:**\n"
+            f"        1.  **Fulfill Rule 1.A (Input Requirement):** You MUST narrate {required_count_as_input} distinct instance(s) of '{num_word_result} {safe_primary_object_for_fstring}' (or a clear narrative equivalent) being present as direct inputs for this scene's operation. Each of these {required_count_as_input} mentions is for an *input*.\n"
+            f"        2.  **Fulfill Rule 2 (Implicit Outcome Requirement):** After describing all inputs, your narrative must imply that an item/concept representing the value '{num_word_result}' is the outcome (e.g., the smallest, the median value identified). HOWEVER, when describing this outcome or identifying '{current_node_conceptual_name}', you MUST NOT use the word '{num_word_result}' or the digit '{correct_result}' again *in the context of stating or identifying the result*. The outcome must be purely conceptual.\n"
+            f"    *   **Think of it this way:** You introduce '{num_word_result} {safe_primary_object_for_fstring}' {required_count_as_input} times as *ingredients*. Then, the *final dish* (conceptually '{current_node_conceptual_name}') happens to have a characteristic that corresponds to the value '{num_word_result}', but you don't name that characteristic with the number word again.\n"
+            f"    *   **Example (If result is 'two' and inputs included 'two items' twice):**\n"
+            f"        - Correct for Rule 1.A: '...they found two relics here. Later, they uncovered another two relics.' (Two mentions of 'two' as inputs).\n"
+            f"        - Correct for Rule 2 (implying 'two' is the median): '...of all the caches, the one containing that second pair of relics held the central position, becoming {current_node_conceptual_name}.' (Implies the 'two relics' group is the median without saying 'the median is two').\n"
+            f"        - Incorrect for Rule 2: '...the median was two relics.' OR '...{current_node_conceptual_name} represented two.'\n"
+            f"    This demands extremely careful phrasing. Your {required_count_as_input} mention(s) of '{num_word_result}' are for INPUTS ONLY. The RESULT is implied via '{current_node_conceptual_name}'.\n"
         )
-
-    temp_phrasing_words_detailed_for_rule3 = [f"'{num_to_words(n)}' ({n})" for n in config_obj.ALWAYS_ALLOWED_PHRASING_NUMBERS_SET]
-    phrasing_numbers_gen_str_detailed_for_rule3 = ", ".join(sorted(temp_phrasing_words_detailed_for_rule3))
-
-    actual_arity_for_current_op = len(node.children)
-    may_use_gen_parts_detailed = [
-        f"small numbers like {phrasing_numbers_gen_str_detailed_for_rule3} for general narrative phrasing (e.g., 'two guards')"
-    ]
-    arity_is_problematic_forbidden = (
-        actual_arity_for_current_op in forbidden_for_current_beat_py_validator and
-        actual_arity_for_current_op not in config_obj.ALWAYS_ALLOWED_PHRASING_NUMBERS_SET
-    )
-    if actual_arity_for_current_op > 0 :
-        if not arity_is_problematic_forbidden:
-            may_use_gen_parts_detailed.append(
-                f"the number '{num_to_words(actual_arity_for_current_op)}' ({actual_arity_for_current_op}) IF it's genuinely used to count the items/inputs involved in THIS specific action"
-            )
-        else:
-            may_use_gen_parts_detailed.append(
-                f"the number '{num_to_words(actual_arity_for_current_op)}' ({actual_arity_for_current_op}) ONLY if essential for counting and clearly distinct from its forbidden meaning (use with extreme caution or avoid)"
-            )
-    may_use_gen_clause_content_detailed_for_prompt = "; ".join(may_use_gen_parts_detailed)
 
     gt_counting_caution_for_gen_prompt = ""
     if context.overall_ground_truth_answer is not None and \
@@ -3912,49 +3966,6 @@ def _generate_narrative_recursive(
             f"Think of them as legendary items or well-known past results. The actual number these names represent should remain a secret from the reader, hinted at only by their conceptual name.\n"
         )
 
-    primary_object_as_string = "[DEFAULT_PRIMARY_OBJECT]"
-    primary_object_value_from_world = None
-    try:
-        primary_object_value_from_world = world.get("object")
-        if primary_object_value_from_world is None:
-            logger_obj.warning(
-                f"[Sample {context.sample_index + 1}, Op: {op_for_log}] world.get('object') returned None. Using fallback '{primary_object_as_string}'. World keys: {list(world.keys())}"
-            )
-            primary_object_as_string = "[OBJECT_WAS_NONE]"
-        elif isinstance(primary_object_value_from_world, str):
-            primary_object_as_string = primary_object_value_from_world
-        else:
-            logger_obj.warning(
-                f"[Sample {context.sample_index + 1}, Op: {op_for_log}] world['object'] was not a string (type: {type(primary_object_value_from_world)}). Attempting str(). Value: '{str(primary_object_value_from_world)[:100]}'"
-            )
-            primary_object_as_string = str(primary_object_value_from_world)
-    except Exception as e_obj_conv:
-        logger_obj.error(
-            f"[Sample {context.sample_index + 1}, Op: {op_for_log}] Critical error getting/converting world['object']: {e_obj_conv}. "
-            f"Original type: {type(primary_object_value_from_world)}. "
-            f"Using fallback '{primary_object_as_string}'."
-        )
-
-    safe_primary_object_for_fstring = "[ERROR_ESCAPING_OBJECT_NAME_DEFAULT]"
-    try:
-        if not isinstance(primary_object_as_string, str):
-            logger_obj.error(f"Internal Error: primary_object_as_string became non-string: {type(primary_object_as_string)}. Using fallback for safe_primary_object_for_fstring.")
-        else:
-            safe_primary_object_for_fstring = primary_object_as_string.replace("{", "{{").replace("}", "}}")
-    except AttributeError as e_replace:
-        logger_obj.error(
-            f"[Sample {context.sample_index + 1}, Op: {op_for_log}] AttributeError during .replace() for safe_primary_object_for_fstring. "
-            f"primary_object_as_string was type: {type(primary_object_as_string)}, value: '{str(primary_object_as_string)[:100]}'. Error: {e_replace}. "
-            f"Falling back for safe_primary_object_for_fstring."
-        )
-    except Exception as e_generic_replace:
-        logger_obj.error(
-            f"[Sample {context.sample_index + 1}, Op: {op_for_log}] Generic error during .replace() for safe_primary_object_for_fstring. "
-            f"primary_object_as_string was type: {type(primary_object_as_string)}, value: '{str(primary_object_as_string)[:100]}'. Error: {e_generic_replace}. "
-            f"Falling back for safe_primary_object_for_fstring."
-        )
-    logger_obj.debug(f"OpNode {op_for_log}: primary_object_as_string = '{primary_object_as_string}', safe_primary_object_for_fstring = '{safe_primary_object_for_fstring}'")
-
     action_description_parts = [
         f"**Your Scene's Core Action & Narrative Goal (Follow this closely):**\n"
         f"This scene needs to narrate an event or discovery that mirrors the mathematical operation: **{op_label}**. "
@@ -3963,6 +3974,7 @@ def _generate_narrative_recursive(
     op_specific_action_details = ""
     op_specific_outcome_implication_details = ""
 
+    # ... (op_specific_action_details and op_specific_outcome_implication_details logic as before) ...
     if node.op == "SUM":
         op_specific_action_details = (
             f"Imagine your characters are gathering or combining distinct collections of '{safe_primary_object_for_fstring}'. "
@@ -4020,13 +4032,18 @@ def _generate_narrative_recursive(
         )
     elif node.op == "SM":
         op_specific_action_details = (
-            f"**This is a SUM MODULO 10 scene.** The characters' actions should represent combining all involved quantities of '{safe_primary_object_for_fstring}' "
+            f"**This is a SUM MODULO 10 scene.** The characters' actions should represent conceptually combining all involved quantities of '{safe_primary_object_for_fstring}' "
             f"(the new numbers being (with their frequencies): {atomic_inputs_context_str_detailed_for_prompt if direct_atom_children else 'none for this step'}; "
             f"and any prior results referred to only by their conceptual names: {conceptual_input_names_only_str_for_action}). "
-            f"After this conceptual combination (do not state any intermediate sum!), they should then discover or focus on a core essence, a symbolic digit, or a cyclical pattern related to this unstated total. This discovery is equivalent to finding the sum modulo 10."
+            f"**CRITICAL: DO NOT state or hint at any intermediate sum of these quantities.** "
+            f"After this conceptual combination, they should then discover or focus on a core essence, a symbolic digit (from 0-9), or a cyclical pattern that emerges from the (unstated) total. This discovery is equivalent to finding the sum modulo 10.\n\n"
+            f"    **Narrative Example for SUM MODULO 10 (Illustrative - adapt to your specific numbers and context):**\n"
+            f"    Imagine the inputs conceptually add up to an unstated total of 27. The sum modulo 10 is 7. Your narrative should NOT mention 'twenty-seven'. Instead, it might be:\n"
+            f"    'They gathered the various caches of '{safe_primary_object_for_fstring}' – the single one from the alcove, the two from the chest, another two from the pedestal, and the three from the satchel, along with the contents of 'The Elder Hoard'. As all these were brought together, a strange resonance filled the air. The combined collection didn't just glow brighter; a new, distinct pattern emerged. A series of seven faint chimes echoed from the pile, repeating in a steady cycle. Or perhaps, a device they used to scan the combined pile displayed a single, unwavering symbol representing the digit 'seven', indicating its core cyclical nature.'\n"
+            f"    The key is to describe an observation or event that directly reveals the modulo result (0-9) without ever stating the full sum."
         )
         op_specific_outcome_implication_details = (
-            f"This final symbolic essence or pattern will be conceptually known as '{current_node_conceptual_name}' (representing the value '{num_to_words(correct_result)}'), and this outcome must be implied, not stated numerically."
+            f"This final symbolic essence, cyclical pattern, or revealed digit will be conceptually known as '{current_node_conceptual_name}' (representing the value '{num_to_words(correct_result)}'), and this outcome must be implied, not stated numerically."
         )
 
     if not op_specific_action_details:
@@ -4064,7 +4081,6 @@ def _generate_narrative_recursive(
     )
     action_description_for_prompt = "\n".join(action_description_parts)
 
-    # --- Define Rule 1 components for ultra_strict_instruction ---
     rule1_header = "**1. Key Details to Feature (Numbers in Action & Their EXACT Frequencies):**\n"
     rule1_summary_section = (
         f"    **A. SUMMARY OF REQUIRED NUMBER FREQUENCIES FOR THIS SCENE (CRITICAL & MANDATORY: MENTION EACH NUMBER EXACTLY THE SPECIFIED TIMES. NO MORE, NO LESS. EACH MENTION MUST BE A DISTINCT NARRATIVE ELEMENT REPRESENTING AN INPUT TO THIS OPERATION.):**\n"
@@ -4073,29 +4089,93 @@ def _generate_narrative_recursive(
     rule1_explanation_section = (
         f"    **B. Detailed Explanation & Examples for Rule 1 (Adherence is Paramount):**\n"
         f"    Your narrative MUST introduce quantities of the central item ('{safe_primary_object_for_fstring}') corresponding to EACH number listed in the Summary (1.A) above. Each number MUST be mentioned EXACTLY the number of times specified. \n"
-        f"    *   **How to Count Mentions (Crucial for Correctness):** Each mention must correspond to a distinct group, instance, or observation of items being introduced as a direct input for THIS scene's operation. \n"
-        f"        - If 'one' (value: {config_obj.INVALID_RESULT_PLACEHOLDER+1}) is required twice: You might narrate, 'She found a single {safe_primary_object_for_fstring} in an alcove. Later, exploring a different passage, another lone {safe_primary_object_for_fstring} was discovered.' This counts as two distinct mentions of 'one'.\n"
-        f"        - Contrast: Saying 'She found two single {safe_primary_object_for_fstring}s' would likely count as one mention of 'two' (if 'two' was required) and might NOT correctly fulfill two required mentions of 'one'. Be explicit and distinct for each required instance.\n"
-        f"    *   **ABSOLUTELY AVOID NUMERICAL SUMMARIES/RE-LISTING:** Do NOT describe the items and then, in a separate sentence or phrase, re-list or summarize the numbers found (e.g., 'So, in total, she had found one, then another one, and also five items...'). The act of narrating the discovery/presence of each quantity IS its mention. Any re-listing will likely cause a validation failure due to over-counting.\n"
+        f"    *   **How to Count Mentions (Crucial for Correctness):** Each mention must correspond to a distinct group, instance, or observation of items being introduced as a direct input for THIS scene's operation. If a number (e.g., 'two') is required multiple times by Rule 1.A, you MUST narrate that many separate, distinct discoveries or observations of that quantity (e.g., 'they found two crystals here... then, in another spot, they found two more crystals... and finally, a third discovery yielded two crystals' if 'two' was required three times). Do not try to group these into a single statement.\n"
+        f"        - If 'one' is required twice by Rule 1.A: You might narrate, 'She found a single {safe_primary_object_for_fstring} in an alcove. Later, exploring a different passage, another lone {safe_primary_object_for_fstring} was discovered.' This counts as two distinct mentions of 'one' fulfilling Rule 1.A.\n"
+        f"        - Contrast: Saying 'She found two single {safe_primary_object_for_fstring}s' would likely count as one mention of 'two' (if 'two' was required by Rule 1.A) and might NOT correctly fulfill two required mentions of 'one' for Rule 1.A. Be explicit and distinct for each required instance.\n"
+        f"    *   **ABSOLUTELY AVOID NUMERICAL SUMMARIES OR RE-LISTING (CRITICAL ERROR SOURCE):** After narrating the discovery or presence of items corresponding to the required numbers in Rule 1.A, **DO NOT ADD ANY SENTENCE OR PHRASE THAT RE-LISTS, RECAPS, OR SUMMARIZES THESE NUMBERS.** For example, if you've described finding 'one item' and then 'five items', DO NOT follow with 'So, they had found one and five items.' The initial narrative descriptions ARE the mentions. Any re-listing will cause a validation failure due to over-counting or misinterpretation. This is a very common mistake; be vigilant.\n"
         f"    *   **Example of Correct Frequency:** If the Summary (1.A) states \"'- 'five' ({config_obj.INVALID_RESULT_PLACEHOLDER+5}): exactly two (2) time(s)\", your narrative must contain the word 'five' exactly twice, each time referring to a distinct set of five {safe_primary_object_for_fstring}s relevant to this scene's operation. Do not mention 'five' a third time, even in a summary.\n"
         f"    The following list details the specific numbers and their word forms that are the direct atomic inputs for this scene's operation: {must_mention_text_detailed_prose_for_prompt}. Ensure your narrative reflects these inputs according to the frequency summary in 1.A.{special_med_input_clarification_for_prompt}\n\n"
     )
+    
+    clarification_for_rule3_phrasing = "" 
+    eligible_for_pure_phrasing = config_obj.ALWAYS_ALLOWED_PHRASING_NUMBERS_SET - \
+                                 set(direct_atom_values_counts.keys()) - \
+                                 forbidden_for_current_beat_py_validator
 
-    # --- Assemble ultra_strict_instruction ---
+    can_use_any_always_allowed_for_phrasing = bool(eligible_for_pure_phrasing)
+    
+    # Build the main clause for arity first
+    actual_arity_for_current_op = len(node.children) 
+    may_use_gen_parts_for_rule3_main = []
+    can_use_arity_for_rule3 = False # Flag to help with the final Rule 3 sentence
+
+    if actual_arity_for_current_op > 0 and \
+       actual_arity_for_current_op not in config_obj.ALWAYS_ALLOWED_PHRASING_NUMBERS_SET: # Not 1,2,3
+        
+        # CRITICAL CHECK: Is the arity number ALSO a Rule 1.A required input?
+        is_arity_also_rule1a_input = direct_atom_values_counts.get(actual_arity_for_current_op, 0) > 0
+        
+        if not is_arity_also_rule1a_input and \
+           actual_arity_for_current_op not in forbidden_for_current_beat_py_validator:
+            # Arity is >0, not 1,2,3, NOT a Rule 1.A input, and not forbidden. It's a candidate for Rule 3.
+            may_use_gen_parts_for_rule3_main.append(
+                f"the number '{num_to_words(actual_arity_for_current_op)}' ({actual_arity_for_current_op}) ONLY if it is genuinely and clearly used to state the count of direct items/groups involved in THIS specific action (e.g., 'the {num_to_words(actual_arity_for_current_op)} groups were examined')"
+            )
+            can_use_arity_for_rule3 = True
+        elif is_arity_also_rule1a_input:
+            # Arity number IS a Rule 1.A input. It CANNOT be used for arity counting in Rule 3.
+            # Its use is governed by Rule 1.A.
+            logger_obj.debug(f"Rule 3 construction: Arity value {actual_arity_for_current_op} is also a Rule 1.A input. Not allowing for Rule 3 arity count.")
+            # No part added to may_use_gen_parts_for_rule3_main for arity in this case.
+            
+    may_use_gen_clause_for_rule3_main_str = ""
+    if may_use_gen_parts_for_rule3_main: # This will only be true if arity was a valid, non-conflicting candidate
+        may_use_gen_clause_for_rule3_main_str = "You MAY use " + "; ".join(may_use_gen_parts_for_rule3_main) + "."
+    
+    # Now build the clarification for 'one', 'two', 'three'
+    if eligible_for_pure_phrasing:
+        num_words_list = [f"'{num_to_words(n)}' ({n})" for n in sorted(list(eligible_for_pure_phrasing))]
+        clarification_for_rule3_phrasing = (
+            f"        *   **Extremely Limited Phrasing with {', '.join(num_words_list)}:** ONLY if absolutely essential for narrative fluency and no other phrasing is possible, you MAY consider using one of these numbers for general phrasing (e.g., 'a single guard'). This use must be EXTREMELY RARE (ideally zero times). These numbers CANNOT be used if they are needed for Rule 1.A or are forbidden by Rule 4.\n"
+        )
+    else: # No numbers from {1,2,3} are eligible for pure phrasing
+        clarification_for_rule3_phrasing = (
+            f"        *   **CRITICAL: No General Phrasing with 'one', 'two', or 'three':** For this specific scene, the numbers 'one', 'two', and 'three' are either required by Rule 1.A (their use is dedicated to fulfilling those input counts) or are forbidden by Rule 4. Therefore, they CANNOT be used for any additional general narrative phrasing in this scene.\n"
+        )
+
+    # Construct the final Rule 3 text
+    rule3_text_for_prompt_parts = [
+        f"**3.  Permitted Narrative Flourishes (Read VERY Carefully - Extremely Strict Limits Apply):\n**"
+    ]
+    if may_use_gen_clause_for_rule3_main_str: # If arity was usable
+        rule3_text_for_prompt_parts.append(f"    {may_use_gen_clause_for_rule3_main_str}\n")
+    
+    rule3_text_for_prompt_parts.append(clarification_for_rule3_phrasing) # This has its own logic for 1,2,3
+
+    if not can_use_arity_for_rule3 and not can_use_any_always_allowed_for_phrasing:
+        rule3_text_for_prompt_parts.append(
+             f"        *   **CRITICAL CLARIFICATION FOR THIS BEAT: Effectively, NO numbers are permitted for general counting or phrasing (Rule 3) in this scene. All mentions of numbers must strictly fulfill Rule 1.A requirements.**\n"
+        )
+    else:
+        rule3_text_for_prompt_parts.append(
+            f"    Any use under Rule 3 (either for arity, if permitted above, or for the limited phrasing with 'one'/'two'/'three', if permitted above) must be EXTREMELY sparing (ideally avoided), verifiably essential for fluency, not confused with Rule 1.A inputs, and NOT be a number listed as forbidden in Rule 4 (Rule 4 always takes precedence).\n"
+        )
+    
+    rule3_text_for_prompt_parts.append(f"{gt_counting_caution_for_gen_prompt.rstrip() + ('\\n' if gt_counting_caution_for_gen_prompt.strip() else '')}\n")
+    rule3_text_for_prompt = "".join(rule3_text_for_prompt_parts)
+
     ultra_strict_instruction = (
         f"**Narrative Challenge & Your Writing Guide for This Scene (CRITICAL: Adhere Flawlessly. Failure to meet these numerical rules, especially exact frequencies in Rule 1.A, will result in rejection.):**\n"
         f"Your main goal is to weave a compelling scene. However, for this specific task, you must precisely control how numbers are mentioned, turning constraints into creative storytelling:\n\n"
-        f"{rule1_header}{rule1_summary_section}{rule1_explanation_section}" # Rule 1 broken down
+        f"{rule1_header}{rule1_summary_section}{rule1_explanation_section}"
         f"**2.  The Unspoken Outcome (ABSOLUTE RULE - NO EXCEPTIONS):** {result_handling_rule_text_for_prompt}\n\n"
-        f"**3.  Permitted Narrative Flourishes (Use EXTREMELY Sparingly, ONLY if Essential for Fluency, AND Not Forbidden by Rule 4):\n**"
-        f"    You MAY use {may_use_gen_clause_content_detailed_for_prompt} for general color, IF TRULY NECESSARY for narrative flow AND the number is NOT listed in Rule 4 (Forbidden Numbers). Rule 4 takes precedence. Do not use these permitted flourishes in a way that could be confused with the required input numbers from Rule 1. If a number is needed for Rule 1, its use there counts towards its frequency; it cannot then also be a 'free' flourish unless Rule 1 requires multiple mentions and Rule 3 also permits it for phrasing (a rare case, check Rule 1.A carefully).\n"
-        f"{gt_counting_caution_for_gen_prompt.rstrip() + ('\\n' if gt_counting_caution_for_gen_prompt.strip() else '')}\n"
+        f"{rule3_text_for_prompt}"
         f"**4.  Whispers Best Left Unheard (ABSOLUTELY Forbidden Numbers for THIS SCENE - NO EXCEPTIONS):\n**"
         f"    Strictly AVOID MENTIONING these specific numbers in ANY FORM (word or digit): {must_avoid_str_for_generator_prompt_detailed}. This rule OVERRIDES Rule 3 if there's a conflict. If a number is on this forbidden list, it cannot be used, period.\n\n"
         f"**5.  The Rule of No Other Numbers (CRITICAL & ABSOLUTE - NO EXCEPTIONS):\n**"
         f"    {no_other_numbers_rule_text_for_prompt} Any number not explicitly justified by Rule 1.A (with exact frequency) or Rule 3 (and not overridden by Rule 4) is an error.\n\n"
         f"{prior_results_handling_rule_for_prompt}"
-        f"Focus on clear storytelling that naturally implies the calculations based on these strict numerical constraints. The most common errors are failing to meet exact frequencies for Rule 1.A, re-stating numbers (numerical summaries), or using numbers not explicitly permitted by these rules. Double-check your work against ALL rules, especially 1.A, before finalizing your scene."
+        f"Focus on clear storytelling that naturally implies the calculations based on these strict numerical constraints. The most common errors are failing to meet exact frequencies for Rule 1.A, re-stating numbers (numerical summaries), or using numbers not explicitly permitted by these rules. Pay special attention to the interaction between Rule 1.A, Rule 3, and Rule 4 for numbers like 'one', 'two', and 'three'. Double-check your work against ALL rules, especially 1.A, before finalizing your scene."
     )
 
     context_snippet = clean_snippet(context.last_scene_text, max_len=config_obj.BEAT_CONTEXT)
@@ -4140,41 +4220,40 @@ def _generate_narrative_recursive(
                 f"Added {len(examples_to_actually_use)} MEDIAN-specific few-shot examples (NEW RULE: ALL INPUTS & FREQUENCIES MENTIONED) to the initial generator prompt for Op: {node.op}."
             )
 
-    # --- Define and add the MANDATORY PRE-WRITING CHECKLIST ---
-    mandatory_pre_writing_checklist = (
+    initial_user_message_parts.append(
         "\n\n**MANDATORY PRE-WRITING CHECKLIST & MENTAL WALKTHROUGH (DO THIS BEFORE GENERATING TEXT - YOUR SUCCESS DEPENDS ON IT):**\n"
         "Before you write a single word of the narrative, meticulously review your plan against these critical points. This is not optional.\n\n"
         "**1. Rule 1.A - Exact Frequencies - DETAILED PLAN:**\n"
         "    *   **Identify ALL Required Numbers & Frequencies:** Look at the 'SUMMARY OF REQUIRED NUMBER FREQUENCIES FOR THIS SCENE' (Rule 1.A in your Writing Guide above). List each number and its exact required count.\n"
-        "    *   **Plan Each Distinct Mention:** For EACH number and EACH required instance of it, mentally (or on a scratchpad) outline a *specific, distinct narrative event or discovery* where this number will be mentioned. \n"
-        f"        *   Example: If 'one' (value: {config_obj.INVALID_RESULT_PLACEHOLDER+1}) is required 2 times, your plan MUST include two separate narrative elements: \n"
-        f"            *   Mention 1 of 'one': e.g., 'A single glowing {safe_primary_object_for_fstring} was found under the arch.'\n"
-        f"            *   Mention 2 of 'one': e.g., 'Later, another lone {safe_primary_object_for_fstring} was spotted near the fountain.'\n"
-        f"        *   Example: If 'four' (value: {config_obj.INVALID_RESULT_PLACEHOLDER+4}) is required 1 time, your plan includes: \n"
-        f"            *   Mention 1 of 'four': e.g., 'A cache revealed four ancient {safe_primary_object_for_fstring}s.'\n"
-        "    *   **Confirm Full Coverage:** Have you planned a distinct narrative mention for *every single required instance* of *every single required number* from Rule 1.A? Are you certain you will meet the exact frequencies – no more, no less?\n\n"
+        "    *   Plan Each Distinct Mention:** For EACH number and EACH required instance of it (e.g., if 'two' is needed 3 times, plan 3 separate narrative events for 'two'), mentally outline a *specific, distinct narrative event, discovery, or observation* where this number will be mentioned as a direct input to THIS operation. **Each of these planned mentions must be a unique piece of storytelling.**\n"
+        f"        *   Example: If 'one' is required 2 times by Rule 1.A for '{safe_primary_object_for_fstring}':\n"
+        f"            *   Plan for Mention 1 of 'one': e.g., 'A single {safe_primary_object_for_fstring} was found under the arch.' (This is one distinct narrative element for a Rule 1.A input).\n"
+        f"            *   Plan for Mention 2 of 'one': e.g., 'Later, another lone {safe_primary_object_for_fstring} was spotted near the fountain.' (This is a second, separate distinct narrative element for a Rule 1.A input).\n"
+        "    *   **Confirm Full Coverage & No Phrasing Confusion:** Have you planned a distinct narrative mention for *every single required instance* from Rule 1.A? Are these mentions clearly direct inputs and NOT general phrasing uses (unless Rule 3 explicitly allows it for numbers NOT covered by Rule 1.A or Rule 4)?\n\n"
         "**2. Rule 1.B - NO Numerical Summaries/Re-listing:**\n"
         "    *   Am I absolutely certain that my narrative will NOT contain any sentences or phrases that re-list, summarize, or total up the numbers I've just introduced as inputs? (e.g., AVOID: 'So, she had found one, then another one, and also five items...'). This is a critical error.\n\n"
         "**3. Rule 2 - Implicit Outcome:**\n"
         "    *   Is the numerical result of THIS scene's operation (e.g., the sum, the minimum, the median value itself) kept entirely IMPLICIT and NOT stated numerically in the narrative?\n\n"
-        "**4. Rule 3 & 4 - Permitted vs. Forbidden Numbers:**\n"
-        "    *   If I am considering using any small numbers for general phrasing (Rule 3), are they: \n"
-        "        a) Genuinely essential for narrative fluency? \n"
-        "        b) Used EXTREMELY sparingly? \n"
-        "        c) ABSOLUTELY NOT on the forbidden list in Rule 4? (Rule 4 always wins).\n\n"
+        "**4. Rule 3 & 4 - Permitted vs. Forbidden Numbers (CRITICAL CHECK for 'one', 'two', 'three'):**\n"
+        "    *   **Review Rule 3 and Rule 4 in your Writing Guide CAREFULLY, especially the new detailed clarifications regarding 'one', 'two', 'three'.**\n"
+        "    *   If I am considering using 'one', 'two', or 'three' for general phrasing (Rule 3), I must first confirm:\n"
+        "        a) Is this number ALREADY being used to fulfill a Rule 1.A requirement? If yes, IT CANNOT also be used for general phrasing in this scene.\n"
+        "        b) Is this number listed as FORBIDDEN in Rule 4? If yes, I CANNOT use it AT ALL.\n"
+        "        c) Only if it's NOT needed for Rule 1.A AND NOT forbidden by Rule 4, is its use for phrasing genuinely essential and extremely sparing?\n\n"
         "**5. Rule 5 - No Other Numbers:**\n"
         "    *   Have I ensured NO other numbers, counts, or extraneous figures will appear beyond what's strictly allowed by Rule 1.A (with exact frequencies) and Rule 3 (and not forbidden by Rule 4)?\n\n"
-        "**Only after you have mentally confirmed 'YES' to all applicable checklist items and have a clear plan for Rule 1.A, should you proceed to write the narrative. Your primary goal is flawless adherence to these numerical rules within a coherent story.**"
+        "**6. Rule 3 - Minimalist Approach to Flourishes:**\n"
+    "    *   Am I only using numbers for Rule 3 (phrasing/arity count) if it's *absolutely unavoidable* for narrative flow AND explicitly permitted by the narrow conditions of Rule 3 for this beat? My default should be to AVOID any Rule 3 numbers unless critically necessary and clearly allowed.\n\n"
+        "**Only after you have mentally confirmed 'YES' to all applicable checklist items and have a clear plan for Rule 1.A, and have specifically double-checked the handling of 'one', 'two', 'three' against Rules 1.A, 3, and 4, should you proceed to write the narrative. Your primary goal is flawless adherence to these numerical rules within a coherent story.**"
     )
-    initial_user_message_parts.append(mandatory_pre_writing_checklist)
 
     initial_user_message_parts.append(f'\n\n**Continue From (End of last scene):**\n"...{context_snippet}..."\n\n')
     initial_user_message_parts.append(f"**Your Response:**\nWrite ONLY the narrative text for this new scene, continuing smoothly. Do not add titles, notes, or anything outside the story itself.")
     initial_user_message_for_generator = "".join(initial_user_message_parts)
 
-    py_validator_enforce_result_presence = False # For intermediate beats, result is implied
+    py_validator_enforce_result_presence = False 
     validate_beat_numbers = make_number_validator(
-        allowed_atoms_list=all_direct_atomic_inputs_as_list, # List with counts
+        allowed_atoms_list=all_direct_atomic_inputs_as_list, 
         forbidden_atoms=forbidden_for_current_beat_py_validator,
         operand_count=actual_arity_for_current_op,
         correct_result_for_beat=correct_result,
@@ -4192,10 +4271,9 @@ def _generate_narrative_recursive(
         "**Your paramount responsibilities for this scene are:**\n"
         "1.  **Narrative Coherence:** Write an engaging scene that smoothly continues the story from the provided snippet.\n"
         "2.  **ULTRA-STRICT NUMERICAL PRECISION:** This is non-negotiable and your primary constraint. You MUST meticulously follow ALL rules in the 'Narrative Challenge & Your Writing Guide for This Scene' section of the user prompt. Pay fanatical attention to:\n"
-        "    *   **Rule 1.A (Exact Frequencies):** Mentioning EACH required number EXACTLY the specified number of times, with each mention being a distinct narrative element. No more, no less.\n"
-        "    *   **Rule 1.B (No Summaries):** AVOID any summarizing statements that re-list numbers already introduced as inputs.\n"
+        "    *   **Rule 1 (Exact Frequencies):** Mentioning EACH required number EXACTLY the specified number of times. No more, no less. Each mention must be a clear, direct reference to a quantity of items involved in this scene's core action. AVOID any summarizing statements that re-list numbers already introduced as inputs.\n"
         "    *   **Rule 2 (Implicit Outcome):** The numerical result of THIS scene's operation MUST NOT be stated explicitly.\n"
-        "    *   **Rule 4 & 5 (Forbidden & No Other Numbers):** Absolutely NO other numbers (words or digits) beyond those explicitly permitted by Rule 1.A and Rule 3. Any number not explicitly listed as 'required' or 'permitted for phrasing' (and not forbidden) is an error.\n\n"
+        "    *   **Rule 4 & 5 (Forbidden & No Other Numbers):** Absolutely NO other numbers (words or digits) beyond those explicitly permitted by Rule 1 and Rule 3. Any number not explicitly listed as 'required' or 'permitted for phrasing' is forbidden.\n\n"
         "**Output ONLY the clean narrative text for the scene.** Do not include titles, notes, analysis, or any meta-commentary. Your adherence to the numerical rules is as critical as your storytelling."
     )
     operator_specific_system_focus = ""
@@ -4243,15 +4321,16 @@ def _generate_narrative_recursive(
             ultra_strict_instruction_for_llm_validator_context=ultra_strict_instruction,
             current_max_beat_completion_tokens=current_max_beat_completion_tokens,
             sample_index=context.sample_index,
-            context_config=config_obj, # Pass the config from context
+            context_config=config_obj, 
             logger_obj=logger_obj,
             encoder_obj=encoder,
             context=context,
             current_node_conceptual_name=current_node_conceptual_name,
             beat_number_in_sample=context.beat_counter['current'],
+            actual_arity_val=actual_arity_for_current_op, # <<< PASSING THE VALUE HERE
             is_current_beat_root_node=is_root,
             overall_ground_truth_answer_val=context.overall_ground_truth_answer,
-            primary_object_name=primary_object_as_string,
+            primary_object_name=primary_object_as_string, 
             forbidden_prior_results_and_gt_for_llm_validator=forbidden_for_current_beat_py_validator,
             correct_result_val=correct_result,
             direct_atom_values_val=set(direct_atom_values_counts.keys()),
@@ -4259,8 +4338,6 @@ def _generate_narrative_recursive(
         )
 
         if llm_validated_beat_text:
-            # Python validator (make_number_validator) is now primarily for sanity checking counts
-            # as the LLM validator is meant to be the main gatekeeper for complex rules.
             if validate_beat_numbers(llm_validated_beat_text):
                 beat_text_final_validated = llm_validated_beat_text
                 logger_obj.info(
@@ -4271,7 +4348,6 @@ def _generate_narrative_recursive(
                 logger_obj.warning(
                     f"[Sample {context.sample_index+1}, Beat Op: {node.op}] Python validator FAILED for LLM-validated beat (likely count issue). Outer attempt {attempt_outer} failed."
                 )
-                # Log the ultra_strict_instruction that led to this Python validator failure after LLM validation
                 logger_obj.debug(f"Dumping ultra_strict_instruction for Op {node.op} (Python validator fail after LLM pass):\n{ultra_strict_instruction}")
         else:
             logger_obj.warning(
@@ -4305,7 +4381,7 @@ def _generate_narrative_recursive(
         f"Beat {context.beat_counter['current']} for Op {node.op} successful. Introduced atoms (unique) updated with current beat's direct atoms: {direct_atom_values_counts.keys()}"
     )
 
-    # --- Padding Logic (remains the same) ---
+    # --- Padding Logic ---
     if not is_root:
         if context.padding_stats["padding_per_slot"] > 0 and context.max_pad_paragraphs > 0:
             num_paragraphs_for_this_slot = random.randint(1, context.max_pad_paragraphs)
@@ -4346,8 +4422,8 @@ def _generate_narrative_recursive(
                 overall_ground_truth_answer=context.overall_ground_truth_answer,
                 is_root_node_being_validated=False,
                 conceptual_input_values=None,
-                config_obj=context.config, # Use context's config
-                logger_obj=context.logger, # Use context's logger
+                config_obj=context.config, 
+                logger_obj=context.logger, 
             )
 
             current_padding_tokens_for_slot = 0
@@ -4360,7 +4436,7 @@ def _generate_narrative_recursive(
 
                 remaining_token_budget_for_pad_para = max_tokens_for_this_padding_segment - current_padding_tokens_for_slot
                 actual_max_tokens_for_this_para = min(remaining_token_budget_for_pad_para, config_obj.PADDING_MAX_TOKENS)
-                if actual_max_tokens_for_this_para <= 10: # Ensure config_obj is from context
+                if actual_max_tokens_for_this_para <= 10: 
                     logger_obj.info(f"Remaining token budget for padding paragraph ({actual_max_tokens_for_this_para}) too small. Skipping further padding.")
                     break
 
@@ -4368,7 +4444,7 @@ def _generate_narrative_recursive(
                 if i > 0 : num_paras_str_for_prompt = "another"
 
                 padding_user_prompt = padding_user_prompt_template.format(
-                    snippet=clean_snippet(context.last_scene_text, max_len=config_obj.PADDING_CONTEXT), # Ensure config_obj is from context
+                    snippet=clean_snippet(context.last_scene_text, max_len=config_obj.PADDING_CONTEXT), 
                     num_paras_str=num_paras_str_for_prompt
                 )
 
@@ -4377,16 +4453,16 @@ def _generate_narrative_recursive(
                     user_prompt=padding_user_prompt,
                     max_completion_tokens=actual_max_tokens_for_this_para,
                     validate_fn=validate_padding,
-                    retries=config_obj.MAX_PAD_RETRIES, # Ensure config_obj is from context
+                    retries=config_obj.MAX_PAD_RETRIES, 
                     sample_index=context.sample_index,
-                    temperature=config_obj.CREATIVE_NARRATIVE_TEMP, # Ensure config_obj is from context
+                    temperature=config_obj.CREATIVE_NARRATIVE_TEMP, 
                     reasoning_settings={"exclude": True}
                 )
 
                 if padding_text:
                     ptoks = len(context.encoder.encode(padding_text))
                     if context.tokens_used + ptoks + config_obj.MAX_TOKENS_BUFFER <= config_obj.MAX_TOTAL_TOKENS and \
-                       current_padding_tokens_for_slot + ptoks <= max_tokens_for_this_padding_segment : # Ensure config_obj is from context
+                       current_padding_tokens_for_slot + ptoks <= max_tokens_for_this_padding_segment : 
 
                         context.scenes.append(f"\n[Padding Segment]\n{padding_text}\n[/Padding Segment]\n")
                         context.tokens_used += ptoks

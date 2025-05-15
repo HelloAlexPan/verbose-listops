@@ -58,7 +58,7 @@ logger.setLevel(LOG_LEVEL)
 
 # Create and configure file handler for detailed logs
 os.makedirs("logs", exist_ok=True)
-file_handler = logging.FileHandler("logs/validator_detailed.log")
+file_handler = logging.FileHandler("logs/final_validator_detailed.log")
 file_handler.setLevel(LOG_LEVEL)
 file_format = logging.Formatter(
     "%(asctime)s - %(levelname)s - [%(threadName)s] - %(message)s"

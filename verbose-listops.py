@@ -17,6 +17,7 @@ import re
 import concurrent.futures
 import inflect
 import tiktoken
+import inspect
 from functools import lru_cache
 from openai import OpenAI
 import shutil
@@ -35,7 +36,7 @@ load_dotenv()
 # fmt: off
 # --- Batch Settings ---
 NUM_SAMPLES_TO_GENERATE = 10
-DEFAULT_MAX_WORKERS = 100
+DEFAULT_MAX_WORKERS = 50
 MODEL = "google/gemini-2.5-flash-preview:thinking"
 STATIC_CHECKER_MODEL = "google/gemini-2.5-flash-preview:thinking"
 DATASETS_DIR = "datasets"
@@ -45,9 +46,9 @@ PROD_RUN: bool = True
 class Config:
     MAX_OPS: int = 8
     MAX_BRANCH: int = 8
-    MIN_ARITY: int = 6
+    MIN_ARITY: int = 4
     MIN_ATOM_VAL: int = 1
-    MAX_ATOM_VAL: int = 9
+    MAX_ATOM_VAL: int = 30
     MAX_TOTAL_TOKENS: int = 10000
     EARLY_TERMINATION_PROBABILITY: float = 0.0
     PADDING_MAX_TOK_PERCENT: float = 0.75
@@ -2177,83 +2178,63 @@ def extract_numbers_from_text(
 
 # --- Factory for number validation ---
 def make_number_validator(
-    allowed_atoms_list: list[int],  # Changed from Set[int] to List[int]
+    allowed_atoms_list: list[int],
     forbidden_atoms: Set[int],
     operand_count: int,
     correct_result_for_beat: int | None,
     strict_zero: bool = False,
-    enforce_result_presence: bool = True,
+    enforce_result_presence: bool = True, # This flag is about whether the *result* must be present
     operation_type: str | None = None,
     overall_ground_truth_answer: int | None = None,
     is_root_node_being_validated: bool = False,
-    conceptual_input_values: Set[int] | None = None,  # This remains a set of values
+    conceptual_input_values: Set[int] | None = None,
     config_obj: Config = config,
     logger_obj: logging.Logger = logger,
 ) -> Callable[[str], bool]:
     logger_obj.debug(
-        f"Creating validator with: Allowed_Atoms_List (counts matter)={Counter(allowed_atoms_list)}, Forbidden_Set={forbidden_atoms}, OpCount={operand_count}, "
-        f"Result={correct_result_for_beat}, StrictZero={strict_zero}, "
-        f"EnforceResultPresence={enforce_result_presence}, Op={operation_type}, OverallGT={overall_ground_truth_answer}, IsRoot={is_root_node_being_validated}"
+        f"Creating Python validator with: Allowed_Atoms_List (counts matter)={Counter(allowed_atoms_list)}, "
+        f"Forbidden_Set={sorted(list(forbidden_atoms)) if forbidden_atoms else 'None'}, OpCount={operand_count}, "
+        f"ResultForBeat={correct_result_for_beat}, StrictZero={strict_zero}, "
+        f"EnforceResultPresence={enforce_result_presence}, Op={operation_type}, OverallGT={overall_ground_truth_answer}, "
+        f"IsRoot={is_root_node_being_validated}"
     )
 
-    # Convert allowed_atoms_list to a Counter for easy frequency checking
     required_atoms_counts = Counter(allowed_atoms_list)
-    # For logging and some checks, a set of unique required atoms is still useful
-    unique_required_atoms_set = set(allowed_atoms_list)
+    # unique_required_atoms_set = set(allowed_atoms_list) # Kept for potential future use, not directly used in current logic
 
-    IMPLICITLY_ALLOWED_SMALL_NUMBERS = set(
-        range(
-            config_obj.MIN_ALLOWED_SMALL_NUMBER, config_obj.MAX_ALLOWED_SMALL_NUMBER + 1
-        )
-    )
-
-    is_result_also_an_input_atom = False
-    if (
-        correct_result_for_beat is not None and allowed_atoms_list
-    ):  # Check against the list
-        if (
-            correct_result_for_beat in required_atoms_counts
-            and required_atoms_counts[correct_result_for_beat] > 0
-        ):
-            is_result_also_an_input_atom = True
+    is_result_also_an_input_atom_flag = False
+    if correct_result_for_beat is not None and required_atoms_counts:
+        if required_atoms_counts.get(correct_result_for_beat, 0) > 0:
+            is_result_also_an_input_atom_flag = True
             logger_obj.debug(
-                f"Validator: Result {correct_result_for_beat} is ALSO a direct atomic input for Op {operation_type} (required count: {required_atoms_counts[correct_result_for_beat]})."
+                f"Validator Info: Result {correct_result_for_beat} is ALSO a direct atomic input for Op {operation_type} (required count: {required_atoms_counts[correct_result_for_beat]})."
             )
 
-    if operation_type == "MED":
-        logger_obj.info(
-            f"MED OPERATION VALIDATION (New Rule): All atomic inputs (with counts: {required_atoms_counts}) must be mentioned. "
-            f"The median result ({correct_result_for_beat}) must be implicit."
-        )
-
     def validate(text: str) -> bool:
-        found_numbers_list = extract_numbers_from_text(text)  # Returns list[int]
+        found_numbers_list = extract_numbers_from_text(text)
         found_numbers_counts = Counter(found_numbers_list)
 
-        text_preview = text[:100].replace("\n", " ") + (
-            "..." if len(text) > 100 else ""
-        )
-        logger_obj.debug(f'Validator Input Text: "{text_preview}"')
-        logger_obj.debug(f"Validator Found Numbers (Counts): {found_numbers_counts}")
-        logger_obj.debug(f"Validator Required Atoms (Counts): {required_atoms_counts}")
-
+        text_preview = text[:150].replace(chr(10), " ") + ("..." if len(text) > 150 else "")
+        
         validation_report = {
             "status": "PASS",
             "reason": "All validation checks passed",
             "operation_type": operation_type,
             "text_preview": text_preview,
-            "found_numbers_counts": dict(found_numbers_counts),  # Log counts
-            "required_atoms_counts": dict(required_atoms_counts),  # Log counts
+            "found_numbers_counts": dict(found_numbers_counts),
+            "required_atoms_counts": dict(required_atoms_counts),
             "operand_count": operand_count,
-            "correct_result": correct_result_for_beat,
+            "correct_result_for_beat_in_report": correct_result_for_beat,
+            "is_result_also_an_input_atom_in_report": is_result_also_an_input_atom_flag,
             "is_root_node": is_root_node_being_validated,
-            "enforce_result_presence_flag": enforce_result_presence,
             "overall_ground_truth_answer_for_this_validation_context": overall_ground_truth_answer,
-            "missing_required_details": [],  # Will store dicts like {'number': N, 'required_count': X, 'found_count': Y}
-            "forbidden_extras_details": [],  # Will store dicts like {'number': N, 'reason': 'reason_text'}
-            "details": [],
+            "forbidden_atoms_for_this_beat": sorted(list(forbidden_atoms)) if forbidden_atoms else [], # Log the forbidden set used
+            "missing_required_details": [],
+            "forbidden_extras_details": [],
+            "details": [], 
         }
 
+        # --- Strict Zero Check ---
         if strict_zero:
             allowed_for_strict_zero = config_obj.ALWAYS_ALLOWED_PHRASING_NUMBERS_SET
             disallowed_in_strict_zero_counts = Counter()
@@ -2264,6 +2245,8 @@ def make_number_validator(
             if disallowed_in_strict_zero_counts:
                 validation_report["status"] = "FAIL"
                 validation_report["reason"] = "STRICT_ZERO_VIOLATION"
+                reason_str = f"Strict zero mode: Found numbers with counts {dict(disallowed_in_strict_zero_counts)} not in allowed set {allowed_for_strict_zero}."
+                validation_report["details"].append(reason_str)
                 validation_report["forbidden_extras_details"] = [
                     {
                         "number": n,
@@ -2272,235 +2255,173 @@ def make_number_validator(
                     }
                     for n, c in disallowed_in_strict_zero_counts.items()
                 ]
-                validation_report["details"].append(
-                    f"Strict zero mode: Found numbers with counts {dict(disallowed_in_strict_zero_counts)} not in {allowed_for_strict_zero}."
-                )
                 _log_failed_validation(text, validation_report, logger_obj)
                 return False
-            return True
+            validation_report["details"].append("Strict zero check passed.")
+            # If strict_zero is the only mode of failure/pass (e.g. for INTRO), we'd return here.
+            # But for main beats, other checks follow. If it passes strict_zero and all others, final return True handles it.
 
-        # Rule 1: IMPLICIT RESULT HANDLING (Result of THIS operation)
-        # The result of ANY operation must be implicit and not stated numerically,
-        # UNLESS that result value also happens to be one of the direct atomic inputs for THIS beat.
-        if (
-            correct_result_for_beat is not None
-            and found_numbers_counts[correct_result_for_beat] > 0
-        ):
-            # If the result is also an input, its presence is governed by Rule 2 (Required Atoms).
-            # The check here is if it's present *and not justified as an input*, or framed as the outcome.
-            # The Python validator primarily checks presence. The LLM validator checks framing.
-            if not is_result_also_an_input_atom:
-                # This means the result was found, and it was NOT one of the required inputs.
-                # This is a failure if it's stated explicitly.
+        # --- Rule: IMPLICIT RESULT HANDLING ---
+        if correct_result_for_beat is not None and found_numbers_counts.get(correct_result_for_beat, 0) > 0:
+            if not is_result_also_an_input_atom_flag:
                 validation_report["status"] = "FAIL"
-                validation_report["reason"] = "IMPLICIT_RESULT_STATED_EXPLICITLY"
-                validation_report["details"].append(
-                    f"Result {correct_result_for_beat} (Op: {operation_type}) should be implicit but was found explicitly stated (count: {found_numbers_counts[correct_result_for_beat]}) and was not also a required input."
+                current_reason = "IMPLICIT_RESULT_STATED_EXPLICITLY"
+                validation_report["reason"] = current_reason if validation_report["reason"] == "All validation checks passed" else f"{validation_report['reason']};{current_reason}"
+                reason_str = (
+                    f"Result Violation: Result {correct_result_for_beat} (Op: {operation_type}) should be implicit but was found explicitly stated "
+                    f"(count: {found_numbers_counts[correct_result_for_beat]}) and was not also a required input."
                 )
-                _log_failed_validation(text, validation_report, logger_obj)
-                return False
+                validation_report["details"].append(reason_str)
+                validation_report["forbidden_extras_details"].append({
+                    "number": correct_result_for_beat,
+                    "count": found_numbers_counts[correct_result_for_beat],
+                    "reason": "Result stated explicitly when it should be implicit and was not a required input."
+                })
             else:
-                # Result is also an input. Its presence as an input is fine.
-                # The generator's prompt (Rule 2 Special Note) guides the LLM on framing.
-                # The Python validator allows its presence if it's a required input.
-                # We need to ensure it's not *over-represented* beyond its required input count + its potential single mention as a result (which is forbidden if not an input).
-                # If result R is required K times as input, and found K+1 times, and R is not allowed for phrasing, then the +1 is the forbidden explicit result.
-                # This is complex. For now, the Python validator focuses on: if result is found, and it's NOT an input, fail.
-                # If it IS an input, its count is checked by Rule 2. Any excess beyond required input count will be caught by Rule 4 (Extraneous).
-                logger_obj.debug(
-                    f"Python Validator: Result {correct_result_for_beat} (Op: {operation_type}) found. It's also a required input. Its count will be checked against required input counts. Framing is LLM's job."
+                validation_report["details"].append(
+                    f"Result Info: Result {correct_result_for_beat} (Op: {operation_type}) was found, and it IS also a required input. "
+                    f"Its count ({found_numbers_counts.get(correct_result_for_beat,0)}) will be assessed under Rule 1.A. Framing as result vs. input is LLM's job."
                 )
+        elif correct_result_for_beat is not None:
+             validation_report["details"].append(f"Result Info: Result {correct_result_for_beat} (Op: {operation_type}) was not found numerically (correct for implicit result).")
 
-        # Rule 2: All REQUIRED ATOMIC OPERANDS MUST be present with correct frequencies
+        # --- Rule: REQUIRED ATOMIC OPERANDS (Rule 1.A) ---
         current_missing_required = []
+        current_over_counts_for_required = [] 
+
         for num, required_count in required_atoms_counts.items():
-            found_count = found_numbers_counts[num]
+            found_count = found_numbers_counts.get(num, 0)
             if found_count < required_count:
                 current_missing_required.append(
-                    {
-                        "number": num,
-                        "required_count": required_count,
-                        "found_count": found_count,
-                        "missing_count": required_count - found_count,
-                    }
+                    {"number": num, "required_count": required_count, "found_count": found_count, "missing_count": required_count - found_count}
+                )
+            elif found_count > required_count: 
+                current_over_counts_for_required.append(
+                    {"number": num, "required_count": required_count, "found_count": found_count, "excess_count": found_count - required_count}
                 )
 
         if current_missing_required:
             validation_report["status"] = "FAIL"
-            validation_report["reason"] = (
-                "MISSING_REQUIRED_OPERANDS_OR_INSUFFICIENT_COUNT"
-            )
+            current_reason = "MISSING_REQUIRED_OPERANDS_OR_INSUFFICIENT_COUNT"
+            validation_report["reason"] = current_reason if validation_report["reason"] == "All validation checks passed" else f"{validation_report['reason']};{current_reason}"
             validation_report["missing_required_details"] = current_missing_required
             validation_report["details"].append(
-                f"RequiredAtoms (Counts): {dict(required_atoms_counts)}, Found (Counts): {dict(found_numbers_counts)}. Deficiencies: {current_missing_required}."
+                f"Rule 1.A Fail (Missing/Insufficient): Required {dict(required_atoms_counts)}, Found {dict(found_numbers_counts)}. Deficiencies: {current_missing_required}."
             )
-            _log_failed_validation(text, validation_report, logger_obj)
-            return False
+        else:
+            validation_report["details"].append("Rule 1.A (Required Atoms - Presence & Min Count) passed.")
+
+        if current_over_counts_for_required:
+            validation_report["status"] = "FAIL"
+            current_reason = "EXCESS_OF_REQUIRED_OPERANDS"
+            validation_report["reason"] = current_reason if validation_report["reason"] == "All validation checks passed" else f"{validation_report['reason']};{current_reason}"
+            for item in current_over_counts_for_required:
+                validation_report["forbidden_extras_details"].append({
+                    "number": item["number"], "count": item["excess_count"], 
+                    "reason": f"Rule 1.A Over-count: Required {item['required_count']} time(s), but found {item['found_count']} (excess of {item['excess_count']})."
+                })
+            validation_report["details"].append(
+                f"Rule 1.A Fail (Excess of Required): {current_over_counts_for_required}."
+            )
+        elif not current_missing_required: # Only log pass if no missing and no overcounts for required
+            validation_report["details"].append("Rule 1.A (Required Atoms - Exact Count) passed.")
+
 
         # --- Advanced Check for Extraneous and Forbidden Numbers ---
-        # Start with all found numbers and progressively subtract/excuse legitimate ones.
         potentially_extraneous_counts = found_numbers_counts.copy()
-
-        # 1. Subtract counts of correctly provided required atoms
         for num, req_count in required_atoms_counts.items():
-            # We only subtract up to the required count. If more were found, they remain.
-            actually_found_for_this_req_num = min(
-                potentially_extraneous_counts[num], req_count
-            )
-            potentially_extraneous_counts[num] -= actually_found_for_this_req_num
-            if potentially_extraneous_counts[num] == 0:
-                del potentially_extraneous_counts[num]  # Clean up zero counts
+            val_to_subtract = min(potentially_extraneous_counts.get(num, 0), req_count)
+            if potentially_extraneous_counts.get(num, 0) > 0:
+                potentially_extraneous_counts[num] -= val_to_subtract
+                if potentially_extraneous_counts[num] == 0:
+                    del potentially_extraneous_counts[num]
+        
+        validation_report["details"].append(f"After subtracting Rule 1.A fulfilled counts, potentially_extraneous_counts: {dict(potentially_extraneous_counts)}")
 
-        # `potentially_extraneous_counts` now holds numbers found *in excess* of requirements, or numbers not required at all.
-
-        # 2. Excuse specific allowed numbers (phrasing, operand count)
-        #    These are excused if present, regardless of count (within reason, but hard to cap here).
-        #    The generator is prompted to use them sparingly.
-        numbers_to_fully_excuse_if_present = set()
-        numbers_to_fully_excuse_if_present.update(
-            config_obj.ALWAYS_ALLOWED_PHRASING_NUMBERS_SET
-        )
-        numbers_to_fully_excuse_if_present.update(IMPLICITLY_ALLOWED_SMALL_NUMBERS)
-        if operand_count > 0:  # Only excuse operand_count if it's positive
-            numbers_to_fully_excuse_if_present.add(operand_count)
-
-        # If the current beat's result was also an input, and it was found,
-        # its required input occurrences were already subtracted.
-        # If it was *not* an input, but was found, Rule 1 (IMPLICIT_RESULT_STATED_EXPLICITLY)
-        # should have already caught it if `enforce_result_presence` was effectively true for this check.
-        # The `correct_result_for_beat` itself, if found and not excused as an input, is an error.
-        # Let's ensure that if `correct_result_for_beat` is in `potentially_extraneous_counts`
-        # AND it was NOT an input atom, it's flagged (this re-iterates Rule 1 logic for safety here).
-        if (
-            correct_result_for_beat is not None
-            and potentially_extraneous_counts[correct_result_for_beat] > 0
-            and not is_result_also_an_input_atom
-        ):
-            validation_report["status"] = "FAIL"
-            validation_report["reason"] = "IMPLICIT_RESULT_STATED_EXPLICITLY_AS_EXTRA"
-            validation_report["forbidden_extras_details"].append(
-                {
-                    "number": correct_result_for_beat,
-                    "count": potentially_extraneous_counts[correct_result_for_beat],
-                    "reason": f"Result {correct_result_for_beat} stated explicitly and not a required input.",
-                }
-            )
-            # No need to _log_failed_validation yet, will be caught at the end if this is the only issue.
-
-        # Remove counts of these excusable numbers from `potentially_extraneous_counts`
-        temp_excused_counts = Counter()
-        for num_to_excuse in numbers_to_fully_excuse_if_present:
-            if potentially_extraneous_counts[num_to_excuse] > 0:
-                temp_excused_counts[num_to_excuse] = potentially_extraneous_counts[
-                    num_to_excuse
-                ]
-                del potentially_extraneous_counts[
-                    num_to_excuse
-                ]  # Remove all occurrences
-
-        if temp_excused_counts:
-            logger_obj.debug(
-                f"Validator: Excused phrasing/operand_count numbers (all occurrences): {dict(temp_excused_counts)}"
-            )
-
-        # `potentially_extraneous_counts` now holds numbers that are:
-        # - Not required atomic inputs (or are in excess of required counts).
-        # - Not the explicitly allowed phrasing/small/operand_count numbers.
-        # - Potentially the stated result (if it wasn't an input).
-
-        # 3. Check against the `forbidden_atoms` set (e.g., prior results, overall GT).
-        #    Any number in `potentially_extraneous_counts` that is also in `forbidden_atoms` is a "truly forbidden extra."
+        # Check against `forbidden_atoms` set (Rule 4).
         truly_forbidden_found_details = []
-        for num, count_found_extra in potentially_extraneous_counts.items():
+        for num, count_found_extra in dict(potentially_extraneous_counts).items(): 
             if count_found_extra > 0 and num in forbidden_atoms:
-                # It's forbidden AND it wasn't a required input (or was in excess) AND it wasn't an allowed phrasing number.
+                # This number is explicitly forbidden by Rule 4 AND it's not a Rule 1.A input (or is an excess of it).
                 truly_forbidden_found_details.append(
-                    {
-                        "number": num,
-                        "count": count_found_extra,
-                        "reason": "Present in forbidden_atoms set and not otherwise excused.",
-                    }
+                    {"number": num, "count": count_found_extra, "reason": "Present in forbidden_atoms set (Rule 4) and not a fulfilled Rule 1.A input."}
                 )
+                del potentially_extraneous_counts[num] # Remove so it's not double-penalized
 
         if truly_forbidden_found_details:
             validation_report["status"] = "FAIL"
-            validation_report["reason"] = "FORBIDDEN_NUMBERS_FOUND"
-            validation_report["forbidden_extras_details"].extend(
-                truly_forbidden_found_details
-            )
-            # Details already added to forbidden_extras_details
+            current_reason = "FORBIDDEN_NUMBERS_FOUND"
+            validation_report["reason"] = current_reason if validation_report["reason"] == "All validation checks passed" else f"{validation_report['reason']};{current_reason}"
+            validation_report["forbidden_extras_details"].extend(truly_forbidden_found_details)
+            validation_report["details"].append(f"Rule 4 Fail (Forbidden Numbers): {truly_forbidden_found_details}.")
+        else:
+            validation_report["details"].append("Rule 4 (Forbidden Numbers) passed.")
 
-        # 4. Any remaining counts in `potentially_extraneous_counts` are "other extraneous numbers."
-        #    However, we must first remove the `truly_forbidden_found_details` from it to avoid double penalizing.
+        # Any remaining counts in `potentially_extraneous_counts` are "other extraneous numbers" (Rule 5).
+        # These are numbers that were not Rule 1.A, not Rule 4 forbidden.
+        # They might be misuses of Rule 3 phrasing or just random numbers.
         other_extraneous_details = []
-        for item in truly_forbidden_found_details:
-            num_forbidden = item["number"]
-            count_forbidden = item["count"]
-            potentially_extraneous_counts[num_forbidden] -= count_forbidden
-            if potentially_extraneous_counts[num_forbidden] <= 0:
-                del potentially_extraneous_counts[num_forbidden]
-
-        # Now, whatever is left in potentially_extraneous_counts is truly extraneous and not specifically forbidden.
-        if potentially_extraneous_counts:  # If anything is left with count > 0
+        if potentially_extraneous_counts: 
             for num, count_extra in potentially_extraneous_counts.items():
                 if count_extra > 0:
+                    is_phrasing_candidate = num in config_obj.ALWAYS_ALLOWED_PHRASING_NUMBERS_SET
+                    is_operand_count_candidate = (operand_count > 0 and num == operand_count and num not in required_atoms_counts)
+                    
+                    reason_text = "Extraneous (Rule 5 Violation): Not required by Rule 1.A, not explicitly forbidden by Rule 4."
+                    if is_phrasing_candidate and not is_operand_count_candidate:
+                        reason_text = f"Potential Rule 3 Phrasing Misuse: Number '{num}' (from allowed phrasing set {config_obj.ALWAYS_ALLOWED_PHRASING_NUMBERS_SET}) used extraneously."
+                    elif is_operand_count_candidate and not is_phrasing_candidate:
+                         reason_text = f"Potential Rule 3 Arity Misuse: Operand count '{num}' used extraneously or incorrectly."
+                    elif is_operand_count_candidate and is_phrasing_candidate:
+                         reason_text = f"Potential Rule 3 Misuse: Number '{num}' (operand count and phrasing candidate) used extraneously."
+                    
                     other_extraneous_details.append(
-                        {
-                            "number": num,
-                            "count": count_extra,
-                            "reason": "Extraneous: Not required, not allowed phrasing/counting, not explicitly forbidden but still present.",
-                        }
+                        {"number": num, "count": count_extra, "reason": reason_text}
                     )
-
+            
             if other_extraneous_details:
                 validation_report["status"] = "FAIL"
-                if (
-                    validation_report["reason"] == "PASS"
-                    or validation_report["reason"] == "FORBIDDEN_NUMBERS_FOUND"
-                ):  # Avoid overwriting a more specific forbidden error
-                    validation_report["reason"] = "OTHER_EXTRANEOUS_NUMBERS_FOUND"
-                validation_report["forbidden_extras_details"].extend(
-                    other_extraneous_details
-                )
+                current_reason = "OTHER_EXTRANEOUS_NUMBERS_FOUND"
+                validation_report["reason"] = current_reason if validation_report["reason"] == "All validation checks passed" else f"{validation_report['reason']};{current_reason}"
+                validation_report["forbidden_extras_details"].extend(other_extraneous_details)
+                validation_report["details"].append(f"Rule 5 Fail (Other Extraneous Numbers): {other_extraneous_details}.")
+        
+        if not other_extraneous_details and not truly_forbidden_found_details and not current_over_counts_for_required: # Check if any "extras" were found by any category
+            validation_report["details"].append("No extraneous or forbidden numbers (beyond Rule 1.A needs) found.")
 
+
+        # --- Final Decision ---
         if validation_report["status"] == "FAIL":
-            # Consolidate details for logging
-            if validation_report["missing_required_details"]:
-                validation_report["details"].append(
-                    f"Missing/Insufficient: {validation_report['missing_required_details']}"
-                )
-            if validation_report["forbidden_extras_details"]:
-                validation_report["details"].append(
-                    f"Forbidden/Extraneous: {validation_report['forbidden_extras_details']}"
-                )
-            _log_failed_validation(text, validation_report, logger_obj)
+            if not (strict_zero and validation_report["reason"] == "STRICT_ZERO_VIOLATION"): # Avoid double logging if strict_zero was the only logged failure
+                _log_failed_validation(text, validation_report, logger_obj)
             return False
+        
+        # If strict_zero was true and it passed, and no other errors accumulated, then it's a pass.
+        if strict_zero and validation_report["status"] == "PASS":
+             validation_report["details"].append("All checks passed (strict zero mode was active and successful).")
+             return True # No need to call _log_failed_validation for a pass
 
-        logger_obj.debug(
-            f"Validation PASS (Strict Python Validator with counts for Op: {operation_type})"
-        )
+        # General pass if not strict_zero mode and status is still PASS
+        validation_report["details"].append("All validation checks passed.")
         return True
 
     return validate
-
 
 # Add a helper function to save failed validation attempts
 def _log_failed_validation(
     text: str, validation_report: dict, logger_obj: logging.Logger = logger
 ):
-    logger_obj.debug(f"Saving failed validation record")
+    logger_obj.debug(f"Saving failed validation record") # Keep this
     try:
         failed_validations_dir = os.path.join(LOG_DIR, "failed_validations")
         os.makedirs(failed_validations_dir, exist_ok=True)
         timestamp = datetime.datetime.now().strftime("%Y%m%d-%H%M%S-%f")
         operation = validation_report.get("operation_type", "unknown_op")
-        reason = validation_report.get("reason", "unknown_reason")
-        filename = f"validation_fail_{operation}_{reason}_{timestamp}.json"
+        reason_code = validation_report.get("reason", "unknown_reason") # Use a consistent name
+        filename = f"validation_fail_{operation}_{reason_code}_{timestamp}.json"
         filepath = os.path.join(failed_validations_dir, filename)
 
-        # Make a copy to avoid modifying the original report dict
         report_to_save = validation_report.copy()
-        # Convert Counter objects to dict for JSON serialization if they are still Counters
         if "found_numbers_counts" in report_to_save and isinstance(
             report_to_save["found_numbers_counts"], collections.Counter
         ):
@@ -2515,106 +2436,90 @@ def _log_failed_validation(
             )
 
         full_report_data = {
-            "validation_report": report_to_save,  # Use the modified copy
+            "validation_report": report_to_save,
             "full_text": text,
             "timestamp": timestamp,
         }
 
         with open(filepath, "w", encoding="utf-8") as f:
             json.dump(full_report_data, f, indent=2, ensure_ascii=False)
-        logger.debug(f"Saved failed validation record to {filepath}")
+        logger_obj.debug(f"Saved failed validation record to {filepath}")
 
-        sample_index = None
-        import inspect
-
-        try:
-            frames = inspect.stack()
-            for frame in frames:
-                if "context" in frame.frame.f_locals:
-                    ctx = frame.frame.f_locals["context"]
-                    if hasattr(ctx, "sample_index"):
-                        sample_index = ctx.sample_index
-                        break
-        except Exception as e:
-            logger.error(f"Error extracting sample_index from stack: {e}")
-
-        # Enhanced logging for LLM turns
-        found_counts_str = str(report_to_save.get("found_numbers_counts", {}))
-        req_counts_str = str(report_to_save.get("required_atoms_counts", {}))
-        missing_details_str = str(report_to_save.get("missing_required_details", []))
-        forbidden_details_str = str(report_to_save.get("forbidden_extras_details", []))
-
+        # --- Enhanced Logging for LLM Turns / Main Log ---
+        sample_index_str = "N/A"
         beat_info_str = ""
-        # (Code to extract beat_counter and narrative_anchor from stack remains the same)
-        # ...
-        for frame in frames:  # Added this loop back from original code
-            frame_locals = frame.frame.f_locals
-            if "narrative_anchor" in frame_locals:  # Check if key exists
-                narrative_anchor = frame_locals["narrative_anchor"]
-            if "context" in frame_locals:
-                ctx = frame_locals["context"]
-                if hasattr(ctx, "beat_counter"):
-                    beat_counter = ctx.beat_counter
-            if (
-                "narrative_anchor" in locals() and "beat_counter" in locals()
-            ):  # Check if variables are defined
-                if narrative_anchor and beat_counter:  # Then check if they have values
-                    break
-
-        if (
-            "beat_counter" in locals() and beat_counter
-        ):  # Check if beat_counter is defined and has a value
-            beat_info_str = f", Beat {beat_counter.get('current', '?')}/{beat_counter.get('total', '?')}"
         anchor_info_str = ""
-        if (
-            "narrative_anchor" in locals() and narrative_anchor
-        ):  # Check if narrative_anchor is defined and has a value
-            anchor_info_str = f", Anchor: '{narrative_anchor}'"
+        try:
+            # Attempt to get sample_index, beat_counter, narrative_anchor from call stack
+            # This part can be fragile; consider passing context if possible
+            frames = inspect.stack()
+            for frame_info in frames:
+                frame_locals = frame_info.frame.f_locals
+                if "context" in frame_locals:
+                    ctx = frame_locals["context"]
+                    if hasattr(ctx, "sample_index"):
+                        sample_index_str = str(ctx.sample_index + 1)
+                    if hasattr(ctx, "beat_counter"):
+                        bc = ctx.beat_counter
+                        beat_info_str = f", Beat {bc.get('current', '?')}/{bc.get('total', '?')}"
+                if "current_node_conceptual_name" in frame_locals: # More direct way to get anchor if in scope
+                     anchor_info_str = f", Anchor: '{frame_locals['current_node_conceptual_name']}'"
+                elif "narrative_anchor" in frame_locals and frame_locals["narrative_anchor"]: # Fallback
+                     anchor_info_str = f", Anchor: '{frame_locals['narrative_anchor']}'"
+                
+                if sample_index_str != "N/A" and beat_info_str and anchor_info_str: # Stop if we have enough
+                    break 
+        except Exception as e_stack:
+            logger_obj.debug(f"Minor error extracting context from stack for logging: {e_stack}")
+
 
         validation_header = (
-            f"VALIDATION FAILURE: Op={operation}{beat_info_str}{anchor_info_str}, Reason={reason} "
-            f"[Consolidated log for LLM analysis]"
+            f"PYTHON_VALIDATOR_FAILURE: Sample {sample_index_str}, Op={operation}{beat_info_str}{anchor_info_str}, Reason={reason_code}"
         )
 
-        validation_details = (
-            f"{'='*80}\n=== VALIDATION FAILURE REPORT ===\n{'='*80}\n\n"
-        )
-        validation_details += f"Operation type: {operation}\nFailure reason: {reason}\n"
-        validation_details += (
-            f"Operand count: {validation_report.get('operand_count', 'N/A')}\n"
-        )
-        if validation_report.get("correct_result") is not None:
-            validation_details += (
-                f"Correct result (for beat): {validation_report['correct_result']}\n"
-            )
+        # Build detailed log message
+        log_details_parts = [f"{'='*20} PYTHON VALIDATOR FAILURE DETAILS ({reason_code}) {'='*20}"]
+        log_details_parts.append(f"Text Preview: \"{text[:100].replace(chr(10), ' ')}...\"")
+        
+        found_counts_str = str(report_to_save.get("found_numbers_counts", {}))
+        req_counts_str = str(report_to_save.get("required_atoms_counts", {}))
+        log_details_parts.append(f"Found Numbers (Counts): {found_counts_str}")
+        log_details_parts.append(f"Required Atoms (Counts): {req_counts_str}")
 
-        validation_details += f"\n--- Number Analysis (Counts) ---\n"
-        validation_details += f"Found numbers (counts): {found_counts_str}\n"
-        validation_details += f"Required numbers (counts): {req_counts_str}\n"
-        if missing_details_str != "[]":
-            validation_details += (
-                f"Missing/Insufficient required: {missing_details_str}\n"
-            )
-        if forbidden_details_str != "[]":
-            validation_details += (
-                f"Forbidden/Extraneous extras: {forbidden_details_str}\n"
-            )
+        if report_to_save.get("missing_required_details"):
+            log_details_parts.append(f"Missing/Insufficient Required: {report_to_save['missing_required_details']}")
+        
+        if report_to_save.get("forbidden_extras_details"):
+            log_details_parts.append(f"Forbidden/Extraneous Extras: {report_to_save['forbidden_extras_details']}")
 
-        details_list = report_to_save.get("details", [])
-        if details_list:
-            validation_details += f"\n--- Detailed Analysis Log ---\n"
-            for detail_item in details_list:
-                validation_details += f"- {detail_item}\n"
+        # Add other specific fields if they are useful for diagnosing this reason_code
+        if reason_code == "IMPLICIT_RESULT_STATED_EXPLICITLY" or reason_code == "IMPLICIT_RESULT_STATED_EXPLICITLY_AS_EXTRA":
+            log_details_parts.append(f"Correct Beat Result (Should be Implicit): {report_to_save.get('correct_result_for_beat_in_report', 'N/A')}") # Add this field to report
+            log_details_parts.append(f"Is Result also an Input Atom: {report_to_save.get('is_result_also_an_input_atom_in_report', 'N/A')}") # Add this field
 
-        validation_details += f"\n--- Generated Text That Failed Validation ---\n{text}\n\n{'='*80}\n=== END OF VALIDATION FAILURE REPORT ===\n{'='*80}\n"
+        if report_to_save.get("operand_count") is not None:
+             log_details_parts.append(f"Operand Count (for Rule 3 arity): {report_to_save['operand_count']}")
+        
+        # Log the 'details' list from the report which contains the step-by-step logic
+        internal_details_log = report_to_save.get("details", [])
+        if internal_details_log:
+            log_details_parts.append("Internal Validation Steps/Reasons:")
+            for detail_item in internal_details_log:
+                log_details_parts.append(f"  - {detail_item}")
+        
+        log_details_parts.append(f"{'='*60}")
+        
+        # Log to main logger (which goes to console and file)
+        # We use WARNING level for Python validator failures to make them stand out
+        logger_obj.warning(f"{validation_header}\n" + "\n".join(log_details_parts))
 
-        log_prompt(validation_header, validation_details, sample_index=sample_index)
+        # The log_prompt function is for LLM turn logging, so we don't use it here for Python validator summary.
+        # The above logger_obj.warning will handle getting this info into the main log.
 
     except Exception as e:
-        logger.error(
+        logger_obj.error(
             f"Error saving/logging failed validation record: {e}", exc_info=True
         )
-
 
 def check_operand_presence(text: str, operand_val: int) -> bool:
     """Checks if an operand is present as a digit or word (using inflect)."""
@@ -2920,9 +2825,7 @@ generate_narrative_anchor_with_llm = retry_api_call(generate_narrative_anchor_wi
 # --- BeatGenerationError Exception ---
 class BeatGenerationError(Exception):
     """Raised when a story beat fails to generate, aborting entire narrative."""
-
     pass
-
 
 # --- LLM-based Static Beat Content Validation (Existing Function, Renamed) ---
 def create_user_prompt(
@@ -3184,8 +3087,8 @@ def generate_introduction_scene(
 def _generate_and_llm_validate_beat(
     original_user_message_for_generator: str,
     system_prompt_for_generator: str,
-    world_info: dict, 
-    current_op_node: OpNode,
+    world_info: dict,
+    current_op_node: OpNode, 
     conceptual_inputs_str_for_llm_validator: str,
     atomic_inputs_words_str_for_llm_validator: str,
     action_description_for_llm_validator: str,
@@ -3195,30 +3098,30 @@ def _generate_and_llm_validate_beat(
     sample_index: int,
     context_config: Config,
     logger_obj: logging.Logger,
-    encoder_obj: any, 
-    context: "GenerationContext", 
+    encoder_obj: any,
+    context: "GenerationContext",
     current_node_conceptual_name: str,
     beat_number_in_sample: int,
-    actual_arity_val: int, # <<< NEW PARAMETER
-    is_current_beat_root_node: bool = False, 
-    overall_ground_truth_answer_val: int | None = None, 
-    primary_object_name: str = "items", 
-    forbidden_prior_results_and_gt_for_llm_validator: Set[int] = None, 
-    correct_result_val: int | None = None, 
-    direct_atom_values_val: Set[int] = None, 
-    direct_atom_counts_val: Counter | None = None, 
+    actual_arity_val: int, # <<< ADD THIS PARAMETER
+    is_current_beat_root_node: bool = False,
+    overall_ground_truth_answer_val: int | None = None,
+    primary_object_name: str = "items",
+    forbidden_prior_results_and_gt_for_llm_validator: Set[int] = None,
+    correct_result_val: int | None = None,
+    direct_atom_values_val: Set[int] = None,
+    direct_atom_counts_val: Counter | None = None,
 ) -> str | None:
 
     if forbidden_prior_results_and_gt_for_llm_validator is None:
         forbidden_prior_results_and_gt_for_llm_validator = set()
     if direct_atom_values_val is None:
         direct_atom_values_val = set()
-    if direct_atom_counts_val is None:
+    if direct_atom_counts_val is None: # Ensure it's initialized if None
         direct_atom_counts_val = Counter()
 
-    current_op_arity = len(current_op_node.children)
+    actual_arity_for_current_op = len(current_op_node.children) # Defined here for use in revision prompts
     logger_obj.debug(
-        f"LLMValidateBeat: Op={current_op_node.op}, Arity={current_op_arity}, CorrectResult={correct_result_val}, DirectAtomInputCounts={dict(direct_atom_counts_val)}"
+        f"LLMValidateBeat: Op={current_op_node.op}, Arity (from node.children)={actual_arity_for_current_op}, Arity (passed as actual_arity_val)={actual_arity_val}, CorrectResult={correct_result_val}, DirectAtomInputCounts={dict(direct_atom_counts_val)}"
     )
 
     history_of_attempts = []
@@ -3275,6 +3178,100 @@ def _generate_and_llm_validate_beat(
             history_prompt_addition_parts.append("  - **Specific Issues to Correct (CRITICAL - Address ALL of these METICULOUSLY):**")
             issues_found_for_generator_feedback = False
 
+            # --- Standard Parsing of Rule 1.A violations (Missing/Incorrect Counts) ---
+            mismatch_pattern = r"VIOLATION Rule A: Number '(\d+)' \(word form '([\w-]+)'\) was required (\d+) time(?:s)?.*?found (\d+) time(?:s)?"
+            missing_pattern = r"VIOLATION Rule A: Required number '(\d+)' \(word form '([\w-]+)'\), expected (\d+) time(?:s)?, was completely missing"
+            rule_a_mismatches = re.findall(mismatch_pattern, explanation_from_validator, re.IGNORECASE)
+            rule_a_missing = re.findall(missing_pattern, explanation_from_validator, re.IGNORECASE)
+
+            if rule_a_mismatches:
+                for num_val_str, word_form, req_count_str, found_count_str in rule_a_mismatches:
+                    action_item = (
+                        f"    - **Incorrect Count (Rule 1.A):** The number '{word_form}' (value: {num_val_str}) was required {req_count_str} time(s) but was found {found_count_str} time(s). "
+                        f"**Action for Revision:** Adjust your narrative to ensure '{word_form}' appears *exactly* {req_count_str} time(s). Each mention must be a distinct narrative element representing an input to this operation."
+                    )
+                    history_prompt_addition_parts.append(action_item)
+                    if word_form.lower() in ['one', 'two', 'three', str(actual_arity_for_current_op)]: 
+                         history_prompt_addition_parts.append(
+                            f"      *CRITICAL for '{word_form}': This number was required {req_count_str} time(s) as a DIRECT INPUT (Rule 1.A). You found/used it {found_count_str} time(s). "
+                            f"Ensure ALL {req_count_str} mentions are distinct narrative elements describing inputs (e.g., '{word_form} {primary_object_name}'). "
+                            f"If '{word_form}' is also the arity (operand count), its use for Rule 1.A is separate and must still be met. "
+                            f"'{word_form}' CANNOT be used for general phrasing if it's also needed for Rule 1.A, or if it's forbidden by Rule 4. Review the original rules for '{word_form}' very carefully, especially the distinction between Rule 1.A input and Rule 3 arity/phrasing.*"
+                         )
+                    issues_found_for_generator_feedback = True
+            if rule_a_missing:
+                for num_val_str, word_form, req_count_str in rule_a_missing:
+                    action_item = (
+                        f"    - **Missing Required Number (Rule 1.A):** The number '{word_form}' (value: {num_val_str}) was required {req_count_str} time(s) but was MISSING entirely. "
+                        f"**Action for Revision:** You MUST add {req_count_str} distinct narrative mention(s) of '{word_form}' as inputs to this operation."
+                    )
+                    history_prompt_addition_parts.append(action_item)
+                    if word_form.lower() in ['one', 'two', 'three', str(actual_arity_for_current_op)]:
+                         history_prompt_addition_parts.append(
+                            f"      *CRITICAL for '{word_form}': This number was required {req_count_str} time(s) as a DIRECT INPUT (Rule 1.A) but was MISSING or undercounted. "
+                            f"You MUST add {req_count_str} distinct narrative mentions of '{word_form}' describing inputs (e.g., '{word_form} {primary_object_name}'). "
+                            f"'{word_form}' CANNOT be used for general phrasing if it's also needed for Rule 1.A, or if it's forbidden by Rule 4. Review the original rules for '{word_form}' very carefully.*"
+                         )
+                    issues_found_for_generator_feedback = True
+            
+            # --- Standard Parsing of Rule B violations (Explicit Result) ---
+            rule_b_pattern = r"VIOLATION Rule B: Intermediate numerical result \['?(\d+)'?\] was explicitly stated"
+            rule_b_match = re.search(rule_b_pattern, explanation_from_validator, re.IGNORECASE)
+            
+            # --- Specific Handling for "Result is also an Input" Revisions ---
+            is_result_also_input_case = (correct_result_val is not None and direct_atom_counts_val and direct_atom_counts_val.get(correct_result_val, 0) > 0)
+
+            if rule_b_match and is_result_also_input_case: 
+                stated_result_val_from_match = rule_b_match.group(1)
+                history_prompt_addition_parts.append(
+                    f"    - **Result Stated & Input Confusion (Rule 2 & Rule 1.A):** The result ('{num_to_words(int(stated_result_val_from_match))}') was stated. CRITICALLY, this number is ALSO a Rule 1.A input. You must mention it {direct_atom_counts_val[correct_result_val]} time(s) for Rule 1.A (as inputs) AND THEN imply the result conceptually as '{current_node_conceptual_name}' WITHOUT re-stating the number '{num_to_words(int(stated_result_val_from_match))}' for the result.\n"
+                    f"      **Action for Revision:** Ensure the Rule 1.A input mentions are clear and distinct. Then, ensure the result is purely conceptual. Review the 'VERY IMPORTANT & TRICKY SCENARIO' in your original rules.\n"
+                )
+                issues_found_for_generator_feedback = True
+                rule_b_match = None # Consume the match
+            
+            if rule_b_match: # Generic Rule B handler
+                stated_result_val = rule_b_match.group(1)
+                history_prompt_addition_parts.append(
+                    f"    - **Explicit Outcome Stated (Rule 2):** The numerical result of this operation (which is '{num_to_words(int(stated_result_val))}' ({stated_result_val}), conceptually '{current_node_conceptual_name}') was incorrectly stated directly in the narrative. "
+                    f"**Action for Revision:** This result MUST be implied conceptually. REMOVE any explicit statement of '{num_to_words(int(stated_result_val))}' or '{stated_result_val}' as the outcome. The narrative should lead to '{current_node_conceptual_name}' without saying the number."
+                )
+                issues_found_for_generator_feedback = True
+
+            if (rule_a_mismatches or rule_a_missing) and is_result_also_input_case:
+                num_word_res = num_to_words(correct_result_val)
+                history_prompt_addition_parts.append(
+                    f"    - **Possible Count Issue with Result-as-Input '{num_word_res}' (Interaction of Rule 1.A & Rule 2):** Remember, '{num_word_res}' is needed {direct_atom_counts_val[correct_result_val]} time(s) as a Rule 1.A input. The result (which also has the value '{num_word_res}') must then be implied conceptually as '{current_node_conceptual_name}' WITHOUT an additional mention of '{num_word_res}' when identifying the result. "
+                    f"Please double-check if you: \n"
+                    f"      a) Correctly provided exactly {direct_atom_counts_val[correct_result_val]} distinct narrative mentions of '{num_word_res}' as *inputs* (Rule 1.A).\n"
+                    f"      b) Avoided re-stating '{num_word_res}' when describing or identifying the *outcome* '{current_node_conceptual_name}' (Rule 2).\n"
+                    f"      An error in either of these could lead to overall count issues for '{num_word_res}'.\n"
+                )
+            
+            # --- Standard Parsing of Rule D/4 violations (Forbidden Numbers) ---
+            all_forbidden_mentioned_str = set() 
+            rule_d_pattern_word = r"forbidden number '([\w-]+)'" 
+            forbidden_numbers_found_words = re.findall(rule_d_pattern_word, explanation_from_validator, re.IGNORECASE)
+            rule_d_pattern_digit = r"forbidden.*?number.*?(\d+)"
+            forbidden_numbers_found_digits = re.findall(rule_d_pattern_digit, explanation_from_validator, re.IGNORECASE)
+            
+            for w in forbidden_numbers_found_words: all_forbidden_mentioned_str.add(f"'{w}'")
+            for d in forbidden_numbers_found_digits: all_forbidden_mentioned_str.add(f"'{num_to_words(int(d))}' ({d})")
+
+            if all_forbidden_mentioned_str:
+                formatted_forbidden = ", ".join(sorted(list(all_forbidden_mentioned_str)))
+                action_item = (
+                    f"    - **Forbidden Number(s) Used (Rule 4):** Your narrative included forbidden number(s) like: {formatted_forbidden}. "
+                    f"**Action for Revision:** These numbers MUST be removed. They are not allowed in this scene under any circumstances, *not even for general phrasing if they are on the Rule 4 list*. Consult Rule 4 in your original Writing Guide (re-pasted below)."
+                )
+                history_prompt_addition_parts.append(action_item)
+                if any(f"'{num_to_words(n)}'" in formatted_forbidden.lower() for n in [1, 2, 3]):
+                    history_prompt_addition_parts.append(
+                        f"      *CRITICAL for 'one'/'two'/'three' being forbidden: If any of these were on the forbidden list (as indicated above), they cannot be used for Rule 3 phrasing. Their presence, even if intended for phrasing, is a violation of Rule 4.*"
+                    )
+                issues_found_for_generator_feedback = True
+            
+            # --- Check for "re-listing" or "summary" sentences explicitly ---
             if "re-list" in explanation_from_validator.lower() or \
                "summary sentence" in explanation_from_validator.lower() or \
                "summarizing the numbers" in explanation_from_validator.lower():
@@ -3284,102 +3281,19 @@ def _generate_and_llm_validate_beat(
                 )
                 issues_found_for_generator_feedback = True
 
-            mismatch_pattern = r"VIOLATION Rule A: Number '(\d+)' \(word form '([\w-]+)'\) was required (\d+) time(?:s)?.*?found (\d+) time(?:s)?"
-            missing_pattern = r"VIOLATION Rule A: Required number '(\d+)' \(word form '([\w-]+)'\), expected (\d+) time(?:s)?, was completely missing"
-
-            rule_a_mismatches = re.findall(mismatch_pattern, explanation_from_validator, re.IGNORECASE)
-            rule_a_missing = re.findall(missing_pattern, explanation_from_validator, re.IGNORECASE)
-
-            if rule_a_mismatches:
-                for num_val_str, word_form, req_count_str, found_count_str in rule_a_mismatches:
-                    action_item = ( # Ensure primary_object_name is available here or passed too if needed for this string
-                        f"    - **Incorrect Count (Rule 1.A):** The number '{word_form}' (value: {num_val_str}) was required {req_count_str} time(s) as a direct input for the operation, but was found {found_count_str} time(s).\n"
-                        f"      **Action for Revision:** Adjust your narrative to ensure '{word_form}' appears *exactly* {req_count_str} time(s). Each mention MUST be a distinct narrative element describing a direct input (e.g., '{word_form} {primary_object_name}'). Do not count uses for general phrasing towards this Rule 1.A requirement.\n"
-                    )
-                    history_prompt_addition_parts.append(action_item)
-                    # Use the passed parameter actual_arity_val
-                    if word_form.lower() in ['one', 'two', 'three', str(actual_arity_val)]: # Check arity too
-                         history_prompt_addition_parts.append(
-                            f"      *CRITICAL for '{word_form}': This number was required {req_count_str} time(s) as a DIRECT INPUT (Rule 1.A). You found/used it {found_count_str} time(s). "
-                            f"Ensure ALL {req_count_str} mentions are distinct narrative elements describing inputs (e.g., '{word_form} {primary_object_name}'). "
-                            f"If '{word_form}' is also the arity (operand count, which is {actual_arity_val} for this beat), its use for Rule 1.A is separate and must still be met. " # Clarified arity value
-                            f"'{word_form}' CANNOT be used for general phrasing if it's also needed for Rule 1.A, or if it's forbidden by Rule 4. Review the original rules for '{word_form}' very carefully, especially the distinction between Rule 1.A input and Rule 3 arity/phrasing.*"
-                         )
-                    issues_found_for_generator_feedback = True
-    
-            if rule_a_missing:
-                for num_val_str, word_form, req_count_str in rule_a_missing:
-                    action_item = (
-                        f"    - **Missing Required Number (Rule 1.A):** The number '{word_form}' (value: {num_val_str}) was required {req_count_str} time(s) as a direct input for the operation but was MISSING or undercounted.\n"
-                        f"      **Action for Revision:** You MUST add {req_count_str} distinct narrative mention(s) of '{word_form}' describing inputs (e.g., '{word_form} {primary_object_name}').\n"
-                    )
-                    history_prompt_addition_parts.append(action_item)
-                    if word_form.lower() in ['one', 'two', 'three']:
-                         history_prompt_addition_parts.append(
-                            f"      *CRITICAL for '{word_form}': This number was required {req_count_str} time(s) as a DIRECT INPUT for the operation (Rule 1.A) but was MISSING or undercounted. "
-                            f"You MUST add {req_count_str} distinct narrative mentions of '{word_form}' describing inputs (e.g., 'one {primary_object_name}'). "
-                            f"'{word_form}' CANNOT be used for general phrasing if it's also needed for Rule 1.A, or if it's forbidden by Rule 4. Review the original rules for '{word_form}' very carefully.*\n"
-                         )
-                    issues_found_for_generator_feedback = True
-            
+            # --- Check for STRICT_ZERO_VIOLATION (less common for main beats but possible) ---
             strict_zero_pattern = r"Strict zero mode: Found numbers with counts \{.*?(\d+): \d+.*?\} not in \{([\d, ]+)\}"
             strict_zero_match = re.search(strict_zero_pattern, explanation_from_validator, re.IGNORECASE)
             if "STRICT_ZERO_VIOLATION" in explanation_from_validator.upper() and strict_zero_match:
                 violating_num = strict_zero_match.group(1) 
                 allowed_set_str = strict_zero_match.group(2)
                 history_prompt_addition_parts.append(
-                    f"    - **Strict Zero Violation (Likely Intro/Padding Rule):** Your scene included numbers like '{num_to_words(int(violating_num))}' ({violating_num}) which are not allowed. Only numbers in {{{allowed_set_str}}} are permitted for general phrasing in this context. "
-                    f"**Action for Revision:** REMOVE all numbers not in {{{allowed_set_str}}}. If character names contain digits (e.g., 'Unit 734'), refer to them by role or ensure the name is not parsed as a quantity.\n"
+                    f"    - **Strict Zero Violation (Unusual for this beat type - check Rule 3 carefully):** Your scene included numbers like '{num_to_words(int(violating_num))}' ({violating_num}) which are not allowed. Only numbers in {{{allowed_set_str}}} are permitted for general phrasing in this context. "
+                    f"**Action for Revision:** REMOVE all numbers not in {{{allowed_set_str}}}. This usually applies to intro/padding, so re-evaluate if any Rule 3 phrasing was used incorrectly.\n"
                 )
                 issues_found_for_generator_feedback = True
 
-            rule_b_pattern = r"VIOLATION Rule B: Intermediate numerical result \['?(\d+)'?\] was explicitly stated"
-            rule_b_match = re.search(rule_b_pattern, explanation_from_validator, re.IGNORECASE)
-            if rule_b_match:
-                stated_result_val = rule_b_match.group(1)
-                action_item = (
-                    f"    - **Explicit Outcome Stated (Rule 2):** The numerical result of this operation ('{num_to_words(int(stated_result_val))}') was incorrectly stated directly. This result MUST be implied conceptually via '{current_node_conceptual_name}'.\n"
-                    f"      **Action for Revision:** REMOVE any explicit statement of '{num_to_words(int(stated_result_val))}' or '{stated_result_val}' as the outcome. If this value ('{num_to_words(int(stated_result_val))}') was ALSO a Rule 1.A input, ensure its mentions are *only* for that input purpose and not framed as the result.\n"
-                )
-                history_prompt_addition_parts.append(action_item)
-                issues_found_for_generator_feedback = True
-
-            rule_d_pattern = r"forbidden number '([\w-]+)'" 
-            forbidden_numbers_found_words = re.findall(rule_d_pattern, explanation_from_validator, re.IGNORECASE)
-            rule_d_pattern_direct_num = r"forbidden.*?number.*?(\d+)"
-            forbidden_numbers_found_digits = re.findall(rule_d_pattern_direct_num, explanation_from_validator, re.IGNORECASE)
-            
-            all_forbidden_mentioned_str = set() 
-            for w in forbidden_numbers_found_words: all_forbidden_mentioned_str.add(f"'{w}'")
-            for d in forbidden_numbers_found_digits: all_forbidden_mentioned_str.add(f"'{num_to_words(int(d))}' ({d})")
-
-            if all_forbidden_mentioned_str: 
-                formatted_forbidden = ", ".join(sorted(list(all_forbidden_mentioned_str)))
-                action_item = (
-                    f"    - **Forbidden Number(s) Used (Rule 4):** Your narrative included forbidden number(s) like: {formatted_forbidden}. "
-                    f"**Action for Revision:** These numbers MUST be removed. They are not allowed in this scene under any circumstances, *not even for general phrasing if they are on the Rule 4 list*. Consult Rule 4 in your original Writing Guide (re-pasted below).\n"
-                )
-                history_prompt_addition_parts.append(action_item)
-                if any(f"'{num_to_words(n)}'" in formatted_forbidden.lower() for n in [1, 2, 3]): 
-                    history_prompt_addition_parts.append(
-                        f"      *CRITICAL for 'one'/'two'/'three' being forbidden: As these were on the forbidden list (Rule 4), they CANNOT be used for ANY purpose in this scene, including general phrasing (Rule 3). Rule 4 is absolute.*\n"
-                    )
-                issues_found_for_generator_feedback = True
-            
-            if not issues_found_for_generator_feedback: # Only check for general extraneous if specific rule violations weren't already parsed
-                if "extraneous number" in explanation_from_validator.lower() or \
-                   ("count" in explanation_from_validator.lower() and "Rule 1.A" not in explanation_from_validator and "Rule A" not in explanation_from_validator): # If count issue not tied to Rule 1A
-                    # Try to find the specific extraneous number if mentioned
-                    extraneous_match = re.search(r"extraneous number.*?['\"]([\w\s-]+)['\"]", explanation_from_validator, re.IGNORECASE)
-                    num_detail = f" (e.g., {extraneous_match.group(1)})" if extraneous_match else ""
-                    
-                    history_prompt_addition_parts.append(
-                        f"    - **Extraneous Number(s) Used (Likely Rule 3 Misuse or Rule 5 Violation):** The validator indicated your previous text might have included numbers{num_detail} that were not required by Rule 1.A, not the arity count, and not essential, extremely sparing phrasing allowed by Rule 3 (or were forbidden by Rule 4).\n"
-                        f"      **Action for Revision:** REMOVE any such extraneous numbers. Scrutinize every number used. If it's not fulfilling an exact Rule 1.A frequency, or isn't the arity count (and arity is allowed), it's likely an error unless it's one of the very few strictly allowed phrasing numbers used with extreme rarity and necessity (see original Rule 3).\n"
-                    )
-                    issues_found_for_generator_feedback = True # Set this flag as we've identified an issue
-
-            # Fallback for other errors or if parsing fails but it's an error
+            # --- Fallback for other errors or if parsing fails but it's an error ---
             if not issues_found_for_generator_feedback and not last_critique_json.get("is_valid", True):
                  history_prompt_addition_parts.append(
                     f"    - **General Adherence Issue:** The validator indicated issues with overall rule compliance. The primary feedback was: \"{summary_for_generator_prompt}\". The detailed explanation provided was: \"{explanation_from_validator}\". "
@@ -3401,7 +3315,7 @@ def _generate_and_llm_validate_beat(
                 "**MANDATORY PRE-REVISION CHECKLIST (Confirm your plan before rewriting):**\n"
                 "1.  **Error Understanding:** Have you read and understood EACH specific issue and action item listed above from the validator?\n"
                 "2.  **Rule 1.A Correction Plan (If Applicable):** For any missing or miscounted numbers, do you have a NEW, concrete plan for how and where you will narrate each required instance distinctly, ensuring exact frequencies as per the original Rule 1.A?\n"
-                "3.  **Rule 2 Correction Plan (If Applicable):** Is your new plan for the outcome purely conceptual, completely avoiding the numerical result if it was previously stated?\n"
+                "3.  **Rule 2 Correction Plan (If Applicable):** Is your new plan for the outcome purely conceptual, completely avoiding the numerical result if it was previously stated? If the result is also an input, have you planned how to handle both requirements distinctly?\n"
                 "4.  **Rule 4/5 Correction Plan (If Applicable):** Have you identified and planned the removal of ALL forbidden or other extraneous numbers (those not covered by Rule 1 or a valid Rule 3 use)?\n"
                 "5.  **Holistic Review:** Will your revised scene still be narratively coherent and engaging while perfectly meeting ALL numerical rules?\n"
                 "6.  **Re-read Original Rules:** Briefly re-read the 'Key Original Rules (Reminder)' section below, especially the ULTRA-STRICT NUMBER RULES for *this specific scene*, to refresh your understanding of the target state.\n"
@@ -3420,7 +3334,7 @@ def _generate_and_llm_validate_beat(
             current_generator_user_prompt_for_iteration = (
                 f"{original_user_message_for_generator}\n\n{''.join(history_prompt_addition_parts)}"
             )
-        else: # iteration == 1
+        else: # First iteration
             current_generator_user_prompt_for_iteration = original_user_message_for_generator
         
         turn_data["generator_user_prompt"] = current_generator_user_prompt_for_iteration
@@ -3441,7 +3355,7 @@ def _generate_and_llm_validate_beat(
                         "content": current_generator_user_prompt_for_iteration,
                     },
                 ],
-                max_completion_tokens=current_max_beat_completion_tokens, # This should be config_obj.BEAT_MAX_TOKENS
+                max_completion_tokens=current_max_beat_completion_tokens,
                 temperature=generator_temp,
                 reasoning={"exclude": True},
             )
@@ -3608,7 +3522,7 @@ Based on the algorithm above:
                     {"role": "system", "content": validator_system_prompt},
                     {"role": "user", "content": validator_user_prompt},
                 ],
-                "max_completion_tokens": context_config.BEAT_MAX_TOKENS, # Should be config_obj.BEAT_MAX_TOKENS or similar
+                "max_completion_tokens": context_config.BEAT_MAX_TOKENS, 
                 "temperature": context_config.LLM_VALIDATOR_TEMP,
                 "reasoning": {"exclude": True},
                 "json_schema": VALIDATOR_RESPONSE_SCHEMA,
@@ -3711,6 +3625,8 @@ Based on the algorithm above:
             "final_status": "failed_all_revisions"
         })
     return None
+
+    
 
 # --- Iterative LLM Validation Loop ---
 # --- Iterative LLM Validation Loop ---
@@ -3826,26 +3742,30 @@ def _generate_narrative_recursive(
         logger_obj.error(f"CRITICAL: Node {node.op} has no pre-computed value (node.value is None). Aborting beat.")
         raise BeatGenerationError(f"Node {node.op} has no pre-computed value.")
 
+    # --- Construct forbidden_for_current_beat_py_validator (for Rule 4) ---
     forbidden_for_current_beat_py_validator = set(context.introduced_atoms)
     if context.overall_ast_root is not None:
         for processed_node in postorder(context.overall_ast_root):
             if isinstance(processed_node, OpNode) and processed_node.value is not None:
-                if id(processed_node) == id(node): continue
+                if id(processed_node) == id(node): continue 
                 is_direct_child = any(id(child_node) == id(processed_node) for child_node in node.children if isinstance(child_node, OpNode))
-                if is_direct_child: continue
+                if is_direct_child: continue 
                 forbidden_for_current_beat_py_validator.add(processed_node.value)
-    else:
-        logger_obj.warning("overall_ast_root is None in context, cannot accurately build full forbidden set from prior OpNode results.")
+    
+    if correct_result is not None: # CRITICAL FIX: Always add current beat's result to Rule 4
+        forbidden_for_current_beat_py_validator.add(correct_result)
+        logger_obj.debug(f"Op: {op_for_log}, Added current beat result {correct_result} to Rule 4 forbidden set.")
 
     if context.overall_ground_truth_answer is not None:
         if context.overall_ground_truth_answer != correct_result and \
            context.overall_ground_truth_answer not in direct_atom_values_counts: 
             forbidden_for_current_beat_py_validator.add(context.overall_ground_truth_answer)
 
-    forbidden_for_current_beat_py_validator -= set(direct_atom_values_counts.keys())
+    forbidden_for_current_beat_py_validator -= set(direct_atom_values_counts.keys()) # Remove Rule 1.A inputs
     logger_obj.debug(
-        f"Forbidden numbers for Python validator (Op: {node.op}, Beat: {context.beat_counter['current']}): {sorted(list(forbidden_for_current_beat_py_validator))}"
+        f"Final forbidden numbers for Rule 4 (Op: {op_for_log}): {sorted(list(forbidden_for_current_beat_py_validator))}"
     )
+    # --- End of forbidden_for_current_beat_py_validator construction ---
 
     conceptual_inputs_context_list = []
     if child_op_node_results_as_conceptual_inputs:
@@ -3921,18 +3841,23 @@ def _generate_narrative_recursive(
     if correct_result is not None and correct_result in direct_atom_values_counts:
         num_word_result = num_to_words(correct_result)
         required_count_as_input = direct_atom_values_counts[correct_result]
-        
+        op_action_word = "the " + op_label 
+        if node.op == "MED": op_action_word = "the median item/group"
+        elif node.op == "MAX": op_action_word = "the largest item/group"
+        elif node.op == "MIN": op_action_word = "the smallest item/group"
+
         result_handling_rule_text_for_prompt += (
             f"\n    **VERY IMPORTANT & TRICKY SCENARIO FOR THIS BEAT (Result is also an Input):**\n"
             f"    The numerical result of this operation ('{num_word_result}') is ALSO one of your required atomic inputs from Rule 1.A. Specifically, '{num_word_result}' is required {required_count_as_input} time(s) as a direct input to this operation.\n"
             f"    **Your Task - Execute Both Parts Flawlessly:**\n"
             f"        1.  **Fulfill Rule 1.A (Input Requirement):** You MUST narrate {required_count_as_input} distinct instance(s) of '{num_word_result} {safe_primary_object_for_fstring}' (or a clear narrative equivalent) being present as direct inputs for this scene's operation. Each of these {required_count_as_input} mentions is for an *input*.\n"
-            f"        2.  **Fulfill Rule 2 (Implicit Outcome Requirement):** After describing all inputs, your narrative must imply that an item/concept representing the value '{num_word_result}' is the outcome (e.g., the smallest, the median value identified). HOWEVER, when describing this outcome or identifying '{current_node_conceptual_name}', you MUST NOT use the word '{num_word_result}' or the digit '{correct_result}' again *in the context of stating or identifying the result*. The outcome must be purely conceptual.\n"
+            f"        2.  **Fulfill Rule 2 (Implicit Outcome Requirement):** After describing all inputs, your narrative must imply that an item/concept representing the value '{num_word_result}' is the outcome (i.e., {op_action_word}). HOWEVER, when describing this outcome or identifying '{current_node_conceptual_name}', you MUST NOT use the word '{num_word_result}' or the digit '{correct_result}' again *in the context of stating or identifying the result*. The outcome must be purely conceptual.\n"
             f"    *   **Think of it this way:** You introduce '{num_word_result} {safe_primary_object_for_fstring}' {required_count_as_input} times as *ingredients*. Then, the *final dish* (conceptually '{current_node_conceptual_name}') happens to have a characteristic that corresponds to the value '{num_word_result}', but you don't name that characteristic with the number word again.\n"
-            f"    *   **Example (If result is 'two' and inputs included 'two items' twice):**\n"
-            f"        - Correct for Rule 1.A: '...they found two relics here. Later, they uncovered another two relics.' (Two mentions of 'two' as inputs).\n"
-            f"        - Correct for Rule 2 (implying 'two' is the median): '...of all the caches, the one containing that second pair of relics held the central position, becoming {current_node_conceptual_name}.' (Implies the 'two relics' group is the median without saying 'the median is two').\n"
-            f"        - Incorrect for Rule 2: '...the median was two relics.' OR '...{current_node_conceptual_name} represented two.'\n"
+            f"    *   **Illustrative Example (Adapt to YOUR operation - {node.op} - and numbers):\n**" 
+            f"        Suppose for a different problem, the inputs included 'two items' (required twice for Rule 1.A) and 'five items', and the operation was to find the smallest (MIN), making 'two' the result.\n"
+            f"        - Correct for Rule 1.A: '...they found two relics here. Later, they uncovered another two relics. They also found five relics elsewhere.' (Two mentions of 'two' as inputs, one of 'five').\n"
+            f"        - Correct for Rule 2 (implying 'two' is the MIN result): '...of all the caches, the one containing the first pair of relics was clearly the least significant, and they designated it {current_node_conceptual_name}.' (Implies the 'two relics' group is the MIN without saying 'the minimum is two').\n"
+            f"        - Incorrect for Rule 2: '...the minimum was two relics.' OR '...{current_node_conceptual_name} represented two.'\n"
             f"    This demands extremely careful phrasing. Your {required_count_as_input} mention(s) of '{num_word_result}' are for INPUTS ONLY. The RESULT is implied via '{current_node_conceptual_name}'.\n"
         )
 
@@ -3948,7 +3873,7 @@ def _generate_narrative_recursive(
         )
 
     temp_forbidden_detailed_list_for_rule4 = []
-    for n_forbidden in sorted(list(forbidden_for_current_beat_py_validator)):
+    for n_forbidden in sorted(list(forbidden_for_current_beat_py_validator)): # Uses updated forbidden set
         temp_forbidden_detailed_list_for_rule4.append(f"'{num_to_words(n_forbidden)}' ({n_forbidden})")
 
     must_avoid_str_for_generator_prompt_detailed = (
@@ -3974,7 +3899,6 @@ def _generate_narrative_recursive(
     op_specific_action_details = ""
     op_specific_outcome_implication_details = ""
 
-    # ... (op_specific_action_details and op_specific_outcome_implication_details logic as before) ...
     if node.op == "SUM":
         op_specific_action_details = (
             f"Imagine your characters are gathering or combining distinct collections of '{safe_primary_object_for_fstring}'. "
@@ -4070,7 +3994,7 @@ def _generate_narrative_recursive(
         f"Instead, the story should imply this outcome through the characters' actions, discoveries, or the state of the '{safe_primary_object_for_fstring}', "
         f"so that '{current_node_conceptual_name}' becomes the way to think about this new state."
     )
-    if correct_result is not None and correct_result in direct_atom_values_counts:
+    if correct_result is not None and correct_result in direct_atom_values_counts: 
         action_description_parts.append(
             f"**Important Narrative Challenge:** The numerical value of this operation's outcome ('{num_to_words(correct_result)}') is ALSO one of the numbers you need to mention as an input (with its specific frequency). "
             f"Your story must carefully distinguish its role. Mention '{num_to_words(correct_result)}' ({correct_result}) when describing the initial items/quantities (as per Rule 1, with correct frequency). "
@@ -4081,6 +4005,7 @@ def _generate_narrative_recursive(
     )
     action_description_for_prompt = "\n".join(action_description_parts)
 
+    # --- Define Rule 1 components for ultra_strict_instruction ---
     rule1_header = "**1. Key Details to Feature (Numbers in Action & Their EXACT Frequencies):**\n"
     rule1_summary_section = (
         f"    **A. SUMMARY OF REQUIRED NUMBER FREQUENCIES FOR THIS SCENE (CRITICAL & MANDATORY: MENTION EACH NUMBER EXACTLY THE SPECIFIED TIMES. NO MORE, NO LESS. EACH MENTION MUST BE A DISTINCT NARRATIVE ELEMENT REPRESENTING AN INPUT TO THIS OPERATION.):**\n"
@@ -4089,7 +4014,7 @@ def _generate_narrative_recursive(
     rule1_explanation_section = (
         f"    **B. Detailed Explanation & Examples for Rule 1 (Adherence is Paramount):**\n"
         f"    Your narrative MUST introduce quantities of the central item ('{safe_primary_object_for_fstring}') corresponding to EACH number listed in the Summary (1.A) above. Each number MUST be mentioned EXACTLY the number of times specified. \n"
-        f"    *   **How to Count Mentions (Crucial for Correctness):** Each mention must correspond to a distinct group, instance, or observation of items being introduced as a direct input for THIS scene's operation. If a number (e.g., 'two') is required multiple times by Rule 1.A, you MUST narrate that many separate, distinct discoveries or observations of that quantity (e.g., 'they found two crystals here... then, in another spot, they found two more crystals... and finally, a third discovery yielded two crystals' if 'two' was required three times). Do not try to group these into a single statement.\n"
+        f"    *   **How to Count Mentions (Crucial for Correctness):** Each mention must correspond to a distinct group, instance, or observation of items being introduced as a direct input for THIS scene's operation. If a number (e.g., 'seven') is required multiple times by Rule 1.A (e.g., 'seven' is required two times), you MUST narrate **two separate and distinct narrative events of discovering or observing 'seven {safe_primary_object_for_fstring}'**. For example: 'First, they located seven {safe_primary_object_for_fstring} in a hidden compartment. Later, after further searching, a second, separate cache revealed another seven {safe_primary_object_for_fstring}.' Do not try to group these into a single statement like 'they found two groups of seven {safe_primary_object_for_fstring}s' as this might be miscounted.\n"
         f"        - If 'one' is required twice by Rule 1.A: You might narrate, 'She found a single {safe_primary_object_for_fstring} in an alcove. Later, exploring a different passage, another lone {safe_primary_object_for_fstring} was discovered.' This counts as two distinct mentions of 'one' fulfilling Rule 1.A.\n"
         f"        - Contrast: Saying 'She found two single {safe_primary_object_for_fstring}s' would likely count as one mention of 'two' (if 'two' was required by Rule 1.A) and might NOT correctly fulfill two required mentions of 'one' for Rule 1.A. Be explicit and distinct for each required instance.\n"
         f"    *   **ABSOLUTELY AVOID NUMERICAL SUMMARIES OR RE-LISTING (CRITICAL ERROR SOURCE):** After narrating the discovery or presence of items corresponding to the required numbers in Rule 1.A, **DO NOT ADD ANY SENTENCE OR PHRASE THAT RE-LISTS, RECAPS, OR SUMMARIZES THESE NUMBERS.** For example, if you've described finding 'one item' and then 'five items', DO NOT follow with 'So, they had found one and five items.' The initial narrative descriptions ARE the mentions. Any re-listing will cause a validation failure due to over-counting or misinterpretation. This is a very common mistake; be vigilant.\n"
@@ -4097,73 +4022,70 @@ def _generate_narrative_recursive(
         f"    The following list details the specific numbers and their word forms that are the direct atomic inputs for this scene's operation: {must_mention_text_detailed_prose_for_prompt}. Ensure your narrative reflects these inputs according to the frequency summary in 1.A.{special_med_input_clarification_for_prompt}\n\n"
     )
     
+    # --- Rule 3 Refinement (Permitted Flourishes) ---
     clarification_for_rule3_phrasing = "" 
     eligible_for_pure_phrasing = config_obj.ALWAYS_ALLOWED_PHRASING_NUMBERS_SET - \
                                  set(direct_atom_values_counts.keys()) - \
-                                 forbidden_for_current_beat_py_validator
+                                 forbidden_for_current_beat_py_validator # Uses updated forbidden set
 
     can_use_any_always_allowed_for_phrasing = bool(eligible_for_pure_phrasing)
+
+    if eligible_for_pure_phrasing:
+        num_words_list = [f"'{num_to_words(n)}' ({n})" for n in sorted(list(eligible_for_pure_phrasing))]
+        clarification_for_rule3_phrasing = (
+            f"        *   **Strictly Limited Phrasing with 'one'/'two'/'three':** For this scene, ONLY the numbers {', '.join(num_words_list)} MAY be considered for general narrative phrasing (e.g., 'a single guard'). This is because other numbers from the {'one', 'two', 'three'} set are either required by Rule 1.A or forbidden by Rule 4. Any such use of {', '.join(num_words_list)} must be EXTREMELY sparing and essential for fluency.\n"
+        )
+    else:
+        clarification_for_rule3_phrasing = (
+            f"        *   **CRITICAL: No General Phrasing with 'one', 'two', or 'three':** For this specific scene, the numbers 'one', 'two', and 'three' are ALL either required by Rule 1.A (their use is dedicated to fulfilling those input counts) or are forbidden by Rule 4. Therefore, 'one', 'two', and 'three' CANNOT be used for any additional general narrative phrasing in this scene.\n"
+        )
     
-    # Build the main clause for arity first
     actual_arity_for_current_op = len(node.children) 
     may_use_gen_parts_for_rule3_main = []
-    can_use_arity_for_rule3 = False # Flag to help with the final Rule 3 sentence
+    can_use_arity_for_rule3 = False
 
     if actual_arity_for_current_op > 0 and \
-       actual_arity_for_current_op not in config_obj.ALWAYS_ALLOWED_PHRASING_NUMBERS_SET: # Not 1,2,3
-        
-        # CRITICAL CHECK: Is the arity number ALSO a Rule 1.A required input?
+       actual_arity_for_current_op not in config_obj.ALWAYS_ALLOWED_PHRASING_NUMBERS_SET: 
         is_arity_also_rule1a_input = direct_atom_values_counts.get(actual_arity_for_current_op, 0) > 0
-        
         if not is_arity_also_rule1a_input and \
            actual_arity_for_current_op not in forbidden_for_current_beat_py_validator:
-            # Arity is >0, not 1,2,3, NOT a Rule 1.A input, and not forbidden. It's a candidate for Rule 3.
             may_use_gen_parts_for_rule3_main.append(
                 f"the number '{num_to_words(actual_arity_for_current_op)}' ({actual_arity_for_current_op}) ONLY if it is genuinely and clearly used to state the count of direct items/groups involved in THIS specific action (e.g., 'the {num_to_words(actual_arity_for_current_op)} groups were examined')"
             )
             can_use_arity_for_rule3 = True
         elif is_arity_also_rule1a_input:
-            # Arity number IS a Rule 1.A input. It CANNOT be used for arity counting in Rule 3.
-            # Its use is governed by Rule 1.A.
             logger_obj.debug(f"Rule 3 construction: Arity value {actual_arity_for_current_op} is also a Rule 1.A input. Not allowing for Rule 3 arity count.")
-            # No part added to may_use_gen_parts_for_rule3_main for arity in this case.
             
     may_use_gen_clause_for_rule3_main_str = ""
-    if may_use_gen_parts_for_rule3_main: # This will only be true if arity was a valid, non-conflicting candidate
+    if may_use_gen_parts_for_rule3_main:
         may_use_gen_clause_for_rule3_main_str = "You MAY use " + "; ".join(may_use_gen_parts_for_rule3_main) + "."
-    
-    # Now build the clarification for 'one', 'two', 'three'
-    if eligible_for_pure_phrasing:
-        num_words_list = [f"'{num_to_words(n)}' ({n})" for n in sorted(list(eligible_for_pure_phrasing))]
-        clarification_for_rule3_phrasing = (
-            f"        *   **Extremely Limited Phrasing with {', '.join(num_words_list)}:** ONLY if absolutely essential for narrative fluency and no other phrasing is possible, you MAY consider using one of these numbers for general phrasing (e.g., 'a single guard'). This use must be EXTREMELY RARE (ideally zero times). These numbers CANNOT be used if they are needed for Rule 1.A or are forbidden by Rule 4.\n"
-        )
-    else: # No numbers from {1,2,3} are eligible for pure phrasing
-        clarification_for_rule3_phrasing = (
-            f"        *   **CRITICAL: No General Phrasing with 'one', 'two', or 'three':** For this specific scene, the numbers 'one', 'two', and 'three' are either required by Rule 1.A (their use is dedicated to fulfilling those input counts) or are forbidden by Rule 4. Therefore, they CANNOT be used for any additional general narrative phrasing in this scene.\n"
-        )
+    elif not can_use_any_always_allowed_for_phrasing and not can_use_arity_for_rule3: 
+        pass 
+    elif not may_use_gen_parts_for_rule3_main: 
+         may_use_gen_clause_for_rule3_main_str = "Regarding general counting (like arity): No specific numbers are permitted for this purpose in this scene unless covered by the notes below for 'one', 'two', or 'three'."
 
-    # Construct the final Rule 3 text
     rule3_text_for_prompt_parts = [
         f"**3.  Permitted Narrative Flourishes (Read VERY Carefully - Extremely Strict Limits Apply):\n**"
     ]
-    if may_use_gen_clause_for_rule3_main_str: # If arity was usable
+    if may_use_gen_clause_for_rule3_main_str: 
         rule3_text_for_prompt_parts.append(f"    {may_use_gen_clause_for_rule3_main_str}\n")
     
-    rule3_text_for_prompt_parts.append(clarification_for_rule3_phrasing) # This has its own logic for 1,2,3
+    rule3_text_for_prompt_parts.append(clarification_for_rule3_phrasing)
 
     if not can_use_arity_for_rule3 and not can_use_any_always_allowed_for_phrasing:
         rule3_text_for_prompt_parts.append(
-             f"        *   **CRITICAL CLARIFICATION FOR THIS BEAT: Effectively, NO numbers are permitted for general counting or phrasing (Rule 3) in this scene. All mentions of numbers must strictly fulfill Rule 1.A requirements.**\n"
+             f"        *   **Effectively, NO numbers are permitted for general counting or phrasing in this scene beyond those explicitly required by Rule 1.A.**\n"
         )
     else:
-        rule3_text_for_prompt_parts.append(
-            f"    Any use under Rule 3 (either for arity, if permitted above, or for the limited phrasing with 'one'/'two'/'three', if permitted above) must be EXTREMELY sparing (ideally avoided), verifiably essential for fluency, not confused with Rule 1.A inputs, and NOT be a number listed as forbidden in Rule 4 (Rule 4 always takes precedence).\n"
-        )
+        if can_use_any_always_allowed_for_phrasing or can_use_arity_for_rule3: # Check if any Rule 3 use is possible
+            rule3_text_for_prompt_parts.append(
+                f"    All uses under Rule 3 must be EXTREMELY sparing (ideally avoided), verifiably essential for fluency, not confused with Rule 1.A inputs, and NOT be a number listed as forbidden in Rule 4 (Rule 4 always takes precedence).\n"
+            )
     
     rule3_text_for_prompt_parts.append(f"{gt_counting_caution_for_gen_prompt.rstrip() + ('\\n' if gt_counting_caution_for_gen_prompt.strip() else '')}\n")
     rule3_text_for_prompt = "".join(rule3_text_for_prompt_parts)
 
+    # --- Assemble ultra_strict_instruction ---
     ultra_strict_instruction = (
         f"**Narrative Challenge & Your Writing Guide for This Scene (CRITICAL: Adhere Flawlessly. Failure to meet these numerical rules, especially exact frequencies in Rule 1.A, will result in rejection.):**\n"
         f"Your main goal is to weave a compelling scene. However, for this specific task, you must precisely control how numbers are mentioned, turning constraints into creative storytelling:\n\n"
@@ -4225,7 +4147,7 @@ def _generate_narrative_recursive(
         "Before you write a single word of the narrative, meticulously review your plan against these critical points. This is not optional.\n\n"
         "**1. Rule 1.A - Exact Frequencies - DETAILED PLAN:**\n"
         "    *   **Identify ALL Required Numbers & Frequencies:** Look at the 'SUMMARY OF REQUIRED NUMBER FREQUENCIES FOR THIS SCENE' (Rule 1.A in your Writing Guide above). List each number and its exact required count.\n"
-        "    *   Plan Each Distinct Mention:** For EACH number and EACH required instance of it (e.g., if 'two' is needed 3 times, plan 3 separate narrative events for 'two'), mentally outline a *specific, distinct narrative event, discovery, or observation* where this number will be mentioned as a direct input to THIS operation. **Each of these planned mentions must be a unique piece of storytelling.**\n"
+        "    *   **Plan Each Distinct Mention:** For EACH number and EACH required instance of it (e.g., if 'seven' is needed 2 times, plan 2 separate narrative events for 'seven {safe_primary_object_for_fstring}'), mentally outline a *specific, distinct narrative event, discovery, or observation* where this number will be mentioned as a direct input to THIS operation. **Each of these planned mentions must be a unique piece of storytelling, not just a verbal repetition or a grouped statement.**\n"
         f"        *   Example: If 'one' is required 2 times by Rule 1.A for '{safe_primary_object_for_fstring}':\n"
         f"            *   Plan for Mention 1 of 'one': e.g., 'A single {safe_primary_object_for_fstring} was found under the arch.' (This is one distinct narrative element for a Rule 1.A input).\n"
         f"            *   Plan for Mention 2 of 'one': e.g., 'Later, another lone {safe_primary_object_for_fstring} was spotted near the fountain.' (This is a second, separate distinct narrative element for a Rule 1.A input).\n"
@@ -4243,8 +4165,8 @@ def _generate_narrative_recursive(
         "**5. Rule 5 - No Other Numbers:**\n"
         "    *   Have I ensured NO other numbers, counts, or extraneous figures will appear beyond what's strictly allowed by Rule 1.A (with exact frequencies) and Rule 3 (and not forbidden by Rule 4)?\n\n"
         "**6. Rule 3 - Minimalist Approach to Flourishes:**\n"
-    "    *   Am I only using numbers for Rule 3 (phrasing/arity count) if it's *absolutely unavoidable* for narrative flow AND explicitly permitted by the narrow conditions of Rule 3 for this beat? My default should be to AVOID any Rule 3 numbers unless critically necessary and clearly allowed.\n\n"
-        "**Only after you have mentally confirmed 'YES' to all applicable checklist items and have a clear plan for Rule 1.A, and have specifically double-checked the handling of 'one', 'two', 'three' against Rules 1.A, 3, and 4, should you proceed to write the narrative. Your primary goal is flawless adherence to these numerical rules within a coherent story.**"
+        "    *   Am I only using numbers for Rule 3 (phrasing/arity count) if it's *absolutely unavoidable* for narrative flow AND explicitly permitted by the narrow conditions of Rule 3 for this beat? My default should be to AVOID any Rule 3 numbers unless critically necessary and clearly allowed.\n\n"
+        "**Only after you have mentally confirmed 'YES' to all applicable checklist items (1-6) and have a clear plan for Rule 1.A, and have specifically double-checked the handling of 'one', 'two', 'three' against Rules 1.A, 3, and 4, should you proceed to write the narrative. Your primary goal is flawless adherence to these numerical rules within a coherent story.**"
     )
 
     initial_user_message_parts.append(f'\n\n**Continue From (End of last scene):**\n"...{context_snippet}..."\n\n')
@@ -4327,7 +4249,7 @@ def _generate_narrative_recursive(
             context=context,
             current_node_conceptual_name=current_node_conceptual_name,
             beat_number_in_sample=context.beat_counter['current'],
-            actual_arity_val=actual_arity_for_current_op, # <<< PASSING THE VALUE HERE
+            actual_arity_val=actual_arity_for_current_op, 
             is_current_beat_root_node=is_root,
             overall_ground_truth_answer_val=context.overall_ground_truth_answer,
             primary_object_name=primary_object_as_string, 

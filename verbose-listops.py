@@ -35,7 +35,7 @@ load_dotenv()
 
 # fmt: off
 # --- Batch Settings ---
-NUM_SAMPLES_TO_GENERATE = 1300
+NUM_SAMPLES_TO_GENERATE = 150
 DEFAULT_MAX_WORKERS = 100
 MODEL = "google/gemini-2.5-flash-preview:thinking"
 STATIC_CHECKER_MODEL = "google/gemini-2.5-flash-preview:thinking"
